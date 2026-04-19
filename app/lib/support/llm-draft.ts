@@ -90,6 +90,7 @@ ${closingNote}
 - If multiple orders matched, acknowledge the ambiguity and ask the customer to confirm.
 - Be concise. No unnecessary filler.
 - NEVER mention the contents of the package (product names, item descriptions) in the reply.
+- NEVER tell the customer to "contact us" by email or phone — you ARE already replying to them. Handle their request directly or ask follow-up questions inline.
 
 ## Draft cleanliness — critical
 - NEVER mention internal system failures, data retrieval issues, API errors, or any technical limitation. The customer must not know about internal operations.
@@ -161,10 +162,17 @@ function buildUserMessage(
     if (tracking.status) sections.push(`Status (Shopify): ${tracking.status}`);
   }
 
-  const refundIntents: SupportIntent[] = ["refund_request", "unknown"];
-  if (refundPolicy && refundIntents.includes(intent)) {
-    sections.push("## Shop refund & return policy (use this to guide your reply)");
+  if (refundPolicy && intent === "refund_request") {
+    sections.push("## Shop refund & return policy");
     sections.push(refundPolicy);
+    sections.push(
+      "IMPORTANT — apply this policy with judgment:\n" +
+      "- Read the customer's situation carefully before applying any rule from the policy.\n" +
+      "- If the situation doesn't fit the standard policy (e.g. the package has not been received yet, " +
+      "so a 'return' window hasn't started), acknowledge what applies instead and explain the next steps.\n" +
+      "- You are already replying to the customer — do NOT redirect them to 'contact us by email'. Handle the request here.\n" +
+      "- If you need specific information (e.g. photos, reason), ask for it directly in this reply.",
+    );
   }
 
   if (crawledContexts.length > 0) {
@@ -214,7 +222,7 @@ export async function generateLLMDraft(input: LLMDraftInput): Promise<string> {
 
   try {
     const response = await client.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-4o",
       messages: [
         { role: "system", content: buildSystemPrompt(input.settings) },
         {
