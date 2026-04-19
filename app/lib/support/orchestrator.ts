@@ -78,10 +78,9 @@ export async function analyzeSupportEmail(
     matchedBy = result.matchedBy;
     candidates = result.orders.map(normalizeOrder);
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
     warnings.push({
       code: "shopify_api_error",
-      message: `Shopify order search failed: ${detail}`,
+      message: "Shopify order search failed.",
     });
     console.error("[orchestrator] Shopify search failed:", err);
   }

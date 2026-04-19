@@ -19,12 +19,14 @@ const EXCLUDED_LABELS = new Set([
 ]);
 
 /** Domains owned by the store — notifications from these are not customer support. */
+const SAFE_DOMAIN_RE = /^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?)+$/;
+
 function getStoreDomains(): Set<string> {
   const raw = process.env.STORE_EMAIL_DOMAINS ?? "";
   const domains = new Set<string>();
   for (const d of raw.split(",")) {
     const trimmed = d.trim().toLowerCase();
-    if (trimmed) domains.add(trimmed);
+    if (trimmed && SAFE_DOMAIN_RE.test(trimmed)) domains.add(trimmed);
   }
   return domains;
 }

@@ -57,6 +57,27 @@ const SEARCH_QUERY = /* GraphQL */ `
 `;
 
 /**
+ * Sanitize identifiers extracted from LLM output before using them in
+ * Shopify GraphQL search queries. Even though Shopify variables prevent
+ * injection at the protocol level, malformed values can produce unexpected
+ * search results or reveal unrelated orders.
+ */
+function sanitizeIdentifiers(ids: ExtractedIdentifiers): ExtractedIdentifiers {
+  return {
+    orderNumber: ids.orderNumber?.replace(/[^0-9]/g, "").slice(0, 10) || undefined,
+    email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ids.email ?? "")
+      ? ids.email!.slice(0, 254)
+      : undefined,
+    customerName: ids.customerName
+      ?.replace(/[^\p{L}\p{N}\s''\-\.]/gu, "")
+      .slice(0, 100) || undefined,
+    trackingNumber: ids.trackingNumber
+      ?.replace(/[^A-Za-z0-9\-]/g, "")
+      .slice(0, 50) || undefined,
+  };
+}
+
+/**
  * Build a Shopify-compatible search string.
  * Docs: https://shopify.dev/docs/api/usage/search-syntax
  */
@@ -122,14 +143,15 @@ export async function searchOrders(
   admin: AdminGraphqlClient,
   ids: ExtractedIdentifiers,
 ): Promise<OrderSearchResult> {
+  const safe = sanitizeIdentifiers(ids);
   const priorities: Array<{
     key: OrderSearchResult["matchedBy"];
     query: string | undefined;
   }> = [
-    { key: "orderNumber", query: ids.orderNumber ? `name:#${ids.orderNumber}` : undefined },
-    { key: "email", query: ids.email ? `email:${ids.email}` : undefined },
-    { key: "customerName", query: ids.customerName },
-    { key: "trackingNumber", query: ids.trackingNumber },
+    { key: "orderNumber", query: safe.orderNumber ? `name:#${safe.orderNumber}` : undefined },
+    { key: "email", query: safe.email ? `email:${safe.email}` : undefined },
+    { key: "customerName", query: safe.customerName },
+    { key: "trackingNumber", query: safe.trackingNumber },
   ];
 
   for (const { key, query } of priorities) {

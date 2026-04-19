@@ -125,7 +125,55 @@ function pageToText(html: string): string {
   return parts.join("\n\n").slice(0, 8000);
 }
 
+/**
+ * Allowlist of carrier/tracking domains that fetchPage() may contact.
+ * This prevents SSRF: URLs are built from user-supplied tracking numbers,
+ * so without a whitelist an attacker could craft a number that resolves
+ * to an internal address.
+ */
+const ALLOWED_FETCH_DOMAINS = new Set([
+  "www.laposte.fr",
+  "laposte.fr",
+  "www.chronopost.fr",
+  "chronopost.fr",
+  "www.colissimo.fr",
+  "colissimo.fr",
+  "www.dpd.fr",
+  "dpd.fr",
+  "www.gls-france.com",
+  "gls-france.com",
+  "www.mondialrelay.fr",
+  "mondialrelay.fr",
+  "www.ups.com",
+  "ups.com",
+  "www.fedex.com",
+  "fedex.com",
+  "www.dhl.com",
+  "dhl.com",
+  "www.colisprive.com",
+  "colisprive.com",
+  "parcelsapp.com",
+  "ordertracker.com",
+]);
+
+function isAllowedUrl(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(rawUrl);
+    // HTTPS only
+    if (parsed.protocol !== "https:") return false;
+    // Hostname must be in the allowlist
+    const hostname = parsed.hostname.toLowerCase();
+    return ALLOWED_FETCH_DOMAINS.has(hostname);
+  } catch {
+    return false;
+  }
+}
+
 async function fetchPage(url: string): Promise<string | null> {
+  if (!isAllowedUrl(url)) {
+    console.warn("[crawler] fetchPage blocked non-allowlisted URL:", url);
+    return null;
+  }
   try {
     const res = await fetch(url, {
       headers: {

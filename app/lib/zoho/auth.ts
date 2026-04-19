@@ -84,8 +84,6 @@ async function fetchZohoAccount(accessToken: string): Promise<{
     headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
   });
   const json = await res.json();
-  console.log("[zoho] /api/accounts response:", JSON.stringify(json, null, 2));
-
   const account = (json as any).data?.[0];
   if (!account) {
     console.warn("[zoho] Could not fetch Mail account ID, will retry on first sync");
