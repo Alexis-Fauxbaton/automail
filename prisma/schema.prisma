@@ -46,3 +46,41 @@ model SupportSettings {
   refundPolicy          String   @default("")
   updatedAt             DateTime @updatedAt
 }
+
+model GmailConnection {
+  shop           String   @id
+  googleEmail    String
+  accessToken    String   // encrypted
+  refreshToken   String   // encrypted
+  tokenExpiry    DateTime
+  historyId      String?
+  lastSyncAt     DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model IncomingEmail {
+  id               String   @id @default(cuid())
+  shop             String
+  gmailMessageId   String
+  threadId         String   @default("")
+  fromAddress      String
+  fromName         String   @default("")
+  subject          String
+  snippet          String   @default("")
+  bodyText         String   @default("")
+  receivedAt       DateTime
+  tier1Result      String?  // "passed" | "filtered:<reason>"
+  tier2Result      String?  // "support_client" | "probable_non_client" | "incertain"
+  isKnownCustomer  Boolean  @default(false)
+  processingStatus String   @default("pending") // pending | filtering | classified | analyzed | error
+  analysisResult   String?  // JSON blob
+  draftReply       String?
+  errorMessage     String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([shop, gmailMessageId])
+  @@index([shop, processingStatus])
+  @@index([shop, receivedAt])
+}
