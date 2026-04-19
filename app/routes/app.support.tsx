@@ -2,8 +2,10 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useNavigation } from "react-router";
 
 import { authenticate } from "../shopify.server";
-import { analyzeSupportEmail } from "../lib/support/orchestrator";
-import type { SupportAnalysis } from "../lib/support/types";
+import {
+  analyzeSupportEmail,
+  type SupportAnalysisExtended,
+} from "../lib/support/orchestrator";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
@@ -11,7 +13,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const formData = await request.formData();
   const subject = String(formData.get("subject") ?? "");
   const body = String(formData.get("body") ?? "");
@@ -19,24 +21,37 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (!subject.trim() && !body.trim()) {
     return {
       error: "Please provide the email subject or body.",
-      analysis: null as SupportAnalysis | null,
+      analysis: null as SupportAnalysisExtended | null,
     };
   }
 
-  const analysis = await analyzeSupportEmail({ subject, body, admin });
+  const analysis = await analyzeSupportEmail({
+    subject,
+    body,
+    admin,
+    shop: session.shop,
+  });
   return { error: null as string | null, analysis };
 };
 
-function Badge({ confidence }: { confidence: SupportAnalysis["confidence"] }) {
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
+
+function Badge({ confidence }: { confidence: SupportAnalysisExtended["confidence"] }) {
   const tone =
-    confidence === "high" ? "success" : confidence === "medium" ? "info" : "warning";
+    confidence === "high"
+      ? "success"
+      : confidence === "medium"
+        ? "info"
+        : "warning";
   return <s-badge tone={tone}>{confidence.toUpperCase()}</s-badge>;
 }
 
 function IdentifiersList({
   identifiers,
 }: {
-  identifiers: SupportAnalysis["identifiers"];
+  identifiers: SupportAnalysisExtended["identifiers"];
 }) {
   const rows = [
     ["Order number", identifiers.orderNumber && `#${identifiers.orderNumber}`],
@@ -45,30 +60,29 @@ function IdentifiersList({
     ["Tracking number", identifiers.trackingNumber],
   ].filter(([, v]) => !!v) as Array<[string, string]>;
 
-  if (rows.length === 0) {
-    return <s-paragraph>No identifiers were extracted from the message.</s-paragraph>;
-  }
+  if (rows.length === 0)
+    return (
+      <s-paragraph>No identifiers were extracted from the message.</s-paragraph>
+    );
   return (
     <s-unordered-list>
       {rows.map(([k, v]) => (
         <s-list-item key={k}>
-          <s-text>
-            <strong>{k}:</strong> {v}
-          </s-text>
+          <strong>{k}:</strong> {v}
         </s-list-item>
       ))}
     </s-unordered-list>
   );
 }
 
-function OrderBlock({ order }: { order: SupportAnalysis["order"] }) {
-  if (!order) {
+function OrderBlock({ order }: { order: SupportAnalysisExtended["order"] }) {
+  if (!order)
     return <s-paragraph>No matching Shopify order found.</s-paragraph>;
-  }
   return (
     <s-stack direction="block" gap="small-300">
       <s-paragraph>
-        <strong>{order.name}</strong> · created {new Date(order.createdAt).toLocaleString()}
+        <strong>{order.name}</strong> · created{" "}
+        {new Date(order.createdAt).toLocaleString()}
       </s-paragraph>
       <s-paragraph>
         Customer: {order.customerName ?? "—"} ({order.customerEmail ?? "no email"})
@@ -90,10 +104,13 @@ function OrderBlock({ order }: { order: SupportAnalysis["order"] }) {
   );
 }
 
-function TrackingBlock({ tracking }: { tracking: SupportAnalysis["tracking"] }) {
-  if (!tracking || tracking.source === "none") {
+function TrackingBlock({
+  tracking,
+}: {
+  tracking: SupportAnalysisExtended["tracking"];
+}) {
+  if (!tracking || tracking.source === "none")
     return <s-paragraph>No tracking data available yet.</s-paragraph>;
-  }
   return (
     <s-stack direction="block" gap="small-300">
       {tracking.carrier && (
@@ -116,39 +133,53 @@ function TrackingBlock({ tracking }: { tracking: SupportAnalysis["tracking"] }) 
       )}
       {tracking.status && (
         <s-paragraph>
-          <strong>Status:</strong> {tracking.status}
+          <strong>Status (Shopify):</strong> {tracking.status}
         </s-paragraph>
       )}
-      {tracking.agentStatus && (
-        <>
-          <s-paragraph>
-            <strong>Last event:</strong> {tracking.agentStatus.lastEvent}
-          </s-paragraph>
-          {tracking.agentStatus.lastLocation && (
-            <s-paragraph>
-              <strong>Last location:</strong> {tracking.agentStatus.lastLocation}
-            </s-paragraph>
-          )}
-          {tracking.agentStatus.estimatedDelivery && (
-            <s-paragraph>
-              <strong>Estimated delivery:</strong>{" "}
-              {tracking.agentStatus.estimatedDelivery}
-            </s-paragraph>
-          )}
-          {tracking.agentStatus.delivered && (
-            <s-banner tone="success">Carrier confirms: parcel delivered.</s-banner>
-          )}
-        </>
-      )}
-      <s-paragraph>
-        <s-text>
-          Source: {tracking.source}
-          {tracking.agentStatus ? " + live agent check ✓" : ""}
-        </s-text>
-      </s-paragraph>
     </s-stack>
   );
 }
+
+function CrawledContextsBlock({
+  contexts,
+}: {
+  contexts: SupportAnalysisExtended["crawledContexts"];
+}) {
+  const successful = contexts.filter((c) => c.success);
+  if (successful.length === 0) return null;
+  return (
+    <>
+      <s-heading>Live context retrieved</s-heading>
+      <s-stack direction="block" gap="base">
+        {successful.map((ctx, i) => (
+          <s-box
+            key={i}
+            padding="base"
+            borderWidth="base"
+            borderRadius="base"
+            background="subdued"
+          >
+            <s-stack direction="block" gap="small-300">
+              <s-paragraph>
+                <strong>{ctx.purpose}</strong>
+              </s-paragraph>
+              <s-paragraph>{ctx.extractedText}</s-paragraph>
+              <s-paragraph>
+                <s-link href={ctx.url} target="_blank">
+                  Source
+                </s-link>
+              </s-paragraph>
+            </s-stack>
+          </s-box>
+        ))}
+      </s-stack>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
 
 export default function SupportPage() {
   const actionData = useActionData<typeof action>();
@@ -172,11 +203,12 @@ export default function SupportPage() {
               rows={10}
               placeholder="Paste the full customer email here…"
             />
-            <s-stack direction="inline" gap="base">
-              <s-button type="submit" {...(isSubmitting ? { loading: true } : {})}>
-                Analyze
-              </s-button>
-            </s-stack>
+            <s-button
+              type="submit"
+              {...(isSubmitting ? { loading: true } : {})}
+            >
+              {isSubmitting ? "Analyzing…" : "Analyze"}
+            </s-button>
             {actionData?.error && (
               <s-banner tone="critical">{actionData.error}</s-banner>
             )}
@@ -189,7 +221,8 @@ export default function SupportPage() {
           <s-section heading="Analysis">
             <s-stack direction="block" gap="base">
               <s-paragraph>
-                <strong>Intent:</strong> {analysis.intent} · <strong>Confidence:</strong>{" "}
+                <strong>Intent:</strong> {analysis.intent} ·{" "}
+                <strong>Confidence:</strong>{" "}
                 <Badge confidence={analysis.confidence} />
               </s-paragraph>
 
@@ -201,13 +234,15 @@ export default function SupportPage() {
 
               {analysis.orderCandidates.length > 1 && (
                 <s-banner tone="warning">
-                  {analysis.orderCandidates.length} orders matched — please verify which one
-                  is correct before replying.
+                  {analysis.orderCandidates.length} orders matched — verify the
+                  correct one before replying.
                 </s-banner>
               )}
 
-              <s-heading>Tracking</s-heading>
+              <s-heading>Tracking (Shopify)</s-heading>
               <TrackingBlock tracking={analysis.tracking} />
+
+              <CrawledContextsBlock contexts={analysis.crawledContexts} />
 
               {analysis.warnings.length > 0 && (
                 <>
@@ -232,8 +267,8 @@ export default function SupportPage() {
               />
               <s-paragraph>
                 <s-text>
-                  This draft is generated from verified data only. Always review before
-                  sending.
+                  Generated by AI from verified Shopify data. Always review
+                  before sending.
                 </s-text>
               </s-paragraph>
             </s-stack>

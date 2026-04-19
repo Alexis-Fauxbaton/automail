@@ -32,3 +32,16 @@ model Session {
   refreshToken        String?
   refreshTokenExpires DateTime?
 }
+
+// Per-shop configuration for the support copilot draft generator.
+model SupportSettings {
+  shop                  String   @id
+  signatureName         String   @default("Customer Support")
+  brandName             String   @default("")
+  tone                  String   @default("friendly")     // friendly | formal | neutral
+  language              String   @default("auto")         // auto | fr | en
+  closingPhrase         String   @default("")
+  shareTrackingNumber   Boolean  @default(true)
+  customerGreetingStyle String   @default("auto")         // auto | first_name | full_name | neutral
+  updatedAt             DateTime @updatedAt
+}

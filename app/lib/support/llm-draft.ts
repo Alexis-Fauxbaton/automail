@@ -1,0 +1,251 @@
+/**
+ * LLM-based draft reply generator.
+ *
+ * The LLM receives verified facts + settings and produces a ready-to-send draft.
+ * Language is locked for the ENTIRE reply (body + closing + signature area) —
+ * no mixing allowed. Falls back to templates if the API is unavailable.
+ */
+
+import OpenAI from "openai";
+import { buildDraft as templateFallback } from "./response-draft";
+import type { CrawledContext } from "./crawl/context-crawler";
+import type { SupportSettings } from "./settings";
+import type {
+  OrderFacts,
+  ParsedEmail,
+  SupportIntent,
+  TrackingFacts,
+  Warning,
+} from "./types";
+
+function getClient(): OpenAI | null {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key || key === "sk-your-key-here") return null;
+  return new OpenAI({ apiKey: key });
+}
+
+function buildSystemPrompt(settings: SupportSettings): string {
+  const toneMap: Record<string, string> = {
+    friendly: "Warm, human and empathetic. Conversational but professional.",
+    formal: "Formal and professional. No contractions, no colloquial expressions.",
+    neutral: "Neutral, clear and professional. Neither overly warm nor cold.",
+  };
+  const tone = toneMap[settings.tone] ?? toneMap.friendly;
+
+  // Language rule — this is the core of the fix.
+  // "auto" means: detect from the email, then lock that language for the whole reply.
+  const langRule =
+    settings.language === "fr"
+      ? `LANGUAGE RULE: Reply in French. Every single word — greeting, body, closing phrase, and signature area — must be in French. No English words anywhere.`
+      : settings.language === "en"
+        ? `LANGUAGE RULE: Reply in English. Every single word — greeting, body, closing phrase, and signature area — must be in English. No French words anywhere.`
+        : `LANGUAGE RULE: Read the customer's email and decide: is it written in French or English?
+Once you have decided, use ONLY that language for the ENTIRE reply — greeting, body, closing phrase, and signature area.
+Do NOT mix languages. If the preferred closing phrase below is in the wrong language, translate it.`;
+
+  const signatureName = settings.signatureName || "Customer Support";
+  const brandLine = settings.brandName ? `\n${settings.brandName}` : "";
+
+  // The closing phrase is the user's preference. We tell the LLM to translate it
+  // if it doesn't match the detected/configured language.
+  const closingNote = settings.closingPhrase
+    ? `Preferred closing phrase: "${settings.closingPhrase}" — translate it to match the reply language if needed.`
+    : `Use a closing appropriate for the chosen language and tone (e.g. "Cordialement," for French formal, "Belle journée," for French friendly, "Kind regards," for English formal, "Best regards," for English friendly).`;
+
+  const greetingStyleMap: Record<string, string> = {
+    auto: `Address the customer using your best judgment:
+- If the customer name is clearly a person's first name, use it (e.g. "Bonjour Karine,").
+- If the name is a company name or ambiguous (e.g. "GIBSEN SARL", "K. Ruby"), do NOT use it — use a neutral greeting instead ("Bonjour," or "Hello,").
+- If the gender is not clearly inferrable from the name, use the first name only without any title (never assume "M." or "Mme").`,
+    first_name: `Always use only the customer's first name in the greeting (e.g. "Bonjour Karine,"). If no first name is available or the name looks like a company, use a neutral greeting.`,
+    full_name: `Use the customer's full name in the greeting (e.g. "Bonjour Karine Ruby,"). If no name is available or the name looks like a company, use a neutral greeting.`,
+    neutral: `Never use the customer's name. Always use a neutral greeting ("Bonjour," or "Hello,").`,
+  };
+  const greetingRule =
+    greetingStyleMap[settings.customerGreetingStyle ?? "auto"] ??
+    greetingStyleMap.auto;
+
+  return `You are a customer support agent drafting replies for an e-commerce store.
+
+## Tone
+${tone}
+
+## Customer greeting
+${greetingRule}
+
+## ${langRule}
+
+## Signature block
+End every reply with this exact block. The closing phrase MUST be in the reply language:
+<closing phrase here>
+${signatureName}${brandLine}
+
+${closingNote}
+
+## Strict data rules
+- NEVER invent order numbers, dates, amounts, tracking numbers, carrier names or delivery statuses.
+- NEVER claim a parcel is lost unless the tracking data explicitly says so.
+- NEVER claim a refund was issued unless order data confirms it.
+- NEVER promise a specific outcome you cannot guarantee.
+- If multiple orders matched, acknowledge the ambiguity and ask the customer to confirm.
+- Be concise. No unnecessary filler.
+
+## Draft cleanliness — critical
+- NEVER mention internal system failures, data retrieval issues, API errors, or any technical limitation. The customer must not know about internal operations.
+- NEVER write phrases like "we were unable to retrieve real-time tracking", "our system could not fetch the data", "the tracking requires manual verification due to a technical issue", or any equivalent.
+- If tracking data is partial or inferred, share what you know and offer to help further — without explaining the technical reason for the gap.
+- If live tracking context is available, use it naturally without citing its source.
+
+## Output
+Plain text only. No subject line, no markdown, no JSON.`;
+}
+
+function buildUserMessage(
+  parsed: ParsedEmail,
+  intent: SupportIntent,
+  order: OrderFacts | null,
+  orderCandidates: OrderFacts[],
+  tracking: TrackingFacts | null,
+  crawledContexts: CrawledContext[],
+  warnings: Warning[],
+  shareTrackingNumber: boolean,
+): string {
+  const sections: string[] = [];
+
+  sections.push("## Customer email");
+  sections.push(`Subject: ${parsed.subject}`);
+  sections.push(`Body:\n${parsed.body}`);
+
+  sections.push("## Detected intent");
+  sections.push(intent);
+
+  if (order) {
+    sections.push("## Verified order facts (Shopify — do not alter)");
+    sections.push(`Order: ${order.name}`);
+    sections.push(`Created: ${order.createdAt}`);
+    if (order.customerName) sections.push(`Customer name: ${order.customerName}`);
+    if (order.customerEmail) sections.push(`Customer email: ${order.customerEmail}`);
+    if (order.displayFulfillmentStatus)
+      sections.push(`Fulfillment status: ${order.displayFulfillmentStatus}`);
+    if (order.displayFinancialStatus)
+      sections.push(`Financial status: ${order.displayFinancialStatus}`);
+    if (order.lineItems.length > 0)
+      sections.push(
+        "Items: " + order.lineItems.map((i) => `${i.quantity}× ${i.title}`).join(", "),
+      );
+    if (orderCandidates.length > 1)
+      sections.push(
+        `⚠ Ambiguity: ${orderCandidates.length} orders matched. Show the above order but acknowledge the ambiguity and ask the customer to confirm.`,
+      );
+  } else {
+    sections.push("## Order lookup result");
+    sections.push("No matching order was found in Shopify.");
+  }
+
+  if (tracking && tracking.source !== "none") {
+    sections.push("## Tracking facts");
+    sections.push(
+      `Source: ${tracking.source}${tracking.inferred ? " (INFERRED — not verified by carrier API)" : ""}`,
+    );
+    if (tracking.carrier) sections.push(`Carrier: ${tracking.carrier}`);
+
+    if (shareTrackingNumber) {
+      if (tracking.trackingNumber)
+        sections.push(`Tracking number: ${tracking.trackingNumber}`);
+      if (tracking.trackingUrl)
+        sections.push(`Tracking URL: ${tracking.trackingUrl}`);
+    } else {
+      sections.push(
+        "TRACKING NUMBER RULE: Do NOT mention the tracking number or tracking URL in the reply. The merchant has chosen not to share it.",
+      );
+    }
+
+    if (tracking.status) sections.push(`Status (Shopify): ${tracking.status}`);
+  }
+
+  if (crawledContexts.length > 0) {
+    sections.push("## Live context from external sources");
+    for (const ctx of crawledContexts) {
+      sections.push(`### ${ctx.purpose} (from ${ctx.url})`);
+      sections.push(ctx.extractedText);
+    }
+  }
+
+  if (warnings.length > 0) {
+    sections.push("## Warnings — take into account");
+    for (const w of warnings) sections.push(`- [${w.code}] ${w.message}`);
+  }
+
+  return sections.join("\n\n");
+}
+
+export interface LLMDraftInput {
+  parsed: ParsedEmail;
+  intent: SupportIntent;
+  order: OrderFacts | null;
+  orderCandidates: OrderFacts[];
+  tracking: TrackingFacts | null;
+  crawledContexts: CrawledContext[];
+  warnings: Warning[];
+  settings: SupportSettings;
+}
+
+export async function generateLLMDraft(input: LLMDraftInput): Promise<string> {
+  const client = getClient();
+  const shareTracking = input.settings.shareTrackingNumber ?? true;
+
+  if (!client) {
+    return templateFallback({
+      intent: input.intent,
+      order: input.order,
+      orderCandidates: input.orderCandidates,
+      tracking: shareTracking ? input.tracking : null,
+      confidence: "low",
+      warnings: input.warnings,
+      identifiers: {},
+      settings: input.settings,
+      parsed: input.parsed,
+    });
+  }
+
+  try {
+    const response = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: buildSystemPrompt(input.settings) },
+        {
+          role: "user",
+          content: buildUserMessage(
+            input.parsed,
+            input.intent,
+            input.order,
+            input.orderCandidates,
+            input.tracking,
+            input.crawledContexts,
+            input.warnings,
+            shareTracking,
+          ),
+        },
+      ],
+      temperature: 0.3,
+      max_tokens: 600,
+    });
+
+    const draft = response.choices[0]?.message?.content?.trim() ?? "";
+    if (!draft) throw new Error("Empty response from OpenAI");
+    return draft;
+  } catch (err) {
+    console.error("[llm-draft] OpenAI call failed, using template fallback:", err);
+    return templateFallback({
+      intent: input.intent,
+      order: input.order,
+      orderCandidates: input.orderCandidates,
+      tracking: shareTracking ? input.tracking : null,
+      confidence: "low",
+      warnings: input.warnings,
+      identifiers: {},
+      settings: input.settings,
+      parsed: input.parsed,
+    });
+  }
+}
