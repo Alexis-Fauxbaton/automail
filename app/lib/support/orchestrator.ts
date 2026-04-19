@@ -56,6 +56,7 @@ export async function analyzeSupportEmail(
     closingPhrase: "",
     shareTrackingNumber: true,
     customerGreetingStyle: "auto",
+    refundPolicy: "",
   };
 
   // 1. Parse + LLM extraction (regex fallback built-in)

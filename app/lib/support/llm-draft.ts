@@ -89,6 +89,7 @@ ${closingNote}
 - NEVER promise a specific outcome you cannot guarantee.
 - If multiple orders matched, acknowledge the ambiguity and ask the customer to confirm.
 - Be concise. No unnecessary filler.
+- NEVER mention the contents of the package (product names, item descriptions) in the reply.
 
 ## Draft cleanliness — critical
 - NEVER mention internal system failures, data retrieval issues, API errors, or any technical limitation. The customer must not know about internal operations.
@@ -109,6 +110,7 @@ function buildUserMessage(
   crawledContexts: CrawledContext[],
   warnings: Warning[],
   shareTrackingNumber: boolean,
+  refundPolicy: string,
 ): string {
   const sections: string[] = [];
 
@@ -129,10 +131,6 @@ function buildUserMessage(
       sections.push(`Fulfillment status: ${order.displayFulfillmentStatus}`);
     if (order.displayFinancialStatus)
       sections.push(`Financial status: ${order.displayFinancialStatus}`);
-    if (order.lineItems.length > 0)
-      sections.push(
-        "Items: " + order.lineItems.map((i) => `${i.quantity}× ${i.title}`).join(", "),
-      );
     if (orderCandidates.length > 1)
       sections.push(
         `⚠ Ambiguity: ${orderCandidates.length} orders matched. Show the above order but acknowledge the ambiguity and ask the customer to confirm.`,
@@ -161,6 +159,12 @@ function buildUserMessage(
     }
 
     if (tracking.status) sections.push(`Status (Shopify): ${tracking.status}`);
+  }
+
+  const refundIntents: SupportIntent[] = ["refund_request", "unknown"];
+  if (refundPolicy && refundIntents.includes(intent)) {
+    sections.push("## Shop refund & return policy (use this to guide your reply)");
+    sections.push(refundPolicy);
   }
 
   if (crawledContexts.length > 0) {
@@ -224,6 +228,7 @@ export async function generateLLMDraft(input: LLMDraftInput): Promise<string> {
             input.crawledContexts,
             input.warnings,
             shareTracking,
+            input.settings.refundPolicy ?? "",
           ),
         },
       ],

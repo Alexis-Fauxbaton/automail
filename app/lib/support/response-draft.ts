@@ -145,6 +145,7 @@ function resolveSettings(partial?: Partial<SupportSettings>): SupportSettings {
     closingPhrase: partial?.closingPhrase ?? DEFAULT_SETTINGS.closingPhrase,
     shareTrackingNumber: partial?.shareTrackingNumber ?? DEFAULT_SETTINGS.shareTrackingNumber,
     customerGreetingStyle: partial?.customerGreetingStyle ?? DEFAULT_SETTINGS.customerGreetingStyle,
+    refundPolicy: partial?.refundPolicy ?? DEFAULT_SETTINGS.refundPolicy,
   };
 }
 
