@@ -2,7 +2,7 @@
 
 client_id = "ee0f8b1cc6e2ec5052d6b54358c4355e"
 name = "automail"
-application_url = "https://automail.onrender.com"
+application_url = "https://automail-vc6z.onrender.com"
 embedded = true
 
 [build]
@@ -24,6 +24,6 @@ scopes = "write_products,write_metaobjects,write_metaobject_definitions,read_ord
 
 [auth]
 redirect_urls = [
-  "https://automail.onrender.com/auth/callback",
-  "https://automail.onrender.com/auth/tokens/callback",
+  "https://automail-vc6z.onrender.com/auth/callback",
+  "https://automail-vc6z.onrender.com/auth/tokens/callback",
 ]
