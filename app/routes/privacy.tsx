@@ -140,7 +140,7 @@ export default function PrivacyPage() {
           <p>
             For any questions or data requests related to this Privacy Policy, please contact
             us at:{" "}
-            <a style={styles.a} href="mailto:privacy@automail.app">privacy@automail.app</a>
+            <a style={styles.a} href="mailto:blmcontactpro1@gmail.com">blmcontactpro1@gmail.com</a>
           </p>
         </Section>
       </div>
