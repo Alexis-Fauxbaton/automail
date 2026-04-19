@@ -199,6 +199,7 @@ export function buildCrawlTasks(
     "delivery_delay",
     "marked_delivered_not_received",
     "package_stuck",
+    "refund_request", // needed: if package not received, live status informs the reply
   ];
 
   if (!trackingIntents.includes(intent) || !tracking?.trackingNumber) {
