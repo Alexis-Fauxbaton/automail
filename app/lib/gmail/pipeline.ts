@@ -1,14 +1,9 @@
 import prisma from "../../db.server";
 import type { AdminGraphqlClient } from "../support/shopify/order-search";
 import { analyzeSupportEmail } from "../support/orchestrator";
-import {
-  getGmailService,
-  getMessage,
-  listRecentMessages,
-  listHistoryChanges,
-  getProfile,
-  type GmailMessage,
-} from "./client";
+import type { MailClient, MailMessage } from "../mail/types";
+import { createGmailClient } from "./mail-client";
+import { createZohoClient } from "../zoho/client";
 import { fetchCustomerEmails } from "./customers";
 import { prefilterEmail } from "./prefilter";
 import { classifyEmail } from "./classifier";
@@ -21,6 +16,11 @@ export interface ProcessingReport {
   uncertain: number;
   nonClient: number;
   errors: number;
+}
+
+async function getMailClient(shop: string, provider: string): Promise<MailClient> {
+  if (provider === "zoho") return createZohoClient(shop);
+  return createGmailClient(shop);
 }
 
 export async function processNewEmails(
@@ -37,53 +37,52 @@ export async function processNewEmails(
     errors: 0,
   };
 
-  const gmail = await getGmailService(shop);
-  const conn = await prisma.gmailConnection.findUnique({ where: { shop } });
-  if (!conn) throw new Error("No Gmail connection for this shop");
+  const conn = await prisma.mailConnection.findUnique({ where: { shop } });
+  if (!conn) throw new Error("No mail connection for this shop");
+
+  const client = await getMailClient(shop, conn.provider);
 
   // Determine which messages to fetch
   let messageIds: string[];
-  let newHistoryId: string | undefined;
+  let newCursor: string | null = null;
 
   if (conn.historyId) {
-    // Incremental sync via History API
-    const history = await listHistoryChanges(gmail, conn.historyId);
-    messageIds = history.messageIds;
-    newHistoryId = history.latestHistoryId;
+    // Incremental sync via provider cursor
+    const result = await client.listNewMessages(conn.historyId);
+    messageIds = result.messageIds;
+    newCursor = result.latestCursor;
 
-    // If historyId was too old (404), fall back to date-based fetch
-    if (messageIds.length === 0 && !newHistoryId) {
-      const afterDate = conn.lastSyncAt ?? new Date(Date.now() - 7 * 24 * 3600_000);
-      messageIds = await listRecentMessages(gmail, { afterDate, maxResults: 200 });
-      const profile = await getProfile(gmail);
-      newHistoryId = profile.historyId;
+    // If cursor was stale (returns empty), fall back to date-based fetch
+    if (messageIds.length === 0 && !newCursor) {
+      const afterDate = conn.lastSyncAt ?? new Date(Date.now() - 60 * 24 * 3600_000);
+      messageIds = await client.listRecentMessages({ afterDate, maxResults: 500 });
+      newCursor = await client.getSyncCursor();
     }
   } else {
-    // First sync — fetch since lastSyncAt or last 7 days
-    const afterDate = conn.lastSyncAt ?? new Date(Date.now() - 7 * 24 * 3600_000);
-    messageIds = await listRecentMessages(gmail, { afterDate, maxResults: 200 });
-    const profile = await getProfile(gmail);
-    newHistoryId = profile.historyId;
+    // First sync — fetch since lastSyncAt or last 2 months
+    const afterDate = conn.lastSyncAt ?? new Date(Date.now() - 60 * 24 * 3600_000);
+    messageIds = await client.listRecentMessages({ afterDate, maxResults: 500 });
+    newCursor = await client.getSyncCursor();
   }
 
   report.total = messageIds.length;
 
   // Dedup: skip messages already in DB
   const existing = await prisma.incomingEmail.findMany({
-    where: { shop, gmailMessageId: { in: messageIds } },
-    select: { gmailMessageId: true },
+    where: { shop, externalMessageId: { in: messageIds } },
+    select: { externalMessageId: true },
   });
-  const existingIds = new Set(existing.map((e) => e.gmailMessageId));
+  const existingIds = new Set(existing.map((e) => e.externalMessageId));
   const newMessageIds = messageIds.filter((id) => !existingIds.has(id));
   report.alreadyProcessed = messageIds.length - newMessageIds.length;
 
   if (newMessageIds.length === 0) {
     // Still update sync cursor
-    await prisma.gmailConnection.update({
+    await prisma.mailConnection.update({
       where: { shop },
       data: {
         lastSyncAt: new Date(),
-        ...(newHistoryId ? { historyId: newHistoryId } : {}),
+        ...(newCursor ? { historyId: newCursor } : {}),
       },
     });
     return report;
@@ -95,17 +94,17 @@ export async function processNewEmails(
   // Process each email through the pipeline
   for (const msgId of newMessageIds) {
     try {
-      await processOneEmail(shop, admin, gmail, msgId, customerEmails, report);
+      await processOneEmail(shop, admin, client, msgId, customerEmails, report);
     } catch (err) {
       report.errors++;
       console.error(`[gmail/pipeline] Error processing message ${msgId}:`, err);
       // Try to save partial record
       try {
         await prisma.incomingEmail.upsert({
-          where: { shop_gmailMessageId: { shop, gmailMessageId: msgId } },
+          where: { shop_externalMessageId: { shop, externalMessageId: msgId } },
           create: {
             shop,
-            gmailMessageId: msgId,
+            externalMessageId: msgId,
             fromAddress: "",
             subject: "",
             receivedAt: new Date(),
@@ -122,11 +121,11 @@ export async function processNewEmails(
   }
 
   // Update sync cursor
-  await prisma.gmailConnection.update({
+  await prisma.mailConnection.update({
     where: { shop },
     data: {
       lastSyncAt: new Date(),
-      ...(newHistoryId ? { historyId: newHistoryId } : {}),
+      ...(newCursor ? { historyId: newCursor } : {}),
     },
   });
 
@@ -136,20 +135,20 @@ export async function processNewEmails(
 async function processOneEmail(
   shop: string,
   admin: AdminGraphqlClient,
-  gmail: Awaited<ReturnType<typeof getGmailService>>,
+  client: MailClient,
   msgId: string,
   customerEmails: Set<string>,
   report: ProcessingReport,
 ) {
-  const msg: GmailMessage = await getMessage(gmail, msgId);
+  const msg: MailMessage = await client.getMessage(msgId);
   const isKnown = customerEmails.has(msg.from.toLowerCase());
 
   // Save to DB immediately
   const record = await prisma.incomingEmail.upsert({
-    where: { shop_gmailMessageId: { shop, gmailMessageId: msgId } },
+    where: { shop_externalMessageId: { shop, externalMessageId: msgId } },
     create: {
       shop,
-      gmailMessageId: msg.id,
+      externalMessageId: msg.id,
       threadId: msg.threadId,
       fromAddress: msg.from,
       fromName: msg.fromName,
@@ -209,10 +208,29 @@ async function processOneEmail(
 
   // --- Tier 3: Full support analysis ---
   report.supportClient++;
+
+  // Skip Tier 3 if this is not the latest email in the thread
+  if (msg.threadId) {
+    const newer = await prisma.incomingEmail.findFirst({
+      where: { shop, threadId: msg.threadId, receivedAt: { gt: msg.receivedAt } },
+      select: { id: true },
+    });
+    if (newer) {
+      await prisma.incomingEmail.update({
+        where: { id: record.id },
+        data: { processingStatus: "classified" },
+      });
+      return;
+    }
+  }
+
   try {
+    // Build thread context for the LLM
+    const bodyWithContext = await buildThreadBody(shop, msg.threadId, record.id);
+
     const analysis = await analyzeSupportEmail({
       subject: msg.subject,
-      body: msg.bodyText,
+      body: bodyWithContext,
       admin,
       shop,
     });
@@ -236,6 +254,43 @@ async function processOneEmail(
   }
 }
 
+/**
+ * Build a combined body from all emails in a thread, ordered chronologically.
+ * The current email (identified by currentEmailId) is labeled as "Current message",
+ * older ones are labeled as "Previous message".
+ */
+async function buildThreadBody(
+  shop: string,
+  threadId: string,
+  currentEmailId: string,
+): Promise<string> {
+  if (!threadId) {
+    const current = await prisma.incomingEmail.findUnique({
+      where: { id: currentEmailId },
+      select: { bodyText: true },
+    });
+    return current?.bodyText ?? "";
+  }
+
+  const threadEmails = await prisma.incomingEmail.findMany({
+    where: { shop, threadId },
+    orderBy: { receivedAt: "asc" },
+    select: { id: true, fromAddress: true, receivedAt: true, bodyText: true },
+  });
+
+  if (threadEmails.length <= 1) {
+    return threadEmails[0]?.bodyText ?? "";
+  }
+
+  const parts: string[] = [];
+  for (const email of threadEmails) {
+    const date = email.receivedAt.toISOString().slice(0, 10);
+    const label = email.id === currentEmailId ? "Current message" : "Previous message";
+    parts.push(`--- ${label} (${date}, from: ${email.fromAddress}) ---\n${email.bodyText}`);
+  }
+  return parts.join("\n\n");
+}
+
 export async function reanalyzeEmail(
   emailId: string,
   admin: AdminGraphqlClient,
@@ -246,9 +301,12 @@ export async function reanalyzeEmail(
     throw new Error("Email not found");
   }
 
+  // Build thread context
+  const bodyWithContext = await buildThreadBody(shop, record.threadId, record.id);
+
   const analysis = await analyzeSupportEmail({
     subject: record.subject,
-    body: record.bodyText,
+    body: bodyWithContext,
     admin,
     shop,
   });

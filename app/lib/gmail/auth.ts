@@ -9,7 +9,7 @@ function getOAuth2Client() {
   // with the Shopify Cloudflare tunnel URL.
   const redirectUri =
     process.env.GOOGLE_REDIRECT_URI ||
-    `${process.env.SHOPIFY_APP_URL || ""}/app/gmail/auth`;
+    `${process.env.SHOPIFY_APP_URL || ""}/mail-auth`;
   if (!clientId || !clientSecret) {
     throw new Error("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are required");
   }
@@ -27,7 +27,7 @@ export function getAuthUrl(shop: string): string {
     access_type: "offline",
     prompt: "consent",
     scope: SCOPES,
-    state: shop,
+    state: `gmail:${shop}`,
   });
 }
 
@@ -54,17 +54,19 @@ export async function saveConnection(
   shop: string,
   tokens: { accessToken: string; refreshToken: string; expiry: Date; email: string },
 ) {
-  await prisma.gmailConnection.upsert({
+  await prisma.mailConnection.upsert({
     where: { shop },
     create: {
       shop,
-      googleEmail: tokens.email,
+      provider: "gmail",
+      email: tokens.email,
       accessToken: encrypt(tokens.accessToken),
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
     },
     update: {
-      googleEmail: tokens.email,
+      provider: "gmail",
+      email: tokens.email,
       accessToken: encrypt(tokens.accessToken),
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
@@ -73,17 +75,17 @@ export async function saveConnection(
 }
 
 export async function deleteConnection(shop: string) {
-  await prisma.gmailConnection.delete({ where: { shop } }).catch(() => {});
+  await prisma.mailConnection.delete({ where: { shop } }).catch(() => {});
   // Also clean up related emails
   await prisma.incomingEmail.deleteMany({ where: { shop } });
 }
 
 export async function getConnection(shop: string) {
-  return prisma.gmailConnection.findUnique({ where: { shop } });
+  return prisma.mailConnection.findUnique({ where: { shop } });
 }
 
 export async function getAuthenticatedClient(shop: string) {
-  const conn = await prisma.gmailConnection.findUnique({ where: { shop } });
+  const conn = await prisma.mailConnection.findUnique({ where: { shop } });
   if (!conn) throw new Error("No Gmail connection for this shop");
 
   const client = getOAuth2Client();
@@ -98,7 +100,7 @@ export async function getAuthenticatedClient(shop: string) {
     const { credentials } = await client.refreshAccessToken();
     client.setCredentials(credentials);
     // Persist new tokens
-    await prisma.gmailConnection.update({
+    await prisma.mailConnection.update({
       where: { shop },
       data: {
         accessToken: encrypt(credentials.access_token!),

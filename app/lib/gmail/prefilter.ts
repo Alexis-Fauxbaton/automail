@@ -1,4 +1,4 @@
-import type { GmailMessage } from "./client";
+import type { MailMessage } from "../mail/types";
 import {
   BLACKLISTED_DOMAINS,
   NOREPLY_PATTERNS,
@@ -30,7 +30,7 @@ function getStoreDomains(): Set<string> {
 }
 
 export function prefilterEmail(
-  msg: GmailMessage,
+  msg: MailMessage,
   knownCustomerEmails?: Set<string>,
 ): PrefilterResult {
   // Known Shopify customer → always pass (highest priority)

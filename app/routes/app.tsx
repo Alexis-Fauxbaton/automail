@@ -20,7 +20,7 @@ export default function App() {
       <s-app-nav>
         <s-link href="/app">Home</s-link>
         <s-link href="/app/support">Support copilot</s-link>
-        <s-link href="/app/gmail">Gmail inbox</s-link>
+        <s-link href="/app/inbox">Email inbox</s-link>
         <s-link href="/app/settings">Settings</s-link>
       </s-app-nav>
       <Outlet />

@@ -1,18 +1,8 @@
 import { google, type gmail_v1 } from "googleapis";
 import { getAuthenticatedClient } from "./auth";
+import type { MailMessage } from "../mail/types";
 
-export interface GmailMessage {
-  id: string;
-  threadId: string;
-  from: string;
-  fromName: string;
-  subject: string;
-  bodyText: string;
-  snippet: string;
-  receivedAt: Date;
-  labelIds: string[];
-  headers: Record<string, string>;
-}
+export type GmailMessage = MailMessage;
 
 export async function getGmailService(shop: string) {
   const auth = await getAuthenticatedClient(shop);
@@ -173,7 +163,7 @@ function extractPlainBody(payload: gmail_v1.Schema$MessagePart | undefined): str
 }
 
 /** Strip style/script blocks, HTML tags, and clean up whitespace. */
-function cleanHtml(html: string): string {
+export function cleanHtml(html: string): string {
   return html
     // Remove <style> blocks and their content
     .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, " ")
