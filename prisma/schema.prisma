@@ -9,8 +9,8 @@ generator client {
 // enough when changing adapters.
 // See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
 datasource db {
-  provider = "sqlite"
-  url      = "file:dev.sqlite"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 model Session {
@@ -47,14 +47,16 @@ model SupportSettings {
   updatedAt             DateTime @updatedAt
 }
 
-model GmailConnection {
+model MailConnection {
   shop           String   @id
-  googleEmail    String
+  provider       String   @default("gmail") // "gmail" | "zoho"
+  email          String   @default("")      // connected email address
   accessToken    String   // encrypted
   refreshToken   String   // encrypted
   tokenExpiry    DateTime
-  historyId      String?
+  historyId      String?  // Gmail only — incremental sync cursor
   lastSyncAt     DateTime?
+  zohoAccountId  String?  // Zoho only — needed for API calls
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 }
@@ -62,7 +64,7 @@ model GmailConnection {
 model IncomingEmail {
   id               String   @id @default(cuid())
   shop             String
-  gmailMessageId   String
+  externalMessageId String
   threadId         String   @default("")
   fromAddress      String
   fromName         String   @default("")
@@ -76,11 +78,12 @@ model IncomingEmail {
   processingStatus String   @default("pending") // pending | filtering | classified | analyzed | error
   analysisResult   String?  // JSON blob
   draftReply       String?
+  draftHistory     String   @default("[]") // JSON array of previous drafts
   errorMessage     String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  @@unique([shop, gmailMessageId])
+  @@unique([shop, externalMessageId])
   @@index([shop, processingStatus])
   @@index([shop, receivedAt])
 }
