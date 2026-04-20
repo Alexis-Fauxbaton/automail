@@ -11,7 +11,8 @@
  * primary sources — they all render client-side and return empty shells.
  */
 
-import OpenAI from "openai";
+import type OpenAI from "openai";
+import { getOpenAIClient, trackedChatCompletion, type TrackedCallContext } from "../../llm/client";
 import { resolveCarrierUrls } from "./carrier-detector";
 import { fetchTrackingFrom17track } from "../tracking/adapters/seventeen-track";
 import type { OrderFacts, SupportIntent, TrackingFacts } from "../types";
@@ -209,20 +210,25 @@ async function extractWithLLM(
   client: OpenAI,
   pageText: string,
   task: CrawlTask,
+  ctx?: Partial<TrackedCallContext>,
 ): Promise<string | null> {
   try {
-    const response = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: EXTRACTION_SYSTEM },
-        {
-          role: "user",
-          content: `Task: ${task.extractionHint}\n\nPage content:\n${pageText}`,
-        },
-      ],
-      temperature: 0,
-      max_tokens: 300,
-    });
+    const response = await trackedChatCompletion(
+      client,
+      {
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: EXTRACTION_SYSTEM },
+          {
+            role: "user",
+            content: `Task: ${task.extractionHint}\n\nPage content:\n${pageText}`,
+          },
+        ],
+        temperature: 0,
+        max_tokens: 300,
+      },
+      { callSite: "context-crawler", ...ctx },
+    );
     const result = response.choices[0]?.message?.content?.trim() ?? "";
     if (!result || result === "NO_USEFUL_CONTENT") return null;
     return result;
@@ -272,13 +278,14 @@ export function buildCrawlTasks(
 // Main entry point
 // ---------------------------------------------------------------------------
 
-export async function crawlContexts(tasks: CrawlTask[]): Promise<CrawledContext[]> {
+export async function crawlContexts(
+  tasks: CrawlTask[],
+  ctx?: Partial<TrackedCallContext>,
+): Promise<CrawledContext[]> {
   if (tasks.length === 0) return [];
 
-  const openaiKey = process.env.OPENAI_API_KEY;
-  if (!openaiKey || openaiKey === "sk-your-key-here") return [];
-
-  const client = new OpenAI({ apiKey: openaiKey });
+  const client = getOpenAIClient();
+  if (!client) return [];
 
   // Group by base purpose (tracking number), try sources in order, stop at first success
   const byPurposeBase = new Map<string, CrawlTask[]>();
@@ -344,7 +351,7 @@ export async function crawlContexts(tasks: CrawlTask[]): Promise<CrawledContext[
         const text = pageToText(html);
         if (text.length < 100) continue;
 
-        const extracted = await extractWithLLM(client, text, task);
+        const extracted = await extractWithLLM(client, text, task, ctx);
         if (!extracted) continue;
 
         results.push({

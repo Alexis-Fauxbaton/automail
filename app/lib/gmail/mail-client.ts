@@ -8,6 +8,7 @@ import {
   listRecentMessages,
   listHistoryChanges,
   getProfile,
+  getThreadMessages,
 } from "./client";
 
 export async function createGmailClient(shop: string): Promise<MailClient> {
@@ -33,6 +34,10 @@ export async function createGmailClient(shop: string): Promise<MailClient> {
     async getSyncCursor() {
       const profile = await getProfile(gmail);
       return profile.historyId ?? null;
+    },
+
+    async getThreadMessages(threadId) {
+      return getThreadMessages(gmail, threadId);
     },
   };
 }

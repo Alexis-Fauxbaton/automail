@@ -9,22 +9,14 @@ export async function getGmailService(shop: string) {
   return google.gmail({ version: "v1", auth });
 }
 
-export async function listRecentMessages(
+/** Helper: page through Gmail messages.list for a single query string. */
+async function fetchMessageIds(
   gmail: gmail_v1.Gmail,
-  opts: { afterDate?: Date; maxResults?: number },
+  query: string,
+  maxResults: number,
 ): Promise<string[]> {
-  const parts: string[] = ["in:inbox"];
-  if (opts.afterDate) {
-    // Gmail query uses epoch seconds
-    const epoch = Math.floor(opts.afterDate.getTime() / 1000);
-    parts.push(`after:${epoch}`);
-  }
-  const query = parts.join(" ");
-
   const ids: string[] = [];
   let pageToken: string | undefined;
-  const maxResults = opts.maxResults ?? 100;
-
   do {
     const res = await gmail.users.messages.list({
       userId: "me",
@@ -37,7 +29,31 @@ export async function listRecentMessages(
     }
     pageToken = res.data.nextPageToken ?? undefined;
   } while (pageToken && ids.length < maxResults);
+  return ids;
+}
 
+export async function listRecentMessages(
+  gmail: gmail_v1.Gmail,
+  opts: { afterDate?: Date; maxResults?: number },
+): Promise<string[]> {
+  const datePart = opts.afterDate
+    ? ` after:${Math.floor(opts.afterDate.getTime() / 1000)}`
+    : "";
+  const maxResults = opts.maxResults ?? 100;
+
+  // Two separate queries — avoids any ambiguity with the OR operator in the
+  // Gmail search API and ensures we reliably get both inbox and sent messages.
+  const [inboxIds, sentIds] = await Promise.all([
+    fetchMessageIds(gmail, `in:inbox${datePart}`, maxResults),
+    fetchMessageIds(gmail, `in:sent${datePart}`, maxResults),
+  ]);
+
+  // Deduplicate (a message can have both INBOX and SENT labels in rare cases)
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const id of [...inboxIds, ...sentIds]) {
+    if (!seen.has(id)) { seen.add(id); ids.push(id); }
+  }
   return ids;
 }
 
@@ -50,9 +66,13 @@ export async function getMessage(
     id: messageId,
     format: "full",
   });
+  return parseGmailMessage(res.data);
+}
 
+/** Parse a raw Gmail message payload into our MailMessage shape. */
+function parseGmailMessage(data: gmail_v1.Schema$Message): GmailMessage {
   const headers: Record<string, string> = {};
-  for (const h of res.data.payload?.headers ?? []) {
+  for (const h of data.payload?.headers ?? []) {
     if (h.name && h.value) headers[h.name.toLowerCase()] = h.value;
   }
 
@@ -60,20 +80,39 @@ export async function getMessage(
   const fromName = extractName(from);
   const subject = headers["subject"] ?? "(no subject)";
 
-  const bodyText = extractPlainBody(res.data.payload);
+  const bodyText = extractPlainBody(data.payload);
 
   return {
-    id: res.data.id!,
-    threadId: res.data.threadId ?? "",
+    id: data.id!,
+    threadId: data.threadId ?? "",
     from: extractEmail(from),
     fromName,
     subject,
     bodyText,
-    snippet: res.data.snippet ?? "",
-    receivedAt: new Date(parseInt(res.data.internalDate ?? "0", 10)),
-    labelIds: res.data.labelIds ?? [],
+    snippet: data.snippet ?? "",
+    receivedAt: new Date(parseInt(data.internalDate ?? "0", 10)),
+    labelIds: data.labelIds ?? [],
     headers,
   };
+}
+
+/**
+ * Fetch ALL messages in a Gmail thread (inbox + sent + any label),
+ * ordered chronologically.
+ */
+export async function getThreadMessages(
+  gmail: gmail_v1.Gmail,
+  threadId: string,
+): Promise<GmailMessage[]> {
+  const res = await gmail.users.threads.get({
+    userId: "me",
+    id: threadId,
+    format: "full",
+  });
+  const messages = (res.data.messages ?? []).map(parseGmailMessage);
+  // Sort chronologically (oldest first)
+  messages.sort((a, b) => a.receivedAt.getTime() - b.receivedAt.getTime());
+  return messages;
 }
 
 export async function listHistoryChanges(
@@ -81,32 +120,39 @@ export async function listHistoryChanges(
   startHistoryId: string,
 ): Promise<{ messageIds: string[]; latestHistoryId?: string }> {
   const ids = new Set<string>();
-  let pageToken: string | undefined;
   let latestHistoryId: string | undefined;
 
-  try {
-    do {
-      const res = await gmail.users.history.list({
-        userId: "me",
-        startHistoryId,
-        historyTypes: ["messageAdded"],
-        labelId: "INBOX",
-        pageToken,
-      });
-      latestHistoryId = res.data.historyId ?? undefined;
-      for (const h of res.data.history ?? []) {
-        for (const ma of h.messagesAdded ?? []) {
-          if (ma.message?.id) ids.add(ma.message.id);
+  // Fetch history for both INBOX and SENT so sent replies are captured.
+  for (const labelId of ["INBOX", "SENT"] as const) {
+    let pageToken: string | undefined;
+    try {
+      do {
+        const res = await gmail.users.history.list({
+          userId: "me",
+          startHistoryId,
+          historyTypes: ["messageAdded"],
+          labelId,
+          pageToken,
+        });
+        // Keep the highest historyId across both calls
+        const hid = res.data.historyId ?? undefined;
+        if (hid && (!latestHistoryId || hid > latestHistoryId)) {
+          latestHistoryId = hid;
         }
+        for (const h of res.data.history ?? []) {
+          for (const ma of h.messagesAdded ?? []) {
+            if (ma.message?.id) ids.add(ma.message.id);
+          }
+        }
+        pageToken = res.data.nextPageToken ?? undefined;
+      } while (pageToken);
+    } catch (err: unknown) {
+      // 404 means historyId is too old — need full re-fetch
+      if (isGmailError(err, 404)) {
+        return { messageIds: [], latestHistoryId: undefined };
       }
-      pageToken = res.data.nextPageToken ?? undefined;
-    } while (pageToken);
-  } catch (err: unknown) {
-    // 404 means historyId is too old — need full re-fetch
-    if (isGmailError(err, 404)) {
-      return { messageIds: [], latestHistoryId: undefined };
+      throw err;
     }
-    throw err;
   }
 
   return { messageIds: Array.from(ids), latestHistoryId };

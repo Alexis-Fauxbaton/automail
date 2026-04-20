@@ -18,6 +18,26 @@ export interface ParsedEmail {
   normalized: string;
 }
 
+export type MessageDirection = "incoming" | "outgoing" | "unknown";
+
+export interface ConversationMessage {
+  direction: MessageDirection;
+  fromAddress: string;
+  receivedAt: string;
+  subject: string;
+  body: string;
+  isLatest: boolean;
+}
+
+export interface ConversationMeta {
+  messageCount: number;
+  incomingCount: number;
+  outgoingCount: number;
+  lastMessageDirection: MessageDirection;
+  noReplyNeeded: boolean;
+  noReplyReason?: string;
+}
+
 export interface ExtractedIdentifiers {
   orderNumber?: string;      // e.g. "1234" (without #)
   email?: string;
@@ -85,4 +105,5 @@ export interface SupportAnalysis {
   confidence: Confidence;
   warnings: Warning[];
   draftReply: string;
+  conversation: ConversationMeta;
 }

@@ -1,12 +1,13 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
+import { Form, useActionData, useLoaderData, useNavigation, useRevalidator } from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { getAuthUrl as getGmailAuthUrl, getConnection, deleteConnection } from "../lib/gmail/auth";
 import { getZohoAuthUrl } from "../lib/zoho/auth";
 import { processNewEmails, reanalyzeEmail, type ProcessingReport } from "../lib/gmail/pipeline";
 import { refineDraft } from "../lib/gmail/refine-draft";
+import { runDiagnosis, type DiagnosisReport } from "../lib/gmail/diagnose";
 import { AnalysisDisplay } from "../components/SupportAnalysisDisplay";
 import type { SupportAnalysisExtended } from "../lib/support/orchestrator";
 import type { MailProvider } from "../lib/mail/types";
@@ -44,6 +45,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     provider: (connection?.provider ?? null) as MailProvider | null,
     connectedEmail: connection?.email ?? null,
     lastSyncAt: connection?.lastSyncAt?.toISOString() ?? null,
+    lastSyncError: connection?.lastSyncError ?? null,
     gmailAuthUrl,
     zohoAuthUrl,
     emails,
@@ -61,7 +63,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent === "disconnect") {
     await deleteConnection(session.shop);
-    return { disconnected: true, report: null, reanalyzed: null, refined: null };
+    return { disconnected: true, report: null, reanalyzed: null, refined: null, stopped: false };
+  }
+
+  if (intent === "stop") {
+    await prisma.mailConnection.update({
+      where: { shop: session.shop },
+      data: { syncCancelledAt: new Date() },
+    });
+    return { stopped: true, report: null, disconnected: false, reanalyzed: null, refined: null };
   }
 
   if (intent === "resync") {
@@ -70,23 +80,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       where: { shop: session.shop },
       data: { historyId: null, lastSyncAt: null },
     });
-    const report = await processNewEmails(session.shop, admin);
-    const rows = await prisma.incomingEmail.findMany({
-      where: { shop: session.shop },
-      orderBy: { receivedAt: "desc" },
-      take: 500,
-    });
-    return { report, emails: rows.map(serializeEmail), disconnected: false, reanalyzed: null, refined: null };
+    // Fire and forget — avoids Cloudflare 524 timeout on large mailboxes.
+    processNewEmails(session.shop, admin).catch((err) =>
+      console.error("[inbox/resync] background error:", err),
+    );
+    return { syncStarted: true, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
   }
 
   if (intent === "sync") {
-    const report = await processNewEmails(session.shop, admin);
-    const rows = await prisma.incomingEmail.findMany({
-      where: { shop: session.shop },
-      orderBy: { receivedAt: "desc" },
-      take: 500,
-    });
-    return { report, emails: rows.map(serializeEmail), disconnected: false, reanalyzed: null, refined: null };
+    // Fire and forget — avoids Cloudflare 524 timeout on large mailboxes.
+    processNewEmails(session.shop, admin).catch((err) =>
+      console.error("[inbox/sync] background error:", err),
+    );
+    return { syncStarted: true, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
+  }
+
+  if (intent === "diagnose") {
+    const diagnosis = await runDiagnosis(session.shop);
+    return { diagnosis, report: null, disconnected: false, reanalyzed: null, refined: null };
   }
 
   if (intent === "reanalyze") {
@@ -106,6 +117,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const newDraft = await refineDraft(currentDraft, instructions, {
       subject: record.subject,
       body: record.bodyText,
+    }, {
+      shop: session.shop,
+      emailId: emailId,
+      threadId: record.threadId,
     });
     let history: string[] = [];
     try { history = JSON.parse(record.draftHistory || "[]"); } catch { /* ignore */ }
@@ -223,6 +238,26 @@ function relativeTime(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString();
 }
 
+function getMessageDirection(
+  email: SerializedEmail,
+  connectedEmail: string | null,
+): "incoming" | "outgoing" | "unknown" {
+  const from = email.fromAddress.trim().toLowerCase();
+  const mailbox = (connectedEmail ?? "").trim().toLowerCase();
+  if (!from || !mailbox) return "unknown";
+  return from === mailbox ? "outgoing" : "incoming";
+}
+
+function threadNeedsReply(
+  thread: EmailThread,
+  connectedEmail: string | null,
+): boolean {
+  const latestDirection = getMessageDirection(thread.latest, connectedEmail);
+  const noReplyNeeded = thread.latest.analysisResult?.conversation?.noReplyNeeded === true;
+  const isSupport = getThreadClassification(thread) === "support";
+  return isSupport && latestDirection === "incoming" && !noReplyNeeded;
+}
+
 // ---------------------------------------------------------------------------
 // Thread grouping
 // ---------------------------------------------------------------------------
@@ -234,27 +269,56 @@ interface EmailThread {
 }
 
 function groupByThread(emails: SerializedEmail[]): EmailThread[] {
+  // Primary grouping by threadId
   const map = new Map<string, SerializedEmail[]>();
   for (const email of emails) {
-    const key = email.threadId || email.id; // fallback to email id if no threadId
+    const key = email.threadId || email.id;
     const arr = map.get(key) ?? [];
     arr.push(email);
     map.set(key, arr);
   }
-  const threads: EmailThread[] = [];
+
+  // Merge threads that share the same externalMessageId records (Zoho splits
+  // threads when the subject changes mid-conversation — same emails appear
+  // under multiple threadIds). We deduplicate by externalMessageId and keep
+  // the earliest-seen threadId as the canonical key.
+  const seenMsgIds = new Map<string, string>(); // externalMessageId → canonical threadId
+  const merged = new Map<string, SerializedEmail[]>();
+
   for (const [threadId, threadEmails] of map) {
-    // Sort chronologically (oldest first)
+    // Find which canonical threadId this group belongs to
+    let canonicalId = threadId;
+    for (const e of threadEmails) {
+      const existing = seenMsgIds.get(e.externalMessageId);
+      if (existing) { canonicalId = existing; break; }
+    }
+    const target = merged.get(canonicalId) ?? [];
+    for (const e of threadEmails) {
+      if (!target.find((t) => t.externalMessageId === e.externalMessageId)) {
+        target.push(e);
+        seenMsgIds.set(e.externalMessageId, canonicalId);
+      }
+    }
+    merged.set(canonicalId, target);
+  }
+
+  const threads: EmailThread[] = [];
+  for (const [threadId, threadEmails] of merged) {
     threadEmails.sort((a, b) => new Date(a.receivedAt).getTime() - new Date(b.receivedAt).getTime());
     const latest = threadEmails[threadEmails.length - 1];
     threads.push({ threadId, emails: threadEmails, latest });
   }
-  // Sort threads by latest email (newest thread first)
   threads.sort((a, b) => new Date(b.latest.receivedAt).getTime() - new Date(a.latest.receivedAt).getTime());
   return threads;
 }
 
 function getThreadClassification(thread: EmailThread): FilterTab {
-  return getClassification(thread.latest);
+  // Use the latest email that has actually been classified to avoid outgoing
+  // messages (which have no tier results) from overriding the thread category.
+  const classified = [...thread.emails]
+    .reverse()
+    .find((e) => e.tier1Result || e.tier2Result);
+  return getClassification(classified ?? thread.latest);
 }
 
 // ---------------------------------------------------------------------------
@@ -332,6 +396,12 @@ function ConnectionCard({
           </s-button>
         </Form>
         <Form method="post">
+          <input type="hidden" name="_action" value="diagnose" />
+          <s-button variant="tertiary" type="submit">
+            Diagnose
+          </s-button>
+        </Form>
+        <Form method="post">
           <input type="hidden" name="_action" value="disconnect" />
           <s-button tone="critical" variant="plain" type="submit">
             Disconnect
@@ -373,16 +443,21 @@ function PipelineStats({ emails }: { emails: SerializedEmail[] }) {
 function ThreadCard({
   thread,
   isExpanded,
+  connectedEmail,
   onToggle,
 }: {
   thread: EmailThread;
   isExpanded: boolean;
+  connectedEmail: string | null;
   onToggle: () => void;
 }) {
   const { latest, emails } = thread;
   const cls = getThreadClassification(thread);
   const reason = filterReason(latest);
   const messageCount = emails.length;
+  const latestDirection = getMessageDirection(latest, connectedEmail);
+  const noReplyNeeded = latest.analysisResult?.conversation?.noReplyNeeded === true;
+  const requiresReply = threadNeedsReply(thread, connectedEmail);
 
   const borderColor =
     cls === "support" ? "success" : cls === "uncertain" ? "warning" : undefined;
@@ -400,6 +475,11 @@ function ThreadCard({
           {cls === "support" && <s-badge tone="success">Support</s-badge>}
           {cls === "uncertain" && <s-badge tone="warning">Uncertain</s-badge>}
           {cls === "filtered" && <s-badge tone="read-only">Filtered</s-badge>}
+          <s-badge tone={latestDirection === "incoming" ? "info" : "read-only"}>
+            Last: {latestDirection}
+          </s-badge>
+          {requiresReply && <s-badge tone="critical">To process</s-badge>}
+          {noReplyNeeded && <s-badge tone="success">No reply needed</s-badge>}
           {latest.processingStatus === "error" && <s-badge tone="critical">Error</s-badge>}
           {latest.processingStatus === "analyzed" && <s-badge tone="success">Analyzed</s-badge>}
           {latest.isKnownCustomer && <s-badge tone="info">Customer</s-badge>}
@@ -453,6 +533,9 @@ function ThreadCard({
                     <s-text variant="bodySm" tone="subdued">
                       {relativeTime(email.receivedAt)}
                     </s-text>
+                    <s-badge tone={getMessageDirection(email, connectedEmail) === "outgoing" ? "read-only" : "info"}>
+                      {getMessageDirection(email, connectedEmail)}
+                    </s-badge>
                     {idx === emails.length - 1 && messageCount > 1 && (
                       <s-badge tone="info">Latest</s-badge>
                     )}
@@ -483,7 +566,13 @@ function ThreadCard({
             )}
 
             {/* Draft (from latest email only) */}
-            {latest.draftReply && <DraftBlock email={latest} />}
+            {latest.draftReply && !noReplyNeeded && <DraftBlock email={latest} />}
+
+            {noReplyNeeded && (
+              <s-banner tone="info">
+                No draft generated: latest customer message appears to close the loop.
+              </s-banner>
+            )}
 
             {/* Error */}
             {latest.errorMessage && (
@@ -575,6 +664,74 @@ function DraftBlock({ email }: { email: SerializedEmail }) {
   );
 }
 
+function DiagnosisView({ diagnosis }: { diagnosis: DiagnosisReport }) {
+  return (
+    <s-stack direction="block" gap="base">
+      <s-paragraph>
+        <strong>Provider:</strong> {diagnosis.provider} — <strong>Mailbox:</strong> {diagnosis.connectedEmail}
+      </s-paragraph>
+
+      <s-stack direction="block" gap="small-200">
+        {diagnosis.steps.map((s, i) => (
+          <s-box
+            key={i}
+            padding="small-300"
+            borderWidth="base"
+            borderRadius="base"
+            {...(s.ok ? {} : { borderColor: "critical" })}
+          >
+            <s-stack direction="inline" gap="small-300" blockAlign="center">
+              <s-badge tone={s.ok ? "success" : "critical"}>{s.ok ? "OK" : "FAIL"}</s-badge>
+              <s-text variant="bodySm"><strong>{s.step}:</strong> {s.detail}</s-text>
+            </s-stack>
+          </s-box>
+        ))}
+      </s-stack>
+
+      {diagnosis.zohoFolders && diagnosis.zohoFolders.length > 0 && (
+        <s-box padding="base" background="subdued" borderRadius="base">
+          <s-stack direction="block" gap="small-200">
+            <s-text variant="headingSm">Zoho folders found</s-text>
+            {diagnosis.zohoFolders.map((f) => (
+              <s-text key={f.folderId} variant="bodySm">
+                <strong>{f.folderName}</strong> — type=<code>{f.folderType || "(empty)"}</code> id={f.folderId}
+              </s-text>
+            ))}
+          </s-stack>
+        </s-box>
+      )}
+
+      {diagnosis.sampleMessages && diagnosis.sampleMessages.length > 0 && (
+        <s-box padding="base" background="subdued" borderRadius="base">
+          <s-stack direction="block" gap="small-200">
+            <s-text variant="headingSm">Sample messages (first 10)</s-text>
+            {diagnosis.sampleMessages.map((m) => (
+              <s-box
+                key={m.id}
+                padding="small-200"
+                borderWidth="base"
+                borderRadius="base"
+                {...(m.detectedOutgoing ? { borderColor: "success" } : {})}
+              >
+                <s-stack direction="block" gap="small-100">
+                  <s-stack direction="inline" gap="small-200" blockAlign="center">
+                    <s-badge tone={m.detectedOutgoing ? "success" : "read-only"}>
+                      {m.detectedOutgoing ? "OUTGOING" : "incoming"}
+                    </s-badge>
+                    <s-text variant="bodySm"><strong>from:</strong> {m.from}</s-text>
+                  </s-stack>
+                  <s-text variant="bodySm">labels: [{m.labelIds.join(", ") || "none"}]</s-text>
+                  <s-text variant="bodySm" tone="subdued">{m.subject}</s-text>
+                </s-stack>
+              </s-box>
+            ))}
+          </s-stack>
+        </s-box>
+      )}
+    </s-stack>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
@@ -583,10 +740,75 @@ export default function InboxPage() {
   const loaderData = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
+  const revalidator = useRevalidator();
   const isSyncing =
     navigation.state === "submitting" &&
     (navigation.formData?.get("_action") === "sync" ||
       navigation.formData?.get("_action") === "resync");
+
+  const syncStarted = (actionData as { syncStarted?: boolean } | null)?.syncStarted === true;
+  const syncStopped = (actionData as { stopped?: boolean } | null)?.stopped === true;
+
+  // Keep background-sync state alive across revalidations (actionData resets each time).
+  const [bgSyncActive, setBgSyncActive] = useState(false);
+  const [syncCancelled, setSyncCancelled] = useState(false);
+  const [bgSyncStart, setBgSyncStart] = useState<number>(0);
+  const [elapsed, setElapsed] = useState(0);       // seconds since sync started
+  const [nextRefresh, setNextRefresh] = useState(8); // seconds until next auto-refresh
+  const POLL_INTERVAL = 8;
+  const MAX_DURATION = 3 * 60; // 3 minutes
+
+  // Start the background sync indicator when the action returns syncStarted.
+  useEffect(() => {
+    if (!syncStarted) return;
+    setBgSyncActive(true);
+    setSyncCancelled(false);
+    setBgSyncStart(Date.now());
+    setElapsed(0);
+    setNextRefresh(POLL_INTERVAL);
+  }, [syncStarted]);
+
+  // Stop the background sync indicator when the action returns stopped.
+  useEffect(() => {
+    if (!syncStopped) return;
+    setBgSyncActive(false);
+    setSyncCancelled(true);
+  }, [syncStopped]);
+
+  // Auto-revalidate every 8 s while a background sync is running.
+  useEffect(() => {
+    if (!bgSyncActive) return;
+    const poll = setInterval(() => {
+      if (revalidator.state === "idle") {
+        revalidator.revalidate();
+        setNextRefresh(POLL_INTERVAL);
+      }
+    }, POLL_INTERVAL * 1_000);
+    const stop = setTimeout(() => {
+      clearInterval(poll);
+      setBgSyncActive(false);
+    }, MAX_DURATION * 1_000);
+    return () => { clearInterval(poll); clearTimeout(stop); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bgSyncActive]);
+
+  // 1-second tick for the elapsed / countdown display.
+  useEffect(() => {
+    if (!bgSyncActive) return;
+    const tick = setInterval(() => {
+      const secs = Math.floor((Date.now() - bgSyncStart) / 1_000);
+      setElapsed(secs);
+      const remaining = POLL_INTERVAL - (secs % POLL_INTERVAL);
+      setNextRefresh(remaining === 0 ? POLL_INTERVAL : remaining);
+      if (secs >= MAX_DURATION) setBgSyncActive(false);
+    }, 1_000);
+    return () => clearInterval(tick);
+  }, [bgSyncActive, bgSyncStart]);
+
+  // Progress 0-100 over the full 3-minute window (used for bar width).
+  const syncProgress = bgSyncActive
+    ? Math.min(100, Math.round((elapsed / MAX_DURATION) * 100))
+    : 0;
 
   const [activeTab, setActiveTab] = useState<FilterTab>("support");
   const [expandedThreadId, setExpandedThreadId] = useState<string | null>(null);
@@ -627,6 +849,7 @@ export default function InboxPage() {
       : threads.filter((t) => getThreadClassification(t) === activeTab);
 
   const report = actionData?.report as ProcessingReport | null;
+  const isPolling = bgSyncActive && revalidator.state !== "idle";
 
   if (actionData?.disconnected) {
     return (
@@ -655,7 +878,72 @@ export default function InboxPage() {
         />
       </s-section>
 
-      {/* Sync report */}
+      {/* Sync error — persisted in DB, visible after page revalidation */}
+      {loaderData.lastSyncError && !bgSyncActive && (
+        <s-section>
+          <s-banner tone="critical">
+            <s-stack direction="block" gap="small-200">
+              <s-text variant="headingSm">Erreur de synchronisation</s-text>
+              <s-text variant="bodySm">{loaderData.lastSyncError}</s-text>
+            </s-stack>
+          </s-banner>
+        </s-section>
+      )}
+
+      {/* Diagnosis report */}
+      {(actionData as { diagnosis?: DiagnosisReport })?.diagnosis && (
+        <s-section heading="Diagnosis">
+          <DiagnosisView diagnosis={(actionData as { diagnosis: DiagnosisReport }).diagnosis} />
+        </s-section>
+      )}
+
+      {/* Sync cancelled banner */}
+      {syncCancelled && !bgSyncActive && (
+        <s-section>
+          <s-banner tone="warning">
+            Sync annulé.
+          </s-banner>
+        </s-section>
+      )}
+
+      {/* Background sync progress bar */}
+      {bgSyncActive && (
+        <s-section>
+          <div style={{
+            background: "var(--p-color-bg-surface-secondary, #f1f1f1)",
+            borderRadius: "8px",
+            overflow: "hidden",
+            height: "8px",
+            width: "100%",
+            marginBottom: "8px",
+          }}>
+            <div style={{
+              height: "100%",
+              width: `${syncProgress}%`,
+              background: "var(--p-color-bg-fill-brand, #008060)",
+              transition: "width 1s linear",
+              // Animated shimmer on top
+              backgroundImage: "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.35) 50%, transparent 100%)",
+              backgroundSize: "200% 100%",
+              animation: "shimmer 1.5s infinite",
+            }} />
+          </div>
+          <style>{`@keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }`}</style>
+          <s-stack direction="inline" gap="small-300" blockAlign="center">
+            <s-spinner size="small" />
+            <s-text variant="bodySm" tone="subdued">
+              Sync en cours… {elapsed}s écoulées
+              {isPolling ? " — chargement…" : ` — prochain rafraîchissement dans ${nextRefresh}s`}
+            </s-text>
+            <Form method="post">
+              <input type="hidden" name="_action" value="stop" />
+              <s-button tone="critical" variant="secondary" type="submit" size="slim">
+                Stopper
+              </s-button>
+            </Form>
+          </s-stack>
+        </s-section>
+      )}
       {report && (
         <s-section>
           <s-banner tone="info">
@@ -700,6 +988,7 @@ export default function InboxPage() {
                     key={thread.threadId}
                     thread={thread}
                     isExpanded={expandedThreadId === thread.threadId}
+                    connectedEmail={loaderData.connectedEmail}
                     onToggle={() => setExpandedThreadId(expandedThreadId === thread.threadId ? null : thread.threadId)}
                   />
                 ))}

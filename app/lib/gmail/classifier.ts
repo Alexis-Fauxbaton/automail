@@ -1,4 +1,4 @@
-import OpenAI from "openai";
+import { getOpenAIClient, trackedChatCompletion, type TrackedCallContext } from "../llm/client";
 
 export type EmailClassification = "support_client" | "probable_non_client" | "incertain";
 
@@ -17,33 +17,32 @@ Key distinction: a CUSTOMER writes "where is my order #123?" = support_client. T
 
 Reply with JSON only: {"classification":"..."}`;
 
-function getClient(): OpenAI | null {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key || key === "sk-your-key-here") return null;
-  return new OpenAI({ apiKey: key });
-}
-
 export async function classifyEmail(
   subject: string,
   body: string,
+  ctx?: Partial<TrackedCallContext>,
 ): Promise<EmailClassification> {
-  const client = getClient();
+  const client = getOpenAIClient();
   if (!client) return "incertain";
 
   try {
     // Truncate body to save tokens
     const truncatedBody = body.length > 600 ? body.slice(0, 600) + "…" : body;
 
-    const response = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: `Subject: ${subject}\n\nBody:\n${truncatedBody}` },
-      ],
-      response_format: { type: "json_object" },
-      temperature: 0,
-      max_tokens: 30,
-    });
+    const response = await trackedChatCompletion(
+      client,
+      {
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: `Subject: ${subject}\n\nBody:\n${truncatedBody}` },
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0,
+        max_tokens: 30,
+      },
+      { callSite: "classifier", ...ctx },
+    );
 
     const raw = response.choices[0]?.message?.content ?? "";
     const parsed = JSON.parse(raw) as { classification?: string };

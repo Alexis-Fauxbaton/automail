@@ -6,23 +6,18 @@
  * no mixing allowed. Falls back to templates if the API is unavailable.
  */
 
-import OpenAI from "openai";
+import { getOpenAIClient, trackedChatCompletion, type TrackedCallContext } from "../llm/client";
 import { buildDraft as templateFallback } from "./response-draft";
 import type { CrawledContext } from "./crawl/context-crawler";
 import type { SupportSettings } from "./settings";
 import type {
+  ConversationMessage,
   OrderFacts,
   ParsedEmail,
   SupportIntent,
   TrackingFacts,
   Warning,
 } from "./types";
-
-function getClient(): OpenAI | null {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key || key === "sk-your-key-here") return null;
-  return new OpenAI({ apiKey: key });
-}
 
 function buildSystemPrompt(settings: SupportSettings): string {
   const toneMap: Record<string, string> = {
@@ -112,12 +107,39 @@ function buildUserMessage(
   warnings: Warning[],
   shareTrackingNumber: boolean,
   refundPolicy: string,
+  conversationMessages?: ConversationMessage[],
 ): string {
   const sections: string[] = [];
 
-  sections.push("## Customer email");
-  sections.push(`Subject: ${parsed.subject}`);
-  sections.push(`Body:\n${parsed.body}`);
+  if (conversationMessages && conversationMessages.length > 1) {
+    // Multi-message thread: render each message explicitly
+    sections.push("## Conversation history (full thread, chronological order)");
+    sections.push(`Subject: ${parsed.subject}`);
+    for (const msg of conversationMessages) {
+      const label =
+        msg.direction === "outgoing"
+          ? "[YOUR REPLY — outgoing]"
+          : "[CUSTOMER — incoming]";
+      const latestMarker = msg.isLatest ? " ← LATEST MESSAGE" : "";
+      sections.push(
+        [
+          `--- ${label}${latestMarker} ---`,
+          `Date: ${msg.receivedAt}`,
+          `From: ${msg.fromAddress}`,
+          `Body:\n${msg.body}`,
+        ].join("\n"),
+      );
+    }
+    sections.push(
+      "IMPORTANT — the draft reply MUST take into account the ENTIRE conversation above. " +
+      "Apply all extracted identifiers (order number, tracking, customer name…) to any message in the thread, not just the latest one.",
+    );
+  } else {
+    // Single email
+    sections.push("## Customer email");
+    sections.push(`Subject: ${parsed.subject}`);
+    sections.push(`Body:\n${parsed.body}`);
+  }
 
   sections.push("## Detected intent");
   sections.push(intent);
@@ -200,10 +222,14 @@ export interface LLMDraftInput {
   crawledContexts: CrawledContext[];
   warnings: Warning[];
   settings: SupportSettings;
+  /** Full ordered conversation messages (oldest first). When provided and >1, the full thread history is injected into the prompt. */
+  conversationMessages?: ConversationMessage[];
+  /** Optional tracking context for LLM cost logging. */
+  trackedCallContext?: Partial<TrackedCallContext>;
 }
 
 export async function generateLLMDraft(input: LLMDraftInput): Promise<string> {
-  const client = getClient();
+  const client = getOpenAIClient();
   const shareTracking = input.settings.shareTrackingNumber ?? true;
 
   if (!client) {
@@ -215,34 +241,46 @@ export async function generateLLMDraft(input: LLMDraftInput): Promise<string> {
       confidence: "low",
       warnings: input.warnings,
       identifiers: {},
+      conversation: {
+        messageCount: 1,
+        incomingCount: 1,
+        outgoingCount: 0,
+        lastMessageDirection: "incoming",
+        noReplyNeeded: false,
+      },
       settings: input.settings,
       parsed: input.parsed,
     });
   }
 
   try {
-    const response = await client.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        { role: "system", content: buildSystemPrompt(input.settings) },
-        {
-          role: "user",
-          content: buildUserMessage(
-            input.parsed,
-            input.intent,
-            input.order,
-            input.orderCandidates,
-            input.tracking,
-            input.crawledContexts,
-            input.warnings,
-            shareTracking,
-            input.settings.refundPolicy ?? "",
-          ),
-        },
-      ],
-      temperature: 0.3,
-      max_tokens: 600,
-    });
+    const response = await trackedChatCompletion(
+      client,
+      {
+        model: "gpt-4o",
+        messages: [
+          { role: "system", content: buildSystemPrompt(input.settings) },
+          {
+            role: "user",
+            content: buildUserMessage(
+              input.parsed,
+              input.intent,
+              input.order,
+              input.orderCandidates,
+              input.tracking,
+              input.crawledContexts,
+              input.warnings,
+              shareTracking,
+              input.settings.refundPolicy ?? "",
+              input.conversationMessages,
+            ),
+          },
+        ],
+        temperature: 0.3,
+        max_tokens: 600,
+      },
+      { callSite: "llm-draft", ...input.trackedCallContext },
+    );
 
     const draft = response.choices[0]?.message?.content?.trim() ?? "";
     if (!draft) throw new Error("Empty response from OpenAI");
@@ -257,6 +295,13 @@ export async function generateLLMDraft(input: LLMDraftInput): Promise<string> {
       confidence: "low",
       warnings: input.warnings,
       identifiers: {},
+      conversation: {
+        messageCount: 1,
+        incomingCount: 1,
+        outgoingCount: 0,
+        lastMessageDirection: "incoming",
+        noReplyNeeded: false,
+      },
       settings: input.settings,
       parsed: input.parsed,
     });

@@ -4,7 +4,7 @@
  * Falls back to the regex modules if the API call fails or returns unusable data.
  */
 
-import OpenAI from "openai";
+import { getOpenAIClient, trackedChatCompletion, type TrackedCallContext } from "../llm/client";
 import type { ExtractedIdentifiers, ParsedEmail, SupportIntent } from "./types";
 import { extractIdentifiers } from "./identifier-extractor";
 import { classifyIntent } from "./intent-classifier";
@@ -48,16 +48,11 @@ export interface LLMParseResult {
   usedLLM: boolean;
 }
 
-function getClient(): OpenAI | null {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key || key === "sk-your-key-here") return null;
-  return new OpenAI({ apiKey: key });
-}
-
 export async function llmParseEmail(
   parsed: ParsedEmail,
+  ctx?: Partial<TrackedCallContext>,
 ): Promise<LLMParseResult> {
-  const client = getClient();
+  const client = getOpenAIClient();
 
   if (!client) {
     // No API key configured — fall back silently to regex.
@@ -71,16 +66,20 @@ export async function llmParseEmail(
   try {
     const userMessage = `Subject: ${parsed.subject}\n\nBody:\n${parsed.body}`;
 
-    const response = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: userMessage },
-      ],
-      response_format: { type: "json_object" },
-      temperature: 0,
-      max_tokens: 256,
-    });
+    const response = await trackedChatCompletion(
+      client,
+      {
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: userMessage },
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0,
+        max_tokens: 256,
+      },
+      { callSite: "llm-parser", ...ctx },
+    );
 
     const raw = response.choices[0]?.message?.content ?? "";
     const parsed_json = JSON.parse(raw) as Record<string, unknown>;

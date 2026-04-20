@@ -163,6 +163,22 @@ export function WarningsBlock({ warnings }: { warnings: SupportAnalysisExtended[
 }
 
 export function AnalysisDisplay({ analysis }: { analysis: SupportAnalysisExtended }) {
+  // Defensive fallback for emails analyzed before the `conversation` field existed
+  const conversation = analysis.conversation ?? {
+    messageCount: 1,
+    incomingCount: 1,
+    outgoingCount: 0,
+    lastMessageDirection: "unknown" as const,
+    noReplyNeeded: false,
+  };
+
+  const directionLabel =
+    conversation.lastMessageDirection === "incoming"
+      ? "Incoming"
+      : conversation.lastMessageDirection === "outgoing"
+        ? "Outgoing"
+        : "Unknown";
+
   return (
     <s-stack direction="block" gap="base">
       <s-paragraph>
@@ -170,6 +186,22 @@ export function AnalysisDisplay({ analysis }: { analysis: SupportAnalysisExtende
         <strong>Confidence:</strong>{" "}
         <ConfidenceBadge confidence={analysis.confidence} />
       </s-paragraph>
+
+      <s-stack direction="inline" gap="small-200">
+        <s-badge>
+          Last: {directionLabel}
+        </s-badge>
+        <s-badge>
+          {conversation.incomingCount} incoming · {conversation.outgoingCount} outgoing
+        </s-badge>
+        {conversation.noReplyNeeded && (
+          <s-badge tone="success">No reply needed</s-badge>
+        )}
+      </s-stack>
+
+      {conversation.noReplyNeeded && conversation.noReplyReason && (
+        <s-banner tone="info">{conversation.noReplyReason}</s-banner>
+      )}
 
       <s-heading>Extracted identifiers</s-heading>
       <IdentifiersList identifiers={analysis.identifiers} />

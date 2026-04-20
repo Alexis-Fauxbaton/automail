@@ -40,22 +40,76 @@ interface ZohoListItem {
   folderId: string;
 }
 
+interface ZohoFolders {
+  inbox: string;
+  sent: string | null;
+}
+
 /**
- * Find the Inbox folder ID for a Zoho account.
+ * Raw list of folders (for diagnostics). Exposes name + type + id.
  */
-async function getInboxFolderId(
+export async function listZohoFoldersRaw(
+  shop: string,
+): Promise<Array<{ folderId: string; folderName: string; folderType: string }>> {
+  const conn = await prisma.mailConnection.findUnique({ where: { shop } });
+  if (!conn || conn.provider !== "zoho" || !conn.zohoAccountId) {
+    throw new Error("No Zoho connection for this shop");
+  }
+  const token = await getZohoAccessToken(shop);
+  const data = (await zohoFetch(
+    token,
+    `/api/accounts/${conn.zohoAccountId}/folders`,
+  )) as {
+    data?: Array<{ folderId: string; folderName: string; folderType?: string }>;
+  };
+  return (data.data ?? []).map((f) => ({
+    folderId: f.folderId,
+    folderName: f.folderName,
+    folderType: f.folderType ?? "",
+  }));
+}
+
+/**
+ * Fetch Inbox (and Sent) folder IDs for a Zoho account.
+ * Zoho returns a `folderType` field (Inbox, Sent, Drafts, Trash, Spam) which
+ * is language-independent; we prefer that over name-matching.
+ */
+async function getZohoFolders(
   accessToken: string,
   accountId: string,
-): Promise<string> {
+): Promise<ZohoFolders> {
   const data = (await zohoFetch(
     accessToken,
     `/api/accounts/${accountId}/folders`,
-  )) as { data?: Array<{ folderId: string; folderName: string }> };
-  const inbox = data.data?.find(
-    (f) => f.folderName.toLowerCase() === "inbox",
+  )) as {
+    data?: Array<{ folderId: string; folderName: string; folderType?: string }>;
+  };
+  const folders = data.data ?? [];
+  console.log(
+    "[zoho] Folders discovered:",
+    folders.map((f) => `${f.folderName} [type=${f.folderType}] id=${f.folderId}`).join(" | "),
   );
-  if (!inbox) throw new Error("Inbox folder not found in Zoho");
-  return inbox.folderId;
+
+  const byType = (type: string) =>
+    folders.find((f) => f.folderType?.toLowerCase() === type.toLowerCase());
+
+  const SENT_RE = /sent|envoy|gesend|invia|verzond/i;
+  const inbox =
+    byType("Inbox") ?? folders.find((f) => f.folderName.toLowerCase() === "inbox");
+  const sent =
+    byType("Sent") ?? folders.find((f) => SENT_RE.test(f.folderName));
+
+  if (!inbox) {
+    throw new Error(
+      `Inbox folder not found in Zoho. Available: ${folders
+        .map((f) => `${f.folderName}(${f.folderType ?? "?"})`)
+        .join(", ")}`,
+    );
+  }
+  console.log(
+    `[zoho] Inbox folder: ${inbox.folderName} (${inbox.folderId}); Sent folder: ${sent?.folderName ?? "NOT FOUND"} (${sent?.folderId ?? "-"})`,
+  );
+  return { inbox: inbox.folderId, sent: sent?.folderId ?? null };
 }
 
 /**
@@ -69,67 +123,104 @@ export async function createZohoClient(shop: string): Promise<MailClient> {
 
   const accountId = conn.zohoAccountId;
 
-  // Cache inbox folder ID (fetched once per client creation)
-  let inboxFolderId: string | null = null;
-  async function getInbox(token: string): Promise<string> {
-    if (!inboxFolderId) {
-      inboxFolderId = await getInboxFolderId(token, accountId);
+  // Cache folder IDs (fetched once per client creation)
+  let cachedFolders: ZohoFolders | null = null;
+  async function getFolders(token: string): Promise<ZohoFolders> {
+    if (!cachedFolders) {
+      cachedFolders = await getZohoFolders(token, accountId);
     }
-    return inboxFolderId;
+    return cachedFolders;
+  }
+  async function getInbox(token: string): Promise<string> {
+    return (await getFolders(token)).inbox;
   }
 
   return {
     async listRecentMessages(opts) {
       const token = await getZohoAccessToken(shop);
-      const folderId = await getInbox(token);
+      const folders = await getFolders(token);
 
-      const ids: string[] = [];
+      const idSet = new Set<string>();
       const maxResults = opts.maxResults ?? 500;
-      let start = 1;
-      const limit = 200;
 
-      do {
-        const data = (await zohoFetch(
-          token,
-          `/api/accounts/${accountId}/messages/view`,
-          {
-            folderId,
-            sortBy: "date",
-            start: String(start),
-            limit: String(Math.min(limit, maxResults - ids.length)),
-          },
-        )) as { data?: ZohoListItem[] };
+      // Fetch from both Inbox and Sent folders, each with its OWN budget.
+      // Using a shared budget would starve the Sent folder when Inbox is busier.
+      const folderIds = [folders.inbox, ...(folders.sent ? [folders.sent] : [])];
+      const perFolderMax = Math.max(50, Math.ceil(maxResults / folderIds.length));
 
-        const items = data.data ?? [];
-        if (items.length === 0) break;
+      for (const folderId of folderIds) {
+        const isSent = folderId === folders.sent;
+        const folderLabel = isSent ? "SENT" : "INBOX";
+        const idsBefore = idSet.size;
+        let collectedInFolder = 0;
+        let start = 1;
+        const pageSize = 200;
 
-        for (const item of items) {
-          // Filter by date if needed
-          if (opts.afterDate) {
-            const received = parseInt(item.receivedTime, 10);
-            if (received < opts.afterDate.getTime()) {
-              // Messages are sorted by date desc, so we can stop
-              return ids;
+        do {
+          const remainingInFolder = perFolderMax - collectedInFolder;
+          if (remainingInFolder <= 0) break;
+
+          const data = (await zohoFetch(
+            token,
+            `/api/accounts/${accountId}/messages/view`,
+            {
+              folderId,
+              sortBy: "date", // Zoho default is DESC (newest first)
+              start: String(start),
+              limit: String(Math.min(pageSize, remainingInFolder)),
+            },
+          )) as { data?: ZohoListItem[] };
+
+          const items = data.data ?? [];
+          console.log(`[zoho/listRecentMessages] folder=${folderLabel} start=${start} got=${items.length}`);
+          if (items.length === 0) break;
+
+          let stopped = false;
+          for (const item of items) {
+            if (opts.afterDate) {
+              const received = parseInt(item.receivedTime, 10);
+              if (received < opts.afterDate.getTime()) {
+                stopped = true;
+                break;
+              }
             }
+            idSet.add(item.messageId);
+            collectedInFolder++;
           }
-          ids.push(item.messageId);
-        }
+          if (stopped) break;
 
-        start += items.length;
-      } while (ids.length < maxResults);
+          start += items.length;
+        } while (collectedInFolder < perFolderMax);
 
-      return ids;
+        console.log(`[zoho/listRecentMessages] folder=${folderLabel} collected ${idSet.size - idsBefore} ids`);
+      }
+
+      return Array.from(idSet);
     },
 
     async getMessage(messageId) {
       const token = await getZohoAccessToken(shop);
-      const folderId = await getInbox(token);
+      const folders = await getFolders(token);
 
-      // Fetch message details
-      const detailData = (await zohoFetch(
-        token,
-        `/api/accounts/${accountId}/folders/${folderId}/messages/${messageId}/details`,
-      )) as {
+      // Try inbox first, then sent folder to find the message's actual folder.
+      const folderCandidates = [folders.inbox, ...(folders.sent ? [folders.sent] : [])];
+      let folderId = folders.inbox;
+      let detailRaw: unknown = null;
+      for (const fid of folderCandidates) {
+        try {
+          detailRaw = await zohoFetch(
+            token,
+            `/api/accounts/${accountId}/folders/${fid}/messages/${messageId}/details`,
+          );
+          folderId = fid;
+          break;
+        } catch {
+          // try next folder
+        }
+      }
+      if (!detailRaw) throw new Error(`Zoho message ${messageId} not found in any folder`);
+
+      const detailData = detailRaw as {
         data?: {
           messageId: string;
           threadId?: string;
@@ -167,8 +258,10 @@ export async function createZohoClient(shop: string): Promise<MailClient> {
         bodyText,
         snippet: detail.summary || bodyText.slice(0, 200),
         receivedAt: new Date(parseInt(detail.receivedTime, 10)),
-        labelIds: [], // Zoho doesn't have Gmail-style labels
-        headers: {}, // We don't get raw headers from Zoho API
+        // Use a virtual "SENT" label when the message lives in the Sent folder
+        // so the pipeline can reliably detect outgoing messages on Zoho too.
+        labelIds: (folders.sent && folderId === folders.sent) ? ["SENT"] : [],
+        headers: {},
       } satisfies MailMessage;
     },
 
@@ -188,6 +281,66 @@ export async function createZohoClient(shop: string): Promise<MailClient> {
     async getSyncCursor() {
       // Return current timestamp as cursor
       return String(Date.now());
+    },
+
+    async getThreadMessages(threadId) {
+      // Zoho doesn't have a unified "get all messages in thread" endpoint that's
+      // reliably documented across plans. Best-effort: try the threads endpoint;
+      // if it fails, return empty and let the pipeline fall back to DB messages.
+      try {
+        const token = await getZohoAccessToken(shop);
+        const data = (await zohoFetch(
+          token,
+          `/api/accounts/${accountId}/messages/${threadId}/threads`,
+        )) as {
+          data?: Array<{
+            messageId: string;
+            threadId?: string;
+            fromAddress: string;
+            sender: string;
+            subject: string;
+            summary: string;
+            receivedTime: string;
+            folderId?: string;
+          }>;
+        };
+        const items = data.data ?? [];
+        if (items.length === 0) return [];
+
+        const messages: MailMessage[] = [];
+        for (const item of items) {
+          try {
+            // Fetch content for each thread message
+            const folderId = item.folderId ?? (await getInbox(token));
+            const contentData = (await zohoFetch(
+              token,
+              `/api/accounts/${accountId}/folders/${folderId}/messages/${item.messageId}/content`,
+              { includeBlockContent: "true" },
+            )) as { data?: { content: string } };
+            const htmlBody = contentData.data?.content ?? "";
+            const bodyText = cleanHtml(htmlBody);
+            messages.push({
+              id: String(item.messageId),
+              threadId: String(item.threadId ?? threadId),
+              from: extractEmail(item.fromAddress),
+              fromName: extractName(item.fromAddress) || item.sender || "",
+              subject: item.subject || "(no subject)",
+              bodyText,
+              snippet: item.summary || bodyText.slice(0, 200),
+              receivedAt: new Date(parseInt(item.receivedTime, 10)),
+              labelIds: [],
+              headers: {},
+            });
+          } catch (err) {
+            console.error(`[zoho] Failed to fetch content for ${item.messageId}:`, err);
+          }
+        }
+        messages.sort((a, b) => a.receivedAt.getTime() - b.receivedAt.getTime());
+        return messages;
+      } catch (err) {
+        console.error("[zoho] getThreadMessages failed, falling back:", err);
+        return [];
+      }
     },
   };
 }

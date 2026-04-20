@@ -1,10 +1,4 @@
-import OpenAI from "openai";
-
-function getClient(): OpenAI | null {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key || key === "sk-your-key-here") return null;
-  return new OpenAI({ apiKey: key });
-}
+import { getOpenAIClient, trackedChatCompletion, type TrackedCallContext } from "../llm/client";
 
 /**
  * Refine a draft reply based on user instructions.
@@ -14,8 +8,9 @@ export async function refineDraft(
   currentDraft: string,
   instructions: string,
   context?: { subject?: string; body?: string },
+  ctx?: Partial<TrackedCallContext>,
 ): Promise<string> {
-  const client = getClient();
+  const client = getOpenAIClient();
   if (!client) throw new Error("OpenAI API key not configured");
 
   const systemPrompt = `You are a customer support email editor for an e-commerce store.
@@ -40,15 +35,19 @@ Return ONLY the updated email text. No explanation, no markdown, no quotes.`;
     userMessage += `\n\nOriginal customer email:\n${original}`;
   }
 
-  const response = await client.chat.completions.create({
-    model: "gpt-4o",
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userMessage },
-    ],
-    temperature: 0.3,
-    max_tokens: 600,
-  });
+  const response = await trackedChatCompletion(
+    client,
+    {
+      model: "gpt-4o",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userMessage },
+      ],
+      temperature: 0.3,
+      max_tokens: 600,
+    },
+    { callSite: "refine-draft", ...ctx },
+  );
 
   return response.choices[0]?.message?.content?.trim() ?? currentDraft;
 }

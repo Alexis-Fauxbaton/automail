@@ -50,4 +50,10 @@ export interface MailClient {
    * Returns null if the provider doesn't support cursors.
    */
   getSyncCursor(): Promise<string | null>;
+
+  /**
+   * Fetch ALL messages in a thread — inbox AND sent — ordered chronologically.
+   * Used to build the full conversation context including outgoing replies.
+   */
+  getThreadMessages(threadId: string): Promise<MailMessage[]>;
 }

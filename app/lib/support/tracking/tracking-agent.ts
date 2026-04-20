@@ -11,7 +11,8 @@
  * All agent-derived data is flagged `inferred: true`.
  */
 
-import OpenAI from "openai";
+import type OpenAI from "openai";
+import { getOpenAIClient, trackedChatCompletion, type TrackedCallContext } from "../../llm/client";
 import type { TrackingFacts } from "../types";
 
 const SYSTEM_PROMPT = `You are a parcel tracking specialist. Given raw text extracted from a carrier tracking page, extract the current delivery status.
@@ -39,9 +40,7 @@ interface TrackingAgentResult {
 }
 
 function getClient(): OpenAI | null {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key || key === "sk-your-key-here") return null;
-  return new OpenAI({ apiKey: key });
+  return getOpenAIClient();
 }
 
 /**
@@ -87,20 +86,25 @@ async function askLLM(
   client: OpenAI,
   pageText: string,
   trackingNumber: string,
+  ctx?: Partial<TrackedCallContext>,
 ): Promise<TrackingAgentResult | null> {
   try {
     const userMessage = `Tracking number: ${trackingNumber}\n\nPage content:\n${pageText}`;
 
-    const response = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: userMessage },
-      ],
-      response_format: { type: "json_object" },
-      temperature: 0,
-      max_tokens: 256,
-    });
+    const response = await trackedChatCompletion(
+      client,
+      {
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: userMessage },
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0,
+        max_tokens: 256,
+      },
+      { callSite: "tracking-agent", ...ctx },
+    );
 
     const raw = response.choices[0]?.message?.content ?? "";
     const result = JSON.parse(raw);
@@ -119,6 +123,7 @@ async function askLLM(
  */
 export async function enrichTrackingWithAgent(
   tracking: TrackingFacts,
+  ctx?: Partial<TrackedCallContext>,
 ): Promise<TrackingFacts> {
   if (!tracking.trackingUrl || !tracking.trackingNumber) return tracking;
 
@@ -128,7 +133,7 @@ export async function enrichTrackingWithAgent(
   const pageText = await fetchTrackingPage(tracking.trackingUrl);
   if (!pageText || pageText.length < 50) return tracking;
 
-  const result = await askLLM(client, pageText, tracking.trackingNumber);
+  const result = await askLLM(client, pageText, tracking.trackingNumber, ctx);
   if (!result) return tracking;
 
   return {

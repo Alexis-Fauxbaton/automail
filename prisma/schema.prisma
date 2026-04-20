@@ -56,6 +56,8 @@ model MailConnection {
   tokenExpiry    DateTime
   historyId      String?  // Gmail only — incremental sync cursor
   lastSyncAt     DateTime?
+  lastSyncError  String?  // last top-level sync error message, if any
+  syncCancelledAt DateTime? // set by the user to abort a running sync
   zohoAccountId  String?  // Zoho only — needed for API calls
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -80,10 +82,34 @@ model IncomingEmail {
   draftReply       String?
   draftHistory     String   @default("[]") // JSON array of previous drafts
   errorMessage     String?
+  // Aggregated LLM cost tracking (sum of all LLM calls on this email)
+  llmTokensTotal   Int      @default(0)
+  llmCostUsd       Float    @default(0)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
   @@unique([shop, externalMessageId])
   @@index([shop, processingStatus])
   @@index([shop, receivedAt])
+}
+
+// Granular log of every OpenAI call. Enables precise cost attribution
+// per email / thread / call-site (classifier, llm-parser, llm-draft, …).
+model LlmCallLog {
+  id              String   @id @default(cuid())
+  shop            String
+  emailId         String?  // incomingEmail.id when applicable
+  threadId        String?  // email threadId for thread-level aggregation
+  callSite        String   // "classifier" | "llm-parser" | "llm-draft" | "refine-draft" | "tracking-agent" | "context-crawler"
+  model           String
+  promptTokens    Int
+  completionTokens Int
+  totalTokens     Int
+  costUsd         Float
+  durationMs      Int      @default(0)
+  createdAt       DateTime @default(now())
+
+  @@index([shop, createdAt])
+  @@index([emailId])
+  @@index([threadId])
 }
