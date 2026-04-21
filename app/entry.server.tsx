@@ -5,8 +5,14 @@ import { createReadableStreamFromReadable } from "@react-router/node";
 import { type EntryContext } from "react-router";
 import { isbot } from "isbot";
 import { addDocumentResponseHeaders } from "./shopify.server";
+import { startAutoSyncLoop } from "./lib/mail/auto-sync";
 
 export const streamTimeout = 5000;
+
+// Fire up the backend auto-sync loop exactly once at server boot
+// (spec §10). The function itself is idempotent, so double-import
+// (HMR, etc.) is safe.
+startAutoSyncLoop();
 
 export default async function handleRequest(
   request: Request,

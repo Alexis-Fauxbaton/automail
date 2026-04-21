@@ -15,7 +15,7 @@ import type OpenAI from "openai";
 import { getOpenAIClient, trackedChatCompletion, type TrackedCallContext } from "../../llm/client";
 import { resolveCarrierUrls } from "./carrier-detector";
 import { fetchTrackingFrom17track } from "../tracking/adapters/seventeen-track";
-import type { OrderFacts, SupportIntent, TrackingFacts } from "../types";
+import type { FulfillmentTrackingFacts, OrderFacts, SupportIntent, TrackingFacts } from "../types";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -243,7 +243,7 @@ async function extractWithLLM(
 
 export function buildCrawlTasks(
   intent: SupportIntent,
-  tracking: TrackingFacts | null,
+  trackings: FulfillmentTrackingFacts[],
   _order: OrderFacts | null,
 ): CrawlTask[] {
   const tasks: CrawlTask[] = [];
@@ -256,19 +256,22 @@ export function buildCrawlTasks(
     "refund_request", // needed: if package not received, live status informs the reply
   ];
 
-  if (!trackingIntents.includes(intent) || !tracking?.trackingNumber) {
-    return tasks;
-  }
+  if (!trackingIntents.includes(intent)) return tasks;
 
-  const num = tracking.trackingNumber;
-  const carrierCandidates = resolveCarrierUrls(num, tracking.trackingUrl);
+  // Build crawl tasks for every fulfillment that has a tracking number
+  for (const tracking of trackings) {
+    if (!tracking.trackingNumber) continue;
 
-  for (const candidate of carrierCandidates) {
-    tasks.push({
-      url: candidate.trackingUrl,
-      purpose: `Live tracking status for ${num} (${candidate.name})`,
-      extractionHint: `Extract the current delivery status, most recent scan event with date/time, last known location, and estimated delivery date for tracking number ${num}. If the parcel is marked as delivered, state when and where.`,
-    });
+    const num = tracking.trackingNumber;
+    const carrierCandidates = resolveCarrierUrls(num, tracking.trackingUrl);
+
+    for (const candidate of carrierCandidates) {
+      tasks.push({
+        url: candidate.trackingUrl,
+        purpose: `Live tracking status for ${num} (${candidate.name})`,
+        extractionHint: `Extract the current delivery status, most recent scan event with date/time, last known location, and estimated delivery date for tracking number ${num}. If the parcel is marked as delivered, state when and where.`,
+      });
+    }
   }
 
   return tasks;

@@ -8,6 +8,24 @@ import { createZohoClient } from "../zoho/client";
 import { fetchCustomerEmails } from "./customers";
 import { prefilterEmail } from "./prefilter";
 import { classifyEmail } from "./classifier";
+import {
+  resolveCanonicalThread,
+  refreshThreadStats,
+  getTrueLatestMessage,
+} from "../mail/thread-resolver";
+import {
+  extractAndCache,
+  mergeThreadIdentifiers,
+  getThreadResolution,
+} from "../support/thread-identifiers";
+import {
+  recomputeThreadState,
+  readStructuredState,
+} from "../support/thread-state";
+import {
+  evaluateHistoryStatus,
+  runOpportunisticThreadBackfill,
+} from "../mail/backfill";
 
 export interface ProcessingReport {
   total: number;
@@ -89,9 +107,11 @@ async function _processNewEmails(
       newCursor = await client.getSyncCursor();
     }
   } else {
-    // First sync or after resync — fetch up to 1 year
-    const afterDate = conn.lastSyncAt ?? new Date(Date.now() - 365 * 24 * 3600_000);
-    messageIds = await client.listRecentMessages({ afterDate, maxResults: 2000 });
+    // First sync or after resync — fetch last 14 days only.
+    // A full historical backfill (60d) is triggered separately by the
+    // auto-sync loop via runOnboardingBackfill.
+    const afterDate = conn.lastSyncAt ?? new Date(Date.now() - 14 * 24 * 3600_000);
+    messageIds = await client.listRecentMessages({ afterDate, maxResults: 500 });
     newCursor = await client.getSyncCursor();
   }
 
@@ -136,7 +156,7 @@ async function _processNewEmails(
     }
     const msgId = newMessageIds[i];
     try {
-      await ingestAndPrefilter(shop, client, msgId, customerEmails, conn.email, report);
+      await ingestAndPrefilter(shop, conn.provider, client, msgId, customerEmails, conn.email, report);
     } catch (err) {
       report.errors++;
       console.error(`[gmail/pipeline] Ingestion error for ${msgId}:`, err);
@@ -217,6 +237,7 @@ async function isCancelled(shop: string, syncStartedAt: Date): Promise<boolean> 
  */
 async function ingestAndPrefilter(
   shop: string,
+  provider: string,
   client: MailClient,
   msgId: string,
   customerEmails: Set<string>,
@@ -229,6 +250,27 @@ async function ingestAndPrefilter(
     msg.labelIds.includes("SENT") ||
     (mailboxAddress !== "" && msg.from.toLowerCase() === mailboxAddress.toLowerCase());
 
+  // Extract RFC 5322 headers for thread reconciliation. Gmail populates
+  // msg.headers with lower-cased keys; Zoho currently does not expose
+  // them, so these will be empty strings for Zoho messages.
+  const rfcMessageId = (msg.headers["message-id"] ?? "").replace(/^<|>$/g, "").trim();
+  const inReplyTo = (msg.headers["in-reply-to"] ?? "").replace(/^<|>$/g, "").trim();
+  const rfcReferences = (msg.headers["references"] ?? "").trim();
+
+  // Resolve (or create) the canonical Thread BEFORE upserting the email,
+  // so we can write canonicalThreadId atomically.
+  const { canonicalThreadId } = await resolveCanonicalThread({
+    shop,
+    provider,
+    providerThreadId: msg.threadId,
+    externalMessageId: msg.id,
+    subject: msg.subject,
+    receivedAt: msg.receivedAt,
+    rfcMessageId,
+    inReplyTo,
+    rfcReferences,
+  });
+
   // Upsert the base record
   await prisma.incomingEmail.upsert({
     where: { shop_externalMessageId: { shop, externalMessageId: msgId } },
@@ -236,6 +278,10 @@ async function ingestAndPrefilter(
       shop,
       externalMessageId: msg.id,
       threadId: msg.threadId,
+      canonicalThreadId,
+      rfcMessageId,
+      inReplyTo,
+      rfcReferences,
       fromAddress: msg.from,
       fromName: msg.fromName,
       subject: msg.subject,
@@ -245,10 +291,46 @@ async function ingestAndPrefilter(
       isKnownCustomer: isKnown,
       processingStatus: isOutgoing ? "outgoing" : "ingested",
     },
-    update: {},
+    update: {
+      // Defensive: if a legacy row existed without canonicalThreadId or
+      // RFC headers, backfill them on next encounter without overwriting
+      // downstream processing state.
+      canonicalThreadId,
+      ...(rfcMessageId ? { rfcMessageId } : {}),
+      ...(inReplyTo ? { inReplyTo } : {}),
+      ...(rfcReferences ? { rfcReferences } : {}),
+    },
   });
 
-  if (isOutgoing) return; // no tiers for outgoing
+  // Refresh cached thread stats (lastMessageAt, lastMessageId, count).
+  await refreshThreadStats(canonicalThreadId);
+
+  if (isOutgoing) {
+    // Outgoing messages still affect operational state (merchant replied
+    // → thread should move to waiting_customer), so recompute + return.
+    try {
+      await recomputeThreadState(canonicalThreadId, { mailboxAddress });
+      await evaluateHistoryStatus(canonicalThreadId);
+    } catch (err) {
+      console.error("[pipeline] state recompute (outgoing) failed:", err);
+    }
+    return;
+  }
+
+  // Cheap per-message regex extraction + thread-level consolidation.
+  // Must run for every non-outgoing message so the thread's
+  // resolvedOrderNumber / resolvedTrackingNumber are always fresh.
+  const recordForExtraction = await prisma.incomingEmail.findUniqueOrThrow({
+    where: { shop_externalMessageId: { shop, externalMessageId: msgId } },
+    select: { id: true },
+  });
+  try {
+    await extractAndCache(recordForExtraction.id, msg.subject, msg.bodyText);
+    await mergeThreadIdentifiers(canonicalThreadId);
+  } catch (err) {
+    // Extraction is best-effort: failures must not block ingestion.
+    console.error("[pipeline] thread identifier extraction failed:", err);
+  }
 
   // Free regex prefilter
   const record = await prisma.incomingEmail.findUniqueOrThrow({
@@ -270,14 +352,40 @@ async function ingestAndPrefilter(
       data: { tier1Result: "passed", processingStatus: "ingested" },
     });
   }
+
+  // Recompute thread state + history status after every incoming
+  // message (spec §4, §5, §7, §12).
+  try {
+    await recomputeThreadState(canonicalThreadId, { mailboxAddress });
+    const hist = await evaluateHistoryStatus(canonicalThreadId);
+
+    // Opportunistic backfill (spec §11): if history looks partial and
+    // we haven't attempted a backfill in the last 24h, try once.
+    if (hist === "partial") {
+      const t = await prisma.thread.findUnique({
+        where: { id: canonicalThreadId },
+        select: { backfillAttemptedAt: true },
+      });
+      const last = t?.backfillAttemptedAt?.getTime() ?? 0;
+      if (Date.now() - last > 24 * 3600_000) {
+        // Fire-and-forget — must not block ingestion.
+        runOpportunisticThreadBackfill(canonicalThreadId).catch((err) =>
+          console.error("[pipeline] opportunistic backfill failed:", err),
+        );
+      }
+    }
+  } catch (err) {
+    console.error("[pipeline] state recompute failed:", err);
+  }
 }
 
 /**
  * Determine which records need Tier 2/3 processing in Pass 2.
- * For every thread touched by the ingestion batch, keep only the LATEST
- * incoming email that passed Tier 1 and hasn't been fully analyzed yet.
- * Older messages in the same thread are marked as "classified" without
- * running further LLM calls (avoids duplicate work and stale drafts).
+ * For every canonical thread touched by the ingestion batch, keep only
+ * the LATEST incoming email that passed Tier 1 and hasn't been fully
+ * analyzed yet. Older messages in the same thread are marked as
+ * "classified" without running further LLM calls (avoids duplicate work
+ * and stale drafts).
  */
 async function pickThreadsForClassification(
   shop: string,
@@ -285,22 +393,29 @@ async function pickThreadsForClassification(
 ): Promise<string[]> {
   if (newMessageIds.length === 0) return [];
 
-  // Find which threads were touched by this batch
+  // Find which canonical threads were touched by this batch.
   const newRecords = await prisma.incomingEmail.findMany({
     where: { shop, externalMessageId: { in: newMessageIds } },
-    select: { threadId: true },
+    select: { canonicalThreadId: true },
   });
-  const threadIds = Array.from(new Set(newRecords.map((r) => r.threadId).filter(Boolean)));
-  if (threadIds.length === 0) return [];
+  const canonicalIds = Array.from(
+    new Set(
+      newRecords
+        .map((r) => r.canonicalThreadId)
+        .filter((id): id is string => !!id),
+    ),
+  );
+  if (canonicalIds.length === 0) return [];
 
   const selected: string[] = [];
 
-  for (const threadId of threadIds) {
-    // Latest incoming (non-outgoing) in this thread that passed Tier 1
+  for (const canonicalThreadId of canonicalIds) {
+    // Latest incoming (non-outgoing) in this canonical thread that
+    // passed Tier 1.
     const latest = await prisma.incomingEmail.findFirst({
       where: {
         shop,
-        threadId,
+        canonicalThreadId,
         processingStatus: { notIn: ["outgoing"] },
         tier1Result: "passed",
       },
@@ -313,12 +428,13 @@ async function pickThreadsForClassification(
 
     selected.push(latest.id);
 
-    // Mark older incoming messages in the same thread as "classified"
-    // so they don't consume LLM calls and the UI shows a clean state.
+    // Mark older incoming messages in the same canonical thread as
+    // "classified" so they don't consume LLM calls and the UI shows a
+    // clean state.
     await prisma.incomingEmail.updateMany({
       where: {
         shop,
-        threadId,
+        canonicalThreadId,
         id: { not: latest.id },
         processingStatus: { notIn: ["outgoing", "classified"] },
         receivedAt: { lt: latest.receivedAt },
@@ -363,15 +479,44 @@ async function classifyAndDraft(
   };
 
   // --- Tier 2: LLM classification ---
+  // Spec §6, §8: inject the compact structured thread state + the true
+  // latest message so the classifier has useful context at low cost.
+  const threadStateForClassify = record.canonicalThreadId
+    ? await readStructuredState(record.canonicalThreadId)
+    : null;
+  let trueLatestBody: string | undefined;
+  let agentHasReplied = false;
+  if (record.canonicalThreadId) {
+    const trueLatest = await getTrueLatestMessage(record.canonicalThreadId);
+    if (trueLatest && trueLatest.id !== record.id) {
+      trueLatestBody = trueLatest.bodyText;
+    }
+    agentHasReplied = (threadStateForClassify?.outgoingCount ?? 0) > 0;
+  }
+
   const classification = await classifyEmail(msg.subject, msg.bodyText, {
     shop,
     emailId: record.id,
     threadId: record.threadId,
+    threadState: threadStateForClassify,
+    trueLatestBody,
+    agentHasReplied,
   });
   await prisma.incomingEmail.update({
     where: { id: record.id },
     data: { tier2Result: classification },
   });
+
+  // Refresh thread state now that message-level classification changed.
+  if (record.canonicalThreadId) {
+    try {
+      await recomputeThreadState(record.canonicalThreadId, {
+        mailboxAddress,
+      });
+    } catch (err) {
+      console.error("[pipeline] post-Tier2 state recompute failed:", err);
+    }
+  }
 
   if (classification === "probable_non_client") {
     report.nonClient++;
@@ -398,10 +543,17 @@ async function classifyAndDraft(
     const threadContext = await buildThreadContext(
       shop,
       msg.threadId,
+      record.canonicalThreadId,
       record.id,
       mailboxAddress,
       client,
     );
+
+    // Thread-level resolved identifiers (cheap path, populated at
+    // ingestion). The orchestrator will prefer these over re-parsing.
+    const threadResolution = record.canonicalThreadId
+      ? await getThreadResolution(record.canonicalThreadId)
+      : null;
 
     const analysis = await analyzeSupportEmail({
       subject: msg.subject,
@@ -414,6 +566,17 @@ async function classifyAndDraft(
         emailId: record.id,
         threadId: record.threadId,
       },
+      threadResolution: threadResolution
+        ? {
+            identifiers: {
+              orderNumber: threadResolution.orderNumber,
+              trackingNumber: threadResolution.trackingNumber,
+              email: threadResolution.email,
+              customerName: threadResolution.customerName,
+            },
+            confidence: threadResolution.confidence,
+          }
+        : undefined,
     });
     await prisma.incomingEmail.update({
       where: { id: record.id },
@@ -423,6 +586,15 @@ async function classifyAndDraft(
         draftReply: analysis.draftReply,
       },
     });
+    if (record.canonicalThreadId) {
+      try {
+        await recomputeThreadState(record.canonicalThreadId, {
+          mailboxAddress,
+        });
+      } catch (err) {
+        console.error("[pipeline] post-Tier3 state recompute failed:", err);
+      }
+    }
   } catch (err) {
     report.errors++;
     await prisma.incomingEmail.update({
@@ -451,6 +623,7 @@ async function classifyAndDraft(
 async function buildThreadContext(
   shop: string,
   threadId: string,
+  canonicalThreadId: string | null,
   currentEmailId: string,
   mailboxAddress: string,
   client?: MailClient,
@@ -506,8 +679,10 @@ async function buildThreadContext(
     }
   }
 
-  // --- 2. Fallback to DB (incoming-only) ---
-  if (!threadId) {
+  // --- 2. Fallback to DB, preferring the canonical thread so Zoho
+  // splits (several providerThreadIds mapped to the same canonical id)
+  // are reassembled into a single conversation.
+  if (!canonicalThreadId && !threadId) {
     const current = await prisma.incomingEmail.findUnique({
       where: { id: currentEmailId },
       select: { bodyText: true, subject: true, fromAddress: true, receivedAt: true },
@@ -533,7 +708,9 @@ async function buildThreadContext(
   }
 
   const threadEmails = await prisma.incomingEmail.findMany({
-    where: { shop, threadId },
+    where: canonicalThreadId
+      ? { shop, canonicalThreadId }
+      : { shop, threadId },
     orderBy: { receivedAt: "asc" },
     select: {
       id: true,
@@ -611,10 +788,25 @@ export async function reanalyzeEmail(
   const threadContext = await buildThreadContext(
     shop,
     record.threadId,
+    record.canonicalThreadId,
     record.id,
     conn?.email ?? "",
     client,
   );
+
+  // Re-run thread-level identifier consolidation before drafting —
+  // this message's extraction may have been stale.
+  if (record.canonicalThreadId) {
+    try {
+      await extractAndCache(record.id, record.subject, record.bodyText);
+      await mergeThreadIdentifiers(record.canonicalThreadId);
+    } catch (err) {
+      console.error("[pipeline] reanalyze: thread identifier merge failed:", err);
+    }
+  }
+  const threadResolution = record.canonicalThreadId
+    ? await getThreadResolution(record.canonicalThreadId)
+    : null;
 
   const analysis = await analyzeSupportEmail({
     subject: record.subject,
@@ -627,6 +819,17 @@ export async function reanalyzeEmail(
       emailId: record.id,
       threadId: record.threadId,
     },
+    threadResolution: threadResolution
+      ? {
+          identifiers: {
+            orderNumber: threadResolution.orderNumber,
+            trackingNumber: threadResolution.trackingNumber,
+            email: threadResolution.email,
+            customerName: threadResolution.customerName,
+          },
+          confidence: threadResolution.confidence,
+        }
+      : undefined,
   });
 
   await prisma.incomingEmail.update({
@@ -638,6 +841,16 @@ export async function reanalyzeEmail(
       draftReply: analysis.draftReply,
     },
   });
+
+  if (record.canonicalThreadId) {
+    try {
+      await recomputeThreadState(record.canonicalThreadId, {
+        mailboxAddress: conn?.email ?? "",
+      });
+    } catch (err) {
+      console.error("[pipeline] reanalyze: state recompute failed:", err);
+    }
+  }
 
   return analysis;
 }

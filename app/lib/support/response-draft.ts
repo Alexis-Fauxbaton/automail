@@ -1,5 +1,6 @@
 import { DEFAULT_SETTINGS, type Language, type SupportSettings, type Tone } from "./settings";
 import type {
+  FulfillmentTrackingFacts,
   OrderFacts,
   ParsedEmail,
   SupportAnalysis,
@@ -15,6 +16,7 @@ import type {
 export interface DraftInput {
   intent: SupportIntent;
   order: OrderFacts | null;
+  /** Legacy single-tracking field consumed by the template generator. */
   tracking: TrackingFacts | null;
   warnings: Warning[];
   /** Optional per-shop configuration. Falls back to sensible defaults. */
@@ -121,10 +123,12 @@ export function buildDraft(
     parsed?: ParsedEmail | null;
   },
 ): string {
+  // Template fallback uses only the primary (first) tracking entry.
+  const primaryTracking: TrackingFacts | null = a.trackings?.[0] ?? null;
   return generateDraft({
     intent: a.intent,
     order: a.order,
-    tracking: a.tracking,
+    tracking: primaryTracking,
     warnings: a.warnings,
     settings: a.settings,
     parsed: a.parsed,

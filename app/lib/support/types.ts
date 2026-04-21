@@ -57,6 +57,8 @@ export interface OrderFulfillmentFacts {
   carrier?: string | null;
   updatedAt?: string | null;
   estimatedDeliveryAt?: string | null;
+  /** Items included in this specific fulfillment (from Shopify). */
+  lineItems: OrderLineItemFacts[];
 }
 
 export interface OrderFacts {
@@ -71,6 +73,17 @@ export interface OrderFacts {
   fulfillments: OrderFulfillmentFacts[];
 }
 
+/**
+ * Tracking facts specific to one fulfillment in an order.
+ * A single order can have multiple fulfillments (split shipments).
+ */
+export interface FulfillmentTrackingFacts extends TrackingFacts {
+  /** Zero-based index within order.fulfillments (for display). */
+  fulfillmentIndex: number;
+  /** Items shipped in this fulfillment (from Shopify). */
+  lineItems: OrderLineItemFacts[];
+}
+
 export interface TrackingAgentStatus {
   lastEvent: string;
   lastLocation: string | null;
@@ -79,7 +92,7 @@ export interface TrackingAgentStatus {
 }
 
 export interface TrackingFacts {
-  source: "shopify_url" | "shopify_carrier" | "pattern_guess" | "none";
+  source: "shopify_url" | "shopify_carrier" | "pattern_guess" | "seventeen_track" | "none";
   carrier?: string | null;
   trackingNumber?: string | null;
   trackingUrl?: string | null;
@@ -88,6 +101,12 @@ export interface TrackingFacts {
   inferred: boolean;
   /** Enriched status fetched and parsed by the tracking agent (LLM + page fetch). */
   agentStatus?: TrackingAgentStatus | null;
+  /** Live events from 17track (most recent first). */
+  events?: Array<{ date: string | null; description: string | null; location: string | null }>;
+  lastEvent?: string | null;
+  lastLocation?: string | null;
+  lastEventDate?: string | null;
+  delivered?: boolean;
 }
 
 export interface Warning {
@@ -101,7 +120,8 @@ export interface SupportAnalysis {
   order: OrderFacts | null;
   /** If several orders match the identifiers. */
   orderCandidates: OrderFacts[];
-  tracking: TrackingFacts | null;
+  /** Tracking facts per fulfillment (one entry per shipment). */
+  trackings: FulfillmentTrackingFacts[];
   confidence: Confidence;
   warnings: Warning[];
   draftReply: string;

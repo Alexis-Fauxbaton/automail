@@ -12,10 +12,10 @@ import type { CrawledContext } from "./crawl/context-crawler";
 import type { SupportSettings } from "./settings";
 import type {
   ConversationMessage,
+  FulfillmentTrackingFacts,
   OrderFacts,
   ParsedEmail,
   SupportIntent,
-  TrackingFacts,
   Warning,
 } from "./types";
 
@@ -102,7 +102,7 @@ function buildUserMessage(
   intent: SupportIntent,
   order: OrderFacts | null,
   orderCandidates: OrderFacts[],
-  tracking: TrackingFacts | null,
+  trackings: FulfillmentTrackingFacts[],
   crawledContexts: CrawledContext[],
   warnings: Warning[],
   shareTrackingNumber: boolean,
@@ -163,25 +163,48 @@ function buildUserMessage(
     sections.push("No matching order was found in Shopify.");
   }
 
-  if (tracking && tracking.source !== "none") {
-    sections.push("## Tracking facts");
-    sections.push(
-      `Source: ${tracking.source}${tracking.inferred ? " (INFERRED — not verified by carrier API)" : ""}`,
-    );
-    if (tracking.carrier) sections.push(`Carrier: ${tracking.carrier}`);
+  // Tracking: one block per fulfillment that has data
+  const shippedTrackings = trackings.filter((t) => t.source !== "none");
+  if (shippedTrackings.length > 0) {
+    const plural = shippedTrackings.length > 1;
+    sections.push(`## Tracking facts${plural ? ` (${shippedTrackings.length} shipments)` : ""}`);
 
-    if (shareTrackingNumber) {
-      if (tracking.trackingNumber)
-        sections.push(`Tracking number: ${tracking.trackingNumber}`);
-      if (tracking.trackingUrl)
-        sections.push(`Tracking URL: ${tracking.trackingUrl}`);
-    } else {
+    for (const t of shippedTrackings) {
+      const label = plural ? `### Shipment ${t.fulfillmentIndex + 1}` : null;
+      if (label) sections.push(label);
+
+      // Items in this shipment
+      if (t.lineItems.length > 0) {
+        sections.push(
+          `Items: ${t.lineItems.map((li) => `${li.quantity}× ${li.title}`).join(", ")}`,
+        );
+      }
+
       sections.push(
-        "TRACKING NUMBER RULE: Do NOT mention the tracking number or tracking URL in the reply. The merchant has chosen not to share it.",
+        `Source: ${t.source}${t.inferred ? " (INFERRED — not verified by carrier API)" : ""}`,
       );
-    }
+      if (t.carrier) sections.push(`Carrier: ${t.carrier}`);
 
-    if (tracking.status) sections.push(`Status (Shopify): ${tracking.status}`);
+      if (shareTrackingNumber) {
+        if (t.trackingNumber) sections.push(`Tracking number: ${t.trackingNumber}`);
+        if (t.trackingUrl) sections.push(`Tracking URL: ${t.trackingUrl}`);
+      } else {
+        sections.push(
+          "TRACKING NUMBER RULE: Do NOT mention the tracking number or tracking URL in the reply. The merchant has chosen not to share it.",
+        );
+      }
+
+      if (t.status) sections.push(`Status: ${t.status}`);
+      if (t.lastEvent) sections.push(`Last event: ${t.lastEvent}`);
+      if (t.lastLocation) sections.push(`Last location: ${t.lastLocation}`);
+      if (t.lastEventDate) sections.push(`Last event date: ${t.lastEventDate}`);
+      if (t.delivered) sections.push(`Delivered: yes`);
+    }
+  } else if (trackings.length === 0 && !order) {
+    // No order means no tracking context to show
+  } else if (order && order.fulfillments.length === 0) {
+    sections.push("## Tracking facts");
+    sections.push("No fulfillment yet — the order has not been shipped.");
   }
 
   if (refundPolicy && intent === "refund_request") {
@@ -218,7 +241,7 @@ export interface LLMDraftInput {
   intent: SupportIntent;
   order: OrderFacts | null;
   orderCandidates: OrderFacts[];
-  tracking: TrackingFacts | null;
+  trackings: FulfillmentTrackingFacts[];
   crawledContexts: CrawledContext[];
   warnings: Warning[];
   settings: SupportSettings;
@@ -231,13 +254,14 @@ export interface LLMDraftInput {
 export async function generateLLMDraft(input: LLMDraftInput): Promise<string> {
   const client = getOpenAIClient();
   const shareTracking = input.settings.shareTrackingNumber ?? true;
+  const primaryTracking = (shareTracking ? input.trackings[0] : null) ?? null;
 
   if (!client) {
     return templateFallback({
       intent: input.intent,
       order: input.order,
       orderCandidates: input.orderCandidates,
-      tracking: shareTracking ? input.tracking : null,
+      trackings: input.trackings,
       confidence: "low",
       warnings: input.warnings,
       identifiers: {},
@@ -267,7 +291,7 @@ export async function generateLLMDraft(input: LLMDraftInput): Promise<string> {
               input.intent,
               input.order,
               input.orderCandidates,
-              input.tracking,
+              input.trackings,
               input.crawledContexts,
               input.warnings,
               shareTracking,
@@ -291,7 +315,7 @@ export async function generateLLMDraft(input: LLMDraftInput): Promise<string> {
       intent: input.intent,
       order: input.order,
       orderCandidates: input.orderCandidates,
-      tracking: shareTracking ? input.tracking : null,
+      trackings: input.trackings,
       confidence: "low",
       warnings: input.warnings,
       identifiers: {},

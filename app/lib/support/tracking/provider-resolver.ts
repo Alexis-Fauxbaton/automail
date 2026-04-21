@@ -1,4 +1,4 @@
-import type { OrderFacts, TrackingFacts } from "../types";
+import type { OrderFacts, OrderFulfillmentFacts, TrackingFacts } from "../types";
 
 // Very conservative pattern-based carrier guess. Only used as a last resort,
 // and the result is always flagged `inferred: true` so drafts can say so.
@@ -21,15 +21,13 @@ const CARRIER_PATTERNS: Array<{ carrier: string; re: RegExp; urlFor?: (n: string
 ];
 
 /**
- * Decide where tracking facts should come from for this order.
+ * Decide where tracking facts should come from for a single fulfillment.
  * Priority: Shopify tracking URL > Shopify carrier > pattern inference > none.
+ * This is used as the fallback when 17track is unavailable or pending.
  */
-export function resolveTracking(order: OrderFacts | null): TrackingFacts | null {
-  if (!order) return null;
-
-  const fulfillment = order.fulfillments[0];
-  if (!fulfillment) return null;
-
+export function resolveTrackingForFulfillment(
+  fulfillment: OrderFulfillmentFacts,
+): TrackingFacts {
   const trackingNumber = fulfillment.trackingNumbers[0] ?? null;
   const trackingUrl = fulfillment.trackingUrls[0] ?? null;
   const carrier = fulfillment.carrier ?? null;
@@ -79,4 +77,15 @@ export function resolveTracking(order: OrderFacts | null): TrackingFacts | null 
   }
 
   return { source: "none", inferred: false };
+}
+
+/**
+ * @deprecated Use resolveTrackingForFulfillment directly.
+ * Kept for backward-compatibility with context-crawler.
+ */
+export function resolveTracking(order: OrderFacts | null): TrackingFacts | null {
+  if (!order) return null;
+  const fulfillment = order.fulfillments[0];
+  if (!fulfillment) return null;
+  return resolveTrackingForFulfillment(fulfillment);
 }

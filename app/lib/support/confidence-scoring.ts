@@ -1,8 +1,8 @@
 import type {
   Confidence,
   ExtractedIdentifiers,
+  FulfillmentTrackingFacts,
   OrderFacts,
-  TrackingFacts,
   Warning,
 } from "./types";
 
@@ -16,7 +16,7 @@ export interface ScoringInput {
     | null;
   order: OrderFacts | null;
   candidatesCount: number;
-  tracking: TrackingFacts | null;
+  trackings: FulfillmentTrackingFacts[];
 }
 
 export interface ScoringOutput {
@@ -56,11 +56,15 @@ export function scoreConfidence(input: ScoringInput): ScoringOutput {
     });
   }
 
-  if (input.tracking?.inferred) {
+  // Warn if any fulfillment has an inferred carrier
+  const inferredCount = input.trackings.filter((t) => t.inferred).length;
+  if (inferredCount > 0) {
     warnings.push({
       code: "inferred_carrier",
       message:
-        "Carrier was inferred from the tracking number pattern and is not verified.",
+        inferredCount === 1
+          ? "Carrier was inferred from the tracking number pattern and is not verified."
+          : `Carrier was inferred for ${inferredCount} shipment(s) and is not verified.`,
     });
   }
 
@@ -71,13 +75,14 @@ export function scoreConfidence(input: ScoringInput): ScoringOutput {
     });
   }
 
-  // Confidence calculation
+  // Confidence calculation — use the best-quality tracking entry
+  const primaryTracking = input.trackings[0] ?? null;
   let confidence: Confidence = "low";
   const hardMatch = input.matchedBy === "orderNumber" || input.matchedBy === "email";
-  const hasTracking = !!input.tracking && input.tracking.source !== "none";
+  const hasTracking = !!primaryTracking && primaryTracking.source !== "none";
   const noAmbiguity = input.candidatesCount <= 1;
 
-  if (hardMatch && noAmbiguity && hasTracking && !input.tracking?.inferred) {
+  if (hardMatch && noAmbiguity && hasTracking && !primaryTracking?.inferred) {
     confidence = "high";
   } else if (hardMatch && noAmbiguity) {
     confidence = "medium";
@@ -89,3 +94,4 @@ export function scoreConfidence(input: ScoringInput): ScoringOutput {
 
   return { confidence, warnings };
 }
+

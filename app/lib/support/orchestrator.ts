@@ -13,7 +13,7 @@ import {
 } from "./shopify/order-search";
 import { normalizeOrder } from "./shopify/order-normalizer";
 import { getTrackingFacts } from "./tracking/tracking-service";
-import type { ConversationMessage, ConversationMeta, SupportAnalysis, Warning } from "./types";
+import type { ConversationMessage, ConversationMeta, ExtractedIdentifiers, FulfillmentTrackingFacts, SupportAnalysis, Warning } from "./types";
 
 export interface AnalyzeInput {
   subject: string;
@@ -27,6 +27,16 @@ export interface AnalyzeInput {
   settings?: SupportSettings;
   /** Optional context for LLM cost tracking (emailId, threadId). */
   trackedCallContext?: Partial<TrackedCallContext>;
+  /**
+   * Identifiers already resolved at the canonical thread level
+   * (Thread.resolved*). When confidence is "medium" or "high" they
+   * override the per-message parser output — see spec §3C (full-thread
+   * parse only as fallback when nothing was resolved cheaply).
+   */
+  threadResolution?: {
+    identifiers: ExtractedIdentifiers;
+    confidence: "none" | "low" | "medium" | "high";
+  };
 }
 
 export interface SupportAnalysisExtended extends SupportAnalysis {
@@ -70,7 +80,17 @@ export async function analyzeSupportEmail(
 
   // 1. Parse + LLM extraction (regex fallback built-in)
   const parsed = parseMessage(input.subject, input.body);
-  const { intent, identifiers, usedLLM } = await llmParseEmail(parsed, tctx);
+  const { intent, identifiers: parserIdentifiers, usedLLM } = await llmParseEmail(parsed, tctx);
+
+  // Merge thread-level resolved identifiers on top when confidence is
+  // strong. This implements spec §3C: prefer the thread's consolidated
+  // state over re-parsing the full thread body on every call.
+  const threadRes = input.threadResolution;
+  const strongThread =
+    threadRes && (threadRes.confidence === "medium" || threadRes.confidence === "high");
+  const identifiers: ExtractedIdentifiers = strongThread
+    ? { ...parserIdentifiers, ...pruneEmpty(threadRes.identifiers) }
+    : { ...pruneEmpty(threadRes?.identifiers ?? {}), ...parserIdentifiers };
 
   if (!usedLLM) {
     warnings.push({
@@ -96,10 +116,10 @@ export async function analyzeSupportEmail(
 
   const order = candidates[0] ?? null;
 
-  // 3. Tracking facts (Shopify data)
-  let tracking: Awaited<ReturnType<typeof getTrackingFacts>> = null;
+  // 3. Tracking facts — one entry per fulfillment, 17track first
+  let trackings: FulfillmentTrackingFacts[] = [];
   try {
-    tracking = await getTrackingFacts(order);
+    trackings = await getTrackingFacts(order);
   } catch (err) {
     warnings.push({
       code: "tracking_lookup_error",
@@ -111,7 +131,7 @@ export async function analyzeSupportEmail(
   // 4. Context crawler — fetch and extract relevant live data
   let crawledContexts: CrawledContext[] = [];
   try {
-    const tasks = buildCrawlTasks(intent, tracking, order);
+    const tasks = buildCrawlTasks(intent, trackings, order);
     crawledContexts = await crawlContexts(tasks, tctx);
     const failedCrawls = crawledContexts.filter((c) => !c.success);
     if (failedCrawls.length > 0) {
@@ -134,7 +154,7 @@ export async function analyzeSupportEmail(
     matchedBy,
     order,
     candidatesCount: candidates.length,
-    tracking,
+    trackings,
   });
 
   const allWarnings = [...warnings, ...scoring.warnings];
@@ -160,7 +180,7 @@ export async function analyzeSupportEmail(
         intent,
         order,
         orderCandidates: candidates,
-        tracking,
+        trackings,
         crawledContexts: crawledContexts.filter((c) => c.success),
         warnings: allWarnings,
         settings: resolvedSettings,
@@ -173,13 +193,24 @@ export async function analyzeSupportEmail(
     identifiers,
     order,
     orderCandidates: candidates,
-    tracking,
+    trackings,
     confidence: scoring.confidence,
     warnings: allWarnings,
     draftReply,
     conversation: conversationMeta,
     crawledContexts,
   };
+}
+
+/** Drop undefined/empty-string fields so they don't overwrite real values. */
+function pruneEmpty(obj: ExtractedIdentifiers): ExtractedIdentifiers {
+  const out: ExtractedIdentifiers = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined && v !== null && String(v).trim() !== "") {
+      (out as Record<string, string>)[k] = v as string;
+    }
+  }
+  return out;
 }
 
 function buildConversationMeta(

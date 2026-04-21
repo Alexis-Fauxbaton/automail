@@ -29,15 +29,26 @@ const ORDER_FIELDS = /* GraphQL */ `
         }
       }
     }
-    fulfillments(first: 10) {
+    fulfillments {
       id
       status
       updatedAt
       estimatedDeliveryAt
-      trackingInfo(first: 10) {
+      trackingInfo {
         company
         number
         url
+      }
+      fulfillmentLineItems(first: 20) {
+        edges {
+          node {
+            lineItem {
+              title
+              quantity
+            }
+            quantity
+          }
+        }
       }
     }
   }
@@ -126,6 +137,14 @@ export interface RawOrderNode {
       number: string | null;
       url: string | null;
     }>;
+    fulfillmentLineItems: {
+      edges: Array<{
+        node: {
+          lineItem: { title: string; quantity: number };
+          quantity: number;
+        };
+      }>;
+    };
   }>;
 }
 
@@ -178,8 +197,12 @@ async function runSearch(
   };
   if (json.errors && json.errors.length > 0) {
     const msg = json.errors.map((e) => e.message).join(" | ");
-    console.error("[order-search] GraphQL errors:", msg, "query=", query);
+    console.error("[order-search] GraphQL errors:", msg, "| query:", query);
     throw new Error(`Shopify GraphQL error: ${msg}`);
+  }
+  // Log unexpected empty data structure for debugging
+  if (!json.data) {
+    console.error("[order-search] Unexpected response (no data):", JSON.stringify(json).slice(0, 500));
   }
   if (!json.data?.orders) return [];
   return json.data.orders.edges.map((e) => e.node);

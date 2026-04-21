@@ -8,6 +8,7 @@ import { getZohoAuthUrl } from "../lib/zoho/auth";
 import { processNewEmails, reanalyzeEmail, type ProcessingReport } from "../lib/gmail/pipeline";
 import { refineDraft } from "../lib/gmail/refine-draft";
 import { runDiagnosis, type DiagnosisReport } from "../lib/gmail/diagnose";
+import { runManualBackfill } from "../lib/mail/backfill";
 import { AnalysisDisplay } from "../components/SupportAnalysisDisplay";
 import type { SupportAnalysisExtended } from "../lib/support/orchestrator";
 import type { MailProvider } from "../lib/mail/types";
@@ -23,6 +24,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const connection = await getConnection(shop);
 
   let emails: SerializedEmail[] = [];
+  let threadStates: Record<string, SerializedThreadState> = {};
   if (connection) {
     const rows = await prisma.incomingEmail.findMany({
       where: { shop },
@@ -30,6 +32,31 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       take: 500,
     });
     emails = rows.map(serializeEmail);
+
+    const canonicalIds = Array.from(
+      new Set(
+        rows
+          .map((r) => r.canonicalThreadId)
+          .filter((id): id is string => !!id),
+      ),
+    );
+    if (canonicalIds.length > 0) {
+      const threads = await prisma.thread.findMany({
+        where: { id: { in: canonicalIds } },
+        select: {
+          id: true,
+          supportNature: true,
+          operationalState: true,
+          historyStatus: true,
+          resolvedOrderNumber: true,
+          resolvedTrackingNumber: true,
+          resolutionConfidence: true,
+        },
+      });
+      threadStates = Object.fromEntries(
+        threads.map((t) => [t.id, serializeThreadState(t)]),
+      );
+    }
   }
 
   // Build auth URLs for both providers (only shown when not connected)
@@ -46,9 +73,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     connectedEmail: connection?.email ?? null,
     lastSyncAt: connection?.lastSyncAt?.toISOString() ?? null,
     lastSyncError: connection?.lastSyncError ?? null,
+    autoSyncEnabled: connection?.autoSyncEnabled ?? false,
+    autoSyncIntervalMinutes: connection?.autoSyncIntervalMinutes ?? 5,
     gmailAuthUrl,
     zohoAuthUrl,
     emails,
+    threadStates,
   };
 };
 
@@ -78,9 +108,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     await prisma.incomingEmail.deleteMany({ where: { shop: session.shop } });
     await prisma.mailConnection.update({
       where: { shop: session.shop },
-      data: { historyId: null, lastSyncAt: null },
+      // Reset cursor + backfill flag so onboarding backfill re-runs.
+      data: { historyId: null, lastSyncAt: null, onboardingBackfillDoneAt: null },
     });
-    // Fire and forget — avoids Cloudflare 524 timeout on large mailboxes.
+    // Fire and forget: first do a 14-day fresh sync, then the auto-sync
+    // loop will pick up the onboarding backfill (60d) on its next tick.
     processNewEmails(session.shop, admin).catch((err) =>
       console.error("[inbox/resync] background error:", err),
     );
@@ -93,6 +125,31 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       console.error("[inbox/sync] background error:", err),
     );
     return { syncStarted: true, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
+  }
+
+  if (intent === "backfill") {
+    const days = Number(formData.get("days") ?? "60");
+    const afterDate = new Date(Date.now() - Math.max(1, days) * 24 * 3600_000);
+    runManualBackfill(session.shop, afterDate).catch((err) =>
+      console.error("[inbox/backfill] background error:", err),
+    );
+    return {
+      syncStarted: true,
+      report: null,
+      disconnected: false,
+      reanalyzed: null,
+      refined: null,
+      stopped: false,
+    };
+  }
+
+  if (intent === "toggleAutoSync") {
+    const enable = formData.get("enable") === "1";
+    await prisma.mailConnection.update({
+      where: { shop: session.shop },
+      data: { autoSyncEnabled: enable },
+    });
+    return { report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
   }
 
   if (intent === "diagnose") {
@@ -139,10 +196,38 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 // Types & serialization
 // ---------------------------------------------------------------------------
 
+interface SerializedThreadState {
+  supportNature: string;
+  operationalState: string;
+  historyStatus: string;
+  resolvedOrderNumber: string | null;
+  resolvedTrackingNumber: string | null;
+  resolutionConfidence: string;
+}
+
+function serializeThreadState(t: {
+  supportNature: string;
+  operationalState: string;
+  historyStatus: string;
+  resolvedOrderNumber: string | null;
+  resolvedTrackingNumber: string | null;
+  resolutionConfidence: string;
+}): SerializedThreadState {
+  return {
+    supportNature: t.supportNature,
+    operationalState: t.operationalState,
+    historyStatus: t.historyStatus,
+    resolvedOrderNumber: t.resolvedOrderNumber,
+    resolvedTrackingNumber: t.resolvedTrackingNumber,
+    resolutionConfidence: t.resolutionConfidence,
+  };
+}
+
 interface SerializedEmail {
   id: string;
   externalMessageId: string;
   threadId: string;
+  canonicalThreadId: string | null;
   fromAddress: string;
   fromName: string;
   subject: string;
@@ -163,6 +248,7 @@ function serializeEmail(row: {
   id: string;
   externalMessageId: string;
   threadId: string;
+  canonicalThreadId: string | null;
   fromAddress: string;
   fromName: string;
   subject: string;
@@ -188,6 +274,7 @@ function serializeEmail(row: {
     id: row.id,
     externalMessageId: row.externalMessageId,
     threadId: row.threadId,
+    canonicalThreadId: row.canonicalThreadId,
     fromAddress: row.fromAddress,
     fromName: row.fromName,
     subject: row.subject,
@@ -269,41 +356,19 @@ interface EmailThread {
 }
 
 function groupByThread(emails: SerializedEmail[]): EmailThread[] {
-  // Primary grouping by threadId
+  // Group by canonical thread id (populated at ingestion by the backend
+  // thread resolver). Fall back to providerThreadId, then to the email
+  // id for legacy rows that predate the canonical-thread migration.
   const map = new Map<string, SerializedEmail[]>();
   for (const email of emails) {
-    const key = email.threadId || email.id;
+    const key = email.canonicalThreadId || email.threadId || email.id;
     const arr = map.get(key) ?? [];
     arr.push(email);
     map.set(key, arr);
   }
 
-  // Merge threads that share the same externalMessageId records (Zoho splits
-  // threads when the subject changes mid-conversation — same emails appear
-  // under multiple threadIds). We deduplicate by externalMessageId and keep
-  // the earliest-seen threadId as the canonical key.
-  const seenMsgIds = new Map<string, string>(); // externalMessageId → canonical threadId
-  const merged = new Map<string, SerializedEmail[]>();
-
-  for (const [threadId, threadEmails] of map) {
-    // Find which canonical threadId this group belongs to
-    let canonicalId = threadId;
-    for (const e of threadEmails) {
-      const existing = seenMsgIds.get(e.externalMessageId);
-      if (existing) { canonicalId = existing; break; }
-    }
-    const target = merged.get(canonicalId) ?? [];
-    for (const e of threadEmails) {
-      if (!target.find((t) => t.externalMessageId === e.externalMessageId)) {
-        target.push(e);
-        seenMsgIds.set(e.externalMessageId, canonicalId);
-      }
-    }
-    merged.set(canonicalId, target);
-  }
-
   const threads: EmailThread[] = [];
-  for (const [threadId, threadEmails] of merged) {
+  for (const [threadId, threadEmails] of map) {
     threadEmails.sort((a, b) => new Date(a.receivedAt).getTime() - new Date(b.receivedAt).getTime());
     const latest = threadEmails[threadEmails.length - 1];
     threads.push({ threadId, emails: threadEmails, latest });
@@ -333,6 +398,8 @@ function ConnectionCard({
   gmailAuthUrl,
   zohoAuthUrl,
   isSyncing,
+  autoSyncEnabled,
+  autoSyncIntervalMinutes,
 }: {
   connected: boolean;
   provider: MailProvider | null;
@@ -341,6 +408,8 @@ function ConnectionCard({
   gmailAuthUrl: string | null;
   zohoAuthUrl: string | null;
   isSyncing: boolean;
+  autoSyncEnabled: boolean;
+  autoSyncIntervalMinutes: number;
 }) {
   if (!connected) {
     return (
@@ -379,6 +448,8 @@ function ConnectionCard({
         {lastSyncAt && (
           <s-text variant="bodySm" tone="subdued">
             Last sync: {relativeTime(lastSyncAt)}
+            {" · "}
+            Auto-sync: {autoSyncEnabled ? `every ${autoSyncIntervalMinutes}m` : "off"}
           </s-text>
         )}
       </s-stack>
@@ -387,6 +458,20 @@ function ConnectionCard({
           <input type="hidden" name="_action" value="sync" />
           <s-button variant="primary" type="submit" {...(isSyncing ? { loading: true } : {})}>
             {isSyncing ? "Syncing…" : "Sync now"}
+          </s-button>
+        </Form>
+        <Form method="post">
+          <input type="hidden" name="_action" value="backfill" />
+          <input type="hidden" name="days" value="60" />
+          <s-button variant="tertiary" type="submit" {...(isSyncing ? { loading: true } : {})}>
+            Backfill 60d
+          </s-button>
+        </Form>
+        <Form method="post">
+          <input type="hidden" name="_action" value="toggleAutoSync" />
+          <input type="hidden" name="enable" value={autoSyncEnabled ? "0" : "1"} />
+          <s-button variant="tertiary" type="submit">
+            {autoSyncEnabled ? "Pause auto-sync" : "Resume auto-sync"}
           </s-button>
         </Form>
         <Form method="post">
@@ -442,11 +527,13 @@ function PipelineStats({ emails }: { emails: SerializedEmail[] }) {
 
 function ThreadCard({
   thread,
+  threadState,
   isExpanded,
   connectedEmail,
   onToggle,
 }: {
   thread: EmailThread;
+  threadState: SerializedThreadState | null;
   isExpanded: boolean;
   connectedEmail: string | null;
   onToggle: () => void;
@@ -470,23 +557,41 @@ function ThreadCard({
       {...(borderColor ? { borderColor } : {})}
     >
       <s-stack direction="block" gap="small-300">
-        {/* Row 1: badges */}
+        {/* Row 1: badges — concis */}
         <s-stack direction="inline" gap="small-200">
-          {cls === "support" && <s-badge tone="success">Support</s-badge>}
+          {/* Classification — uniquement quand non déduit de la bordure */}
           {cls === "uncertain" && <s-badge tone="warning">Uncertain</s-badge>}
           {cls === "filtered" && <s-badge tone="read-only">Filtered</s-badge>}
-          <s-badge tone={latestDirection === "incoming" ? "info" : "read-only"}>
-            Last: {latestDirection}
-          </s-badge>
-          {requiresReply && <s-badge tone="critical">To process</s-badge>}
-          {noReplyNeeded && <s-badge tone="success">No reply needed</s-badge>}
+
+          {/* État actionnable — un seul badge, par priorité décroissante */}
+          {requiresReply ? (
+            <s-badge tone="critical">To process</s-badge>
+          ) : threadState?.operationalState === "waiting_merchant" ? (
+            <s-badge tone="critical">Waiting merchant</s-badge>
+          ) : threadState?.operationalState === "waiting_customer" ? (
+            <s-badge tone="info">Waiting customer</s-badge>
+          ) : threadState?.operationalState === "resolved" ? (
+            <s-badge tone="success">Resolved</s-badge>
+          ) : noReplyNeeded ? (
+            <s-badge tone="success">No reply needed</s-badge>
+          ) : null}
+
+          {/* Numéro de commande */}
+          {threadState?.resolvedOrderNumber && (
+            <s-badge tone="info">#{threadState.resolvedOrderNumber}</s-badge>
+          )}
+
+          {/* Nombre de messages */}
+          {messageCount > 1 && <s-badge>{messageCount} msg</s-badge>}
+
+          {/* Alertes secondaires */}
+          {threadState?.historyStatus === "partial" && (
+            <s-badge tone="warning">Partial history</s-badge>
+          )}
           {latest.processingStatus === "error" && <s-badge tone="critical">Error</s-badge>}
-          {latest.processingStatus === "analyzed" && <s-badge tone="success">Analyzed</s-badge>}
-          {latest.isKnownCustomer && <s-badge tone="info">Customer</s-badge>}
-          {messageCount > 1 && <s-badge>{messageCount} messages</s-badge>}
         </s-stack>
 
-        {/* Row 2: sender + time */}
+        {/* Row 2: expéditeur + direction + heure */}
         <s-stack direction="inline" gap="small-300" blockAlign="center">
           <s-paragraph>
             <strong>{latest.fromName || latest.fromAddress}</strong>
@@ -495,6 +600,7 @@ function ThreadCard({
             )}
           </s-paragraph>
           <s-text variant="bodySm" tone="subdued">
+            {latestDirection === "incoming" ? "↓" : latestDirection === "outgoing" ? "↑" : "·"}{" "}
             {relativeTime(latest.receivedAt)}
           </s-text>
         </s-stack>
@@ -744,7 +850,8 @@ export default function InboxPage() {
   const isSyncing =
     navigation.state === "submitting" &&
     (navigation.formData?.get("_action") === "sync" ||
-      navigation.formData?.get("_action") === "resync");
+      navigation.formData?.get("_action") === "resync" ||
+      navigation.formData?.get("_action") === "backfill");
 
   const syncStarted = (actionData as { syncStarted?: boolean } | null)?.syncStarted === true;
   const syncStopped = (actionData as { stopped?: boolean } | null)?.stopped === true;
@@ -875,6 +982,8 @@ export default function InboxPage() {
           gmailAuthUrl={loaderData.gmailAuthUrl}
           zohoAuthUrl={loaderData.zohoAuthUrl}
           isSyncing={isSyncing}
+          autoSyncEnabled={loaderData.autoSyncEnabled}
+          autoSyncIntervalMinutes={loaderData.autoSyncIntervalMinutes}
         />
       </s-section>
 
@@ -987,6 +1096,11 @@ export default function InboxPage() {
                   <ThreadCard
                     key={thread.threadId}
                     thread={thread}
+                    threadState={
+                      (thread.latest.canonicalThreadId &&
+                        loaderData.threadStates?.[thread.latest.canonicalThreadId]) ||
+                      null
+                    }
                     isExpanded={expandedThreadId === thread.threadId}
                     connectedEmail={loaderData.connectedEmail}
                     onToggle={() => setExpandedThreadId(expandedThreadId === thread.threadId ? null : thread.threadId)}
