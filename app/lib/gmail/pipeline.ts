@@ -588,9 +588,10 @@ async function classifyAndDraft(
       data: {
         processingStatus: "analyzed",
         analysisResult: JSON.stringify(analysis),
-        // Promoted column — kept in sync with the JSON blob so SQL
-        // dashboards / rules don't have to parse it.
+        // Promoted columns — kept in sync with the JSON blob so SQL
+        // dashboards / rules don't have to parse JSON.
         detectedIntent: analysis.intent,
+        analysisConfidence: analysis.confidence,
         draftReply: analysis.draftReply,
       },
     });
@@ -856,6 +857,7 @@ export async function reanalyzeEmail(
       tier2Result: "support_client",
       analysisResult: JSON.stringify(analysis),
       detectedIntent: analysis.intent,
+      analysisConfidence: analysis.confidence,
       draftReply: analysis.draftReply,
     },
   });

@@ -178,8 +178,9 @@ model IncomingEmail {
   // Top-level fields promoted out of analysisResult for cheap SQL
   // queries (dashboards, rule engines, QA). Must stay in sync with
   // the JSON blob — written at the same time in the pipeline.
-  detectedIntent   String?  // SupportIntent enum value
-  draftReply       String?
+  detectedIntent      String?  // SupportIntent enum value
+  analysisConfidence  String?  // "high" | "medium" | "low"
+  draftReply          String?
   draftHistory     String   @default("[]") // JSON array of previous drafts
   errorMessage     String?
   // Aggregated LLM cost tracking (sum of all LLM calls on this email)
@@ -196,6 +197,7 @@ model IncomingEmail {
   @@index([canonicalThreadId, receivedAt])
   @@index([shop, rfcMessageId])
   @@index([shop, detectedIntent])
+  @@index([shop, analysisConfidence])
 }
 
 // Granular log of every OpenAI call. Enables precise cost attribution
@@ -225,17 +227,20 @@ model LlmCallLog {
 // processes them. Surviving a restart is the whole point — do not
 // replace with in-memory Promises.
 model SyncJob {
-  id         String    @id @default(cuid())
-  shop       String
-  kind       String    // "sync" | "backfill" | "resync"
-  params     String    @default("{}") // JSON payload (e.g. { afterDate })
-  status     String    @default("pending") // pending | running | done | error
-  attempts   Int       @default(0)
-  lastError  String?
-  createdAt  DateTime  @default(now())
-  startedAt  DateTime?
-  finishedAt DateTime?
+  id           String    @id @default(cuid())
+  shop         String
+  kind         String    // "sync" | "backfill" | "resync"
+  params       String    @default("{}") // JSON payload (e.g. { afterDate })
+  status       String    @default("pending") // pending | running | done | error
+  attempts     Int       @default(0)
+  lastError    String?
+  // Populated by markJobFailed: exponential backoff — job stays "pending"
+  // but claimNextJob skips it until this timestamp is reached.
+  nextRetryAt  DateTime?
+  createdAt    DateTime  @default(now())
+  startedAt    DateTime?
+  finishedAt   DateTime?
 
   @@index([shop, status])
-  @@index([status, createdAt])
+  @@index([status, nextRetryAt])
 }
