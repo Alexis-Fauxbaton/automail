@@ -1,14 +1,15 @@
 // Backend auto-sync loop (spec §10).
 //
-// A single in-process interval wakes up every `TICK_MS` and, for every
-// MailConnection with `autoSyncEnabled=true`, triggers `processNewEmails`
-// if its `lastSyncAt` is older than `autoSyncIntervalMinutes`.
+// A single in-process timer wakes up every `TICK_MS`. Each tick:
+//   1. Reclaims zombie jobs (running but startedAt > ZOMBIE_TIMEOUT_MS ago).
+//   2. Enqueues time-based periodic syncs for due shops.
+//   3. Drains the SyncJob queue up to MAX_CONCURRENT.
 //
-// Rationale: Shopify embedded apps run as long-lived Node processes.
-// A single timer per instance is sufficient for an internal single-store
-// app (see Claude.md — this is not a public multi-tenant SaaS).
-// For multi-instance deployments a real job queue / cron would be
-// required; noted as a follow-up in the spec.
+// The job queue handles durability and retries; this loop is just a scheduler.
+// For horizontal multi-instance deployments, claimNextJob already uses an
+// optimistic conditional update (safe race). Replacing `setInterval` with an
+// external cron trigger (Render cron, pg_cron, etc.) would remove the need for
+// this process to stay alive — a natural next step when scaling out.
 
 import prisma from "../../db.server";
 import { processNewEmails } from "../gmail/pipeline";
@@ -19,11 +20,13 @@ import {
   enqueueJob,
   markJobDone,
   markJobFailed,
+  reclaimZombieJobs,
 } from "./job-queue";
 
-const TICK_MS = 60_000;             // check every minute
-const STARTUP_DELAY_MS = 15_000;    // wait a bit after boot
-const MAX_CONCURRENT = 1;           // serialize shops (Neon free tier)
+const TICK_MS = 60_000;              // check every minute
+const STARTUP_DELAY_MS = 15_000;     // wait a bit after boot
+const MAX_CONCURRENT = 1;            // serialize shops; raise with a proper pool/queue
+const ZOMBIE_TIMEOUT_MS = 30 * 60_000; // reclaim jobs stuck > 30 min in "running"
 
 let started = false;
 let inFlight = 0;
@@ -50,14 +53,13 @@ export function startAutoSyncLoop(): void {
 }
 
 async function tick(): Promise<void> {
-  // Two kinds of work drive the tick:
-  //   1. User-initiated jobs pushed into SyncJob by the inbox route
-  //      (sync / backfill / resync). These are durable and must be
-  //      drained first so a button click survives a restart.
-  //   2. Periodic time-based syncs for shops with autoSyncEnabled=true.
-  //      We express these as SyncJob rows too, so the whole worker has
-  //      a single execution path.
+  // 1. Reset jobs whose workers died without completing (OOM, restart, timeout).
+  await reclaimZombieJobs(ZOMBIE_TIMEOUT_MS).catch((err) =>
+    console.error("[auto-sync] zombie reclaim failed:", err),
+  );
+  // 2. Convert due periodic syncs into SyncJob rows (de-dup is inside enqueueJob).
   await enqueueDuePeriodicSyncs();
+  // 3. Execute pending jobs up to the concurrency limit.
   await drainJobQueue();
 }
 

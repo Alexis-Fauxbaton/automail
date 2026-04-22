@@ -1,16 +1,18 @@
 // Durable background-job queue backed by the `SyncJob` Postgres table.
 //
-// Rationale: the Remix/React Router route actions used to call
-// `processNewEmails(...)` / `runManualBackfill(...)` without awaiting,
-// which works on a warm single-instance box but loses work on restart,
-// timeout, or scale-out. Web actions now enqueue a SyncJob row and
-// return immediately; the in-process auto-sync loop (see `auto-sync.ts`)
-// claims pending rows and executes them. Jobs are durable, retryable,
-// and observable (status, attempts, lastError, timestamps).
+// Web actions enqueue a SyncJob row and return immediately; the in-process
+// auto-sync loop (see `auto-sync.ts`) claims pending rows and executes them.
+// Jobs are durable, retryable, and observable (status, attempts, lastError,
+// timestamps).
 //
-// This is not a full-featured queue (no exponential backoff, no
-// multi-worker leasing). It's the smallest durable improvement over
-// fire-and-forget — sufficient for a single-store Shopify app.
+// Retry policy: exponential backoff — 30 s, 60 s, then permanent error.
+// Zombie recovery: auto-sync resets jobs stuck in "running" for > 30 min.
+// Concurrency guard: optimistic update on status prevents double-claim.
+//
+// For true multi-worker horizontal scaling, replace `claimNextJob` with a
+// SELECT FOR UPDATE SKIP LOCKED query (pg_advisory_lock or a dedicated
+// queue service). The current implementation is safe for a single-process
+// deployment and straightforward to upgrade.
 
 import prisma from "../../db.server";
 
@@ -21,6 +23,9 @@ export interface BackfillParams {
 }
 
 const MAX_ATTEMPTS = 3;
+// Exponential backoff: attempt N → wait 2^(N-1) × BASE_BACKOFF_MS (capped).
+const BASE_BACKOFF_MS = 30_000;   // 30 s
+const MAX_BACKOFF_MS  = 30 * 60_000; // 30 min
 
 /**
  * Enqueue a job. Called by web actions in place of
@@ -49,10 +54,11 @@ export async function enqueueJob(
 }
 
 /**
- * Atomically claim the next pending job for any shop. Returns null if
- * nothing is ready. Uses a conditional update on status so two workers
- * would race safely (we currently have one, but the guarantee is nice
- * to have for free).
+ * Atomically claim the next pending job whose backoff window has elapsed.
+ * Returns null if nothing is ready.
+ *
+ * Uses a conditional updateMany on status so two concurrent workers race
+ * safely — the loser gets count=0 and falls through without double-executing.
  */
 export async function claimNextJob(): Promise<{
   id: string;
@@ -61,20 +67,24 @@ export async function claimNextJob(): Promise<{
   params: Record<string, unknown>;
   attempts: number;
 } | null> {
+  const now = new Date();
   const candidate = await prisma.syncJob.findFirst({
-    where: { status: "pending", attempts: { lt: MAX_ATTEMPTS } },
+    where: {
+      status: "pending",
+      attempts: { lt: MAX_ATTEMPTS },
+      OR: [{ nextRetryAt: null }, { nextRetryAt: { lte: now } }],
+    },
     orderBy: { createdAt: "asc" },
     select: { id: true, shop: true, kind: true, params: true, attempts: true },
   });
   if (!candidate) return null;
 
-  // Conditional update: only claim if still pending. If another worker
-  // grabbed it, updateMany returns count=0 and we fall through.
   const claimed = await prisma.syncJob.updateMany({
     where: { id: candidate.id, status: "pending" },
     data: {
       status: "running",
-      startedAt: new Date(),
+      startedAt: now,
+      nextRetryAt: null,
       attempts: { increment: 1 },
     },
   });
@@ -108,16 +118,34 @@ export async function markJobFailed(id: string, err: unknown): Promise<void> {
     where: { id },
     select: { attempts: true },
   });
-  // If we've exhausted attempts, park it as "error". Otherwise put it
-  // back to "pending" so the next tick retries.
-  const exhausted = (job?.attempts ?? 0) >= MAX_ATTEMPTS;
+  const attempts = job?.attempts ?? 0;
+  const exhausted = attempts >= MAX_ATTEMPTS;
+  // Exponential backoff: attempt N → delay 2^(N-1) × BASE_BACKOFF_MS.
+  const backoffMs = Math.min(
+    Math.pow(2, Math.max(0, attempts - 1)) * BASE_BACKOFF_MS,
+    MAX_BACKOFF_MS,
+  );
   await prisma.syncJob.update({
     where: { id },
     data: {
       status: exhausted ? "error" : "pending",
       finishedAt: exhausted ? new Date() : null,
       startedAt: null,
+      nextRetryAt: exhausted ? null : new Date(Date.now() + backoffMs),
       lastError: message.slice(0, 500),
     },
+  });
+}
+
+/**
+ * Reset jobs stuck in "running" whose startedAt is older than `timeoutMs`.
+ * This handles crashed or OOM-killed workers that never called markJobDone/
+ * markJobFailed. Call once per tick before claiming new work.
+ */
+export async function reclaimZombieJobs(timeoutMs: number): Promise<void> {
+  const cutoff = new Date(Date.now() - timeoutMs);
+  await prisma.syncJob.updateMany({
+    where: { status: "running", startedAt: { lt: cutoff } },
+    data: { status: "pending", startedAt: null, nextRetryAt: null },
   });
 }
