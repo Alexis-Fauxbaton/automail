@@ -13,6 +13,7 @@
 
 import type OpenAI from "openai";
 import { getOpenAIClient, trackedChatCompletion, type TrackedCallContext } from "../../llm/client";
+import { safeFetch } from "../../net/safe-fetch";
 import { resolveCarrierUrls } from "./carrier-detector";
 import { fetchTrackingFrom17track } from "../tracking/adapters/seventeen-track";
 import type { FulfillmentTrackingFacts, OrderFacts, SupportIntent, TrackingFacts } from "../types";
@@ -176,7 +177,9 @@ async function fetchPage(url: string): Promise<string | null> {
     return null;
   }
   try {
-    const res = await fetch(url, {
+    const res = await safeFetch(url, {
+      allowedHosts: ALLOWED_FETCH_DOMAINS,
+      timeoutMs: 10000,
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -185,8 +188,6 @@ async function fetchPage(url: string): Promise<string | null> {
         "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
         "Cache-Control": "no-cache",
       },
-      signal: AbortSignal.timeout(10000),
-      redirect: "follow",
     });
     if (!res.ok) return null;
     return await res.text();

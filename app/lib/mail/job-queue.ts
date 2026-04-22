@@ -7,14 +7,21 @@
 //
 // Retry policy: exponential backoff — 30 s, 60 s, then permanent error.
 // Zombie recovery: auto-sync resets jobs stuck in "running" for > 30 min.
-// Concurrency guard: optimistic update on status prevents double-claim.
 //
-// For true multi-worker horizontal scaling, replace `claimNextJob` with a
-// SELECT FOR UPDATE SKIP LOCKED query (pg_advisory_lock or a dedicated
-// queue service). The current implementation is safe for a single-process
-// deployment and straightforward to upgrade.
+// Multi-shop isolation: the claim query uses `FOR UPDATE SKIP LOCKED` plus
+// a "shop NOT IN (shops with a running job)" filter. This guarantees:
+//   - two workers never claim the same job row,
+//   - a shop never has two concurrently running jobs (a slow shop cannot
+//     steal a slot from another shop, but it also cannot run twice),
+//   - slow shops never block fast shops — the scheduler simply picks the
+//     next pending job for a shop that has no running work.
+//
+// This is safe for both single-process and small horizontal deployments.
+// For large-scale horizontal scaling (many workers, many shops), move to
+// a dedicated queue service (BullMQ/Redis, pg-boss, graphile-worker).
 
 import prisma from "../../db.server";
+import { Prisma } from "@prisma/client";
 
 export type SyncJobKind = "sync" | "backfill" | "resync";
 
@@ -53,55 +60,79 @@ export async function enqueueJob(
   return job.id;
 }
 
+interface ClaimedJobRow {
+  id: string;
+  shop: string;
+  kind: string;
+  params: string;
+  attempts: number;
+}
+
 /**
- * Atomically claim the next pending job whose backoff window has elapsed.
- * Returns null if nothing is ready.
+ * Atomically claim the next pending job, enforcing per-shop isolation.
  *
- * Uses a conditional updateMany on status so two concurrent workers race
- * safely — the loser gets count=0 and falls through without double-executing.
+ * The claim query:
+ *   1. picks the oldest `pending` job whose backoff window has elapsed,
+ *   2. for a shop that does NOT already have a `running` job,
+ *   3. that is not in `excludeShops` (shops currently in-flight in this
+ *      process — redundant with the DB filter but avoids a round-trip
+ *      race when several slots drain in the same tick),
+ *   4. using `FOR UPDATE SKIP LOCKED` so concurrent claimers never
+ *      fight over the same row.
+ *
+ * Returns null if nothing is ready.
  */
-export async function claimNextJob(): Promise<{
+export async function claimNextJob(
+  excludeShops: readonly string[] = [],
+): Promise<{
   id: string;
   shop: string;
   kind: SyncJobKind;
   params: Record<string, unknown>;
   attempts: number;
 } | null> {
-  const now = new Date();
-  const candidate = await prisma.syncJob.findFirst({
-    where: {
-      status: "pending",
-      attempts: { lt: MAX_ATTEMPTS },
-      OR: [{ nextRetryAt: null }, { nextRetryAt: { lte: now } }],
-    },
-    orderBy: { createdAt: "asc" },
-    select: { id: true, shop: true, kind: true, params: true, attempts: true },
-  });
-  if (!candidate) return null;
+  const excludeFilter =
+    excludeShops.length > 0
+      ? Prisma.sql`AND shop NOT IN (${Prisma.join(excludeShops)})`
+      : Prisma.empty;
 
-  const claimed = await prisma.syncJob.updateMany({
-    where: { id: candidate.id, status: "pending" },
-    data: {
-      status: "running",
-      startedAt: now,
-      nextRetryAt: null,
-      attempts: { increment: 1 },
-    },
-  });
-  if (claimed.count === 0) return null;
+  const rows = await prisma.$queryRaw<ClaimedJobRow[]>`
+    UPDATE "SyncJob"
+    SET status = 'running',
+        "startedAt" = NOW(),
+        "nextRetryAt" = NULL,
+        attempts = attempts + 1
+    WHERE id = (
+      SELECT id FROM "SyncJob"
+      WHERE status = 'pending'
+        AND attempts < ${MAX_ATTEMPTS}
+        AND ("nextRetryAt" IS NULL OR "nextRetryAt" <= NOW())
+        AND shop NOT IN (
+          SELECT DISTINCT shop FROM "SyncJob" WHERE status = 'running'
+        )
+        ${excludeFilter}
+      ORDER BY "createdAt" ASC
+      FOR UPDATE SKIP LOCKED
+      LIMIT 1
+    )
+    RETURNING id, shop, kind, params, attempts
+  `;
+
+  const row = rows[0];
+  if (!row) return null;
 
   let params: Record<string, unknown> = {};
   try {
-    params = JSON.parse(candidate.params || "{}");
+    params = JSON.parse(row.params || "{}");
   } catch {
     /* ignore malformed payload */
   }
   return {
-    id: candidate.id,
-    shop: candidate.shop,
-    kind: candidate.kind as SyncJobKind,
+    id: row.id,
+    shop: row.shop,
+    kind: row.kind as SyncJobKind,
     params,
-    attempts: candidate.attempts + 1,
+    attempts: row.attempts,
   };
 }
 
@@ -149,3 +180,4 @@ export async function reclaimZombieJobs(timeoutMs: number): Promise<void> {
     data: { status: "pending", startedAt: null, nextRetryAt: null },
   });
 }
+

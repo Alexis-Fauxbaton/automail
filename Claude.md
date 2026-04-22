@@ -1,10 +1,11 @@
 # CLAUDE.md
 
 ## Project
-Shopify custom app for internal customer support assistance.
+Shopify app that helps human support agents answer customer emails faster.
 
-This app is built for a single Shopify store first.
-It is not a public multi-merchant SaaS yet.
+Target: public distribution on the Shopify App Store, multi-tenant (multiple merchants / multiple shops).
+
+The codebase originally started as a single-store internal tool. We are now moving it toward public App Store readiness. Until the multi-tenant infra is finalized, the product remains usable single-store, but every new change must assume multi-shop from now on.
 
 ## Product goal
 The app helps a human support agent answer customer emails faster.
@@ -45,9 +46,7 @@ Do not build any of the following unless explicitly requested:
 - automatic order edits
 - live chat
 - WhatsApp / Instagram / omnichannel support
-- public Shopify App Store distribution
 - advanced analytics dashboards
-- multi-store support
 - background agents doing autonomous actions
 
 ## Core principle
@@ -203,12 +202,33 @@ Functionality first.
 ## Shopify access rules
 Only request and use the minimum necessary Shopify scopes.
 
-Likely required read scopes:
-- orders
-- customers
-- fulfillments / fulfillment-related data
+Current read scopes (see `shopify.app.toml`):
+- `read_orders`
+- `read_all_orders`
+- `read_customers`
+- `read_fulfillments`
 
 Do not add write capabilities unless explicitly requested.
+
+Because we target the public App Store, access to protected customer data (email, name, address, phone) requires the official Shopify protected-customer-data configuration and approval. Any change that broadens data usage must be reflected in the app listing and the privacy policy.
+
+## Public distribution requirements
+The app targets the Shopify App Store. Non-negotiable compliance items:
+
+- **Compliance webhooks** — `customers/data_request`, `customers/redact`, `shop/redact` must be registered and implemented (see `shopify.app.toml` and `app/routes/webhooks.*`).
+- **Privacy policy** — public route at `/privacy` ([app/routes/privacy.tsx](app/routes/privacy.tsx)), kept in sync with what the app actually stores.
+- **Support channel** — a real support email advertised in the listing and the privacy policy.
+- **Data minimization** — never store more customer data than strictly needed to draft a reply.
+- **Multi-tenant isolation** — every query, job, cache, and log entry must be scoped per `shop`.
+
+## Multi-tenant rules
+Assume the app runs for many shops in parallel:
+
+- Every database row that holds shop-scoped data has a `shop` column and is queried with it.
+- Background jobs (sync, backfill, auto-sync) must lock per `shop` — never globally.
+- No in-memory singleton may hold shop-scoped state across shops.
+- Errors and metrics are tagged by `shop`.
+- A bug in one shop must never stall sync for other shops.
 
 ## Tracking integration rules
 Tracking lookup must be extensible.

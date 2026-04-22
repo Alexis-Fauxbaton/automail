@@ -294,14 +294,50 @@ function serializeEmail(row: {
 // Helpers
 // ---------------------------------------------------------------------------
 
-type FilterTab = "all" | "support" | "uncertain" | "filtered";
+// Secondary classification filter, kept from the previous UI.
+// Primary inbox buckets below now drive the main tabs.
+type NatureFilter = "all" | "support" | "uncertain" | "filtered";
 
-function getClassification(email: SerializedEmail): FilterTab {
+function getClassification(email: SerializedEmail): NatureFilter {
   if (email.tier1Result?.startsWith("filtered:")) return "filtered";
   if (email.tier2Result === "support_client") return "support";
   if (email.tier2Result === "incertain") return "uncertain";
   if (email.tier2Result === "probable_non_client") return "filtered";
   return "all";
+}
+
+// Primary inbox bucket derived from the thread's operational state +
+// whether the latest message needs a reply. This is the view a merchant
+// actually cares about ("what do I have to do next?").
+type OpsBucket =
+  | "to_process"       // support thread waiting for a human reply
+  | "waiting_customer" // we replied, awaiting customer
+  | "waiting_merchant" // internal / data action required on our side
+  | "resolved"         // closed or no reply needed
+  | "other";           // filtered / non-support / unknown
+
+function getOpsBucket(
+  thread: EmailThread,
+  state: SerializedThreadState | null,
+  connectedEmail: string | null,
+): OpsBucket {
+  if (threadNeedsReply(thread, connectedEmail)) return "to_process";
+  const op = state?.operationalState;
+  if (op === "waiting_merchant") return "waiting_merchant";
+  if (op === "waiting_customer") return "waiting_customer";
+  if (op === "resolved" || op === "no_reply_needed") return "resolved";
+  if (thread.latest.analysisResult?.conversation?.noReplyNeeded === true) return "resolved";
+  return "other";
+}
+
+function getThreadConfidence(thread: EmailThread): "high" | "medium" | "low" | null {
+  const c = thread.latest.analysisResult?.confidence;
+  if (c === "high" || c === "medium" || c === "low") return c;
+  return null;
+}
+
+function hasLinkedOrder(state: SerializedThreadState | null): boolean {
+  return !!state?.resolvedOrderNumber;
 }
 
 function filterReason(email: SerializedEmail): string | null {
@@ -375,7 +411,7 @@ function groupByThread(emails: SerializedEmail[]): EmailThread[] {
   return threads;
 }
 
-function getThreadClassification(thread: EmailThread): FilterTab {
+function getThreadClassification(thread: EmailThread): NatureFilter {
   // Use the latest email that has actually been classified to avoid outgoing
   // messages (which have no tier results) from overriding the thread category.
   const classified = [...thread.emails]
@@ -409,6 +445,8 @@ function ConnectionCard({
   autoSyncEnabled: boolean;
   autoSyncIntervalMinutes: number;
 }) {
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
   if (!connected) {
     return (
       <s-box padding="large-500" borderWidth="base" borderRadius="large-200" background="subdued">
@@ -437,61 +475,203 @@ function ConnectionCard({
   const providerLabel = provider === "zoho" ? "Zoho Mail" : "Gmail";
 
   return (
-    <s-stack direction="inline" gap="base" align="center" blockAlign="center">
-      <s-stack direction="block" gap="small-100" align="start">
-        <s-paragraph>
-          <strong>{connectedEmail}</strong>
-          <s-text tone="subdued"> ({providerLabel})</s-text>
-        </s-paragraph>
-        {lastSyncAt && (
-          <s-text variant="bodySm" tone="subdued">
-            Last sync: {relativeTime(lastSyncAt)}
-            {" · "}
-            Auto-sync: {autoSyncEnabled ? `every ${autoSyncIntervalMinutes}m` : "off"}
-          </s-text>
-        )}
+    <s-stack direction="block" gap="small-300">
+      {/* Row 1: status — what mailbox is connected, when did it last sync */}
+      <s-stack direction="inline" gap="base" align="center" blockAlign="center">
+        <s-stack direction="block" gap="small-100" align="start">
+          <s-paragraph>
+            <strong>{connectedEmail}</strong>
+            <s-text tone="subdued"> ({providerLabel})</s-text>
+          </s-paragraph>
+          {lastSyncAt && (
+            <s-text variant="bodySm" tone="subdued">
+              Last sync: {relativeTime(lastSyncAt)}
+              {" · "}
+              Auto-sync: {autoSyncEnabled ? `every ${autoSyncIntervalMinutes}m` : "off"}
+            </s-text>
+          )}
+        </s-stack>
+
+        {/* Primary actions: what a merchant uses day-to-day. */}
+        <s-stack direction="inline" gap="small-300">
+          <Form method="post">
+            <input type="hidden" name="_action" value="sync" />
+            <s-button variant="primary" type="submit" {...(isSyncing ? { loading: true } : {})}>
+              {isSyncing ? "Syncing…" : "Sync now"}
+            </s-button>
+          </Form>
+          <Form method="post">
+            <input type="hidden" name="_action" value="toggleAutoSync" />
+            <input type="hidden" name="enable" value={autoSyncEnabled ? "0" : "1"} />
+            <s-button variant="tertiary" type="submit">
+              {autoSyncEnabled ? "Pause auto-sync" : "Resume auto-sync"}
+            </s-button>
+          </Form>
+          <s-button variant="plain" onClick={() => setShowAdvanced((v) => !v)}>
+            {showAdvanced ? "Hide advanced" : "Advanced"}
+          </s-button>
+        </s-stack>
       </s-stack>
-      <s-stack direction="inline" gap="small-300">
-        <Form method="post">
-          <input type="hidden" name="_action" value="sync" />
-          <s-button variant="primary" type="submit" {...(isSyncing ? { loading: true } : {})}>
-            {isSyncing ? "Syncing…" : "Sync now"}
-          </s-button>
-        </Form>
-        <Form method="post">
-          <input type="hidden" name="_action" value="backfill" />
-          <input type="hidden" name="days" value="60" />
-          <s-button variant="tertiary" type="submit" {...(isSyncing ? { loading: true } : {})}>
-            Backfill 60d
-          </s-button>
-        </Form>
-        <Form method="post">
-          <input type="hidden" name="_action" value="toggleAutoSync" />
-          <input type="hidden" name="enable" value={autoSyncEnabled ? "0" : "1"} />
-          <s-button variant="tertiary" type="submit">
-            {autoSyncEnabled ? "Pause auto-sync" : "Resume auto-sync"}
-          </s-button>
-        </Form>
-        <Form method="post">
-          <input type="hidden" name="_action" value="resync" />
-          <s-button variant="tertiary" type="submit" {...(isSyncing ? { loading: true } : {})}>
-            Re-sync all
-          </s-button>
-        </Form>
-        <Form method="post">
-          <input type="hidden" name="_action" value="diagnose" />
-          <s-button variant="tertiary" type="submit">
-            Diagnose
-          </s-button>
-        </Form>
-        <Form method="post">
-          <input type="hidden" name="_action" value="disconnect" />
-          <s-button tone="critical" variant="plain" type="submit">
-            Disconnect
-          </s-button>
-        </Form>
-      </s-stack>
+
+      {/* Advanced row: power-user / debug actions, hidden by default. */}
+      {showAdvanced && (
+        <s-box padding="small-300" background="subdued" borderRadius="base">
+          <s-stack direction="inline" gap="small-300">
+            <Form method="post">
+              <input type="hidden" name="_action" value="backfill" />
+              <input type="hidden" name="days" value="60" />
+              <s-button variant="tertiary" type="submit" {...(isSyncing ? { loading: true } : {})}>
+                Backfill 60 days
+              </s-button>
+            </Form>
+            <Form method="post">
+              <input type="hidden" name="_action" value="resync" />
+              <s-button variant="tertiary" type="submit" {...(isSyncing ? { loading: true } : {})}>
+                Re-sync all
+              </s-button>
+            </Form>
+            <Form method="post">
+              <input type="hidden" name="_action" value="diagnose" />
+              <s-button variant="tertiary" type="submit">
+                Diagnose
+              </s-button>
+            </Form>
+            <Form method="post">
+              <input type="hidden" name="_action" value="disconnect" />
+              <s-button tone="critical" variant="plain" type="submit">
+                Disconnect
+              </s-button>
+            </Form>
+          </s-stack>
+        </s-box>
+      )}
     </s-stack>
+  );
+}
+
+// Inbox-level filters applied on top of the primary operational tab.
+interface InboxFilters {
+  search: string;
+  confidence: "all" | "high" | "medium" | "low";
+  orderLinked: "any" | "yes" | "no";
+  nature: NatureFilter;
+}
+
+function FiltersBar({
+  filters,
+  onChange,
+  onReset,
+}: {
+  filters: InboxFilters;
+  onChange: (next: InboxFilters) => void;
+  onReset: () => void;
+}) {
+  const isDefault =
+    filters.search === "" &&
+    filters.confidence === "all" &&
+    filters.orderLinked === "any" &&
+    filters.nature === "all";
+
+  // Plain HTML controls on purpose: Shopify web components use their own
+  // event shape that doesn't line up with controlled React inputs. The
+  // filter bar is interaction-critical (instant feedback), so native
+  // controls are the right trade-off here.
+  const selectStyle: React.CSSProperties = {
+    padding: "6px 8px",
+    borderRadius: 6,
+    border: "1px solid var(--p-color-border, #d0d0d0)",
+    background: "white",
+    font: "inherit",
+  };
+  const inputStyle: React.CSSProperties = {
+    ...selectStyle,
+    width: "100%",
+    boxSizing: "border-box",
+  };
+  const labelStyle: React.CSSProperties = {
+    display: "flex",
+    flexDirection: "column",
+    gap: 2,
+    font: "inherit",
+    fontSize: 12,
+    color: "var(--p-color-text-subdued, #6d7175)",
+  };
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        gap: 12,
+        alignItems: "flex-end",
+        flexWrap: "wrap",
+      }}
+    >
+      <label style={{ ...labelStyle, flex: "1 1 220px", minWidth: 180 }}>
+        Search
+        <input
+          type="search"
+          placeholder="Subject, sender, snippet…"
+          value={filters.search}
+          onChange={(e) => onChange({ ...filters, search: e.target.value })}
+          style={inputStyle}
+        />
+      </label>
+      <label style={labelStyle}>
+        Confidence
+        <select
+          value={filters.confidence}
+          onChange={(e) =>
+            onChange({
+              ...filters,
+              confidence: e.target.value as InboxFilters["confidence"],
+            })
+          }
+          style={selectStyle}
+        >
+          <option value="all">All</option>
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
+        </select>
+      </label>
+      <label style={labelStyle}>
+        Order linked
+        <select
+          value={filters.orderLinked}
+          onChange={(e) =>
+            onChange({
+              ...filters,
+              orderLinked: e.target.value as InboxFilters["orderLinked"],
+            })
+          }
+          style={selectStyle}
+        >
+          <option value="any">Any</option>
+          <option value="yes">Linked</option>
+          <option value="no">Not linked</option>
+        </select>
+      </label>
+      <label style={labelStyle}>
+        Classification
+        <select
+          value={filters.nature}
+          onChange={(e) =>
+            onChange({ ...filters, nature: e.target.value as NatureFilter })
+          }
+          style={selectStyle}
+        >
+          <option value="all">All</option>
+          <option value="support">Support</option>
+          <option value="uncertain">Uncertain</option>
+          <option value="filtered">Filtered</option>
+        </select>
+      </label>
+      {!isDefault && (
+        <s-button variant="plain" onClick={onReset}>
+          Reset
+        </s-button>
+      )}
+    </div>
   );
 }
 
@@ -915,7 +1095,13 @@ export default function InboxPage() {
     ? Math.min(100, Math.round((elapsed / MAX_DURATION) * 100))
     : 0;
 
-  const [activeTab, setActiveTab] = useState<FilterTab>("support");
+  const [activeBucket, setActiveBucket] = useState<OpsBucket | "all">("to_process");
+  const [filters, setFilters] = useState<InboxFilters>({
+    search: "",
+    confidence: "all",
+    orderLinked: "any",
+    nature: "all",
+  });
   const [expandedThreadId, setExpandedThreadId] = useState<string | null>(null);
 
   const emails: SerializedEmail[] =
@@ -941,17 +1127,49 @@ export default function InboxPage() {
 
   const threads = groupByThread(displayEmails);
 
-  const tabCounts = {
-    all: threads.length,
-    support: threads.filter((t) => getThreadClassification(t) === "support").length,
-    uncertain: threads.filter((t) => getThreadClassification(t) === "uncertain").length,
-    filtered: threads.filter((t) => getThreadClassification(t) === "filtered").length,
+  // Precompute each thread's bucket + classification once for reuse in
+  // counts and filtering. Cheaper than calling the helpers repeatedly.
+  const threadMeta = threads.map((t) => {
+    const state =
+      (t.latest.canonicalThreadId &&
+        loaderData.threadStates?.[t.latest.canonicalThreadId]) ||
+      null;
+    return {
+      thread: t,
+      state,
+      bucket: getOpsBucket(t, state, loaderData.connectedEmail),
+      nature: getThreadClassification(t),
+      confidence: getThreadConfidence(t),
+      linkedOrder: hasLinkedOrder(state),
+    };
+  });
+
+  const bucketCounts: Record<OpsBucket | "all", number> = {
+    all: threadMeta.length,
+    to_process: threadMeta.filter((m) => m.bucket === "to_process").length,
+    waiting_customer: threadMeta.filter((m) => m.bucket === "waiting_customer").length,
+    waiting_merchant: threadMeta.filter((m) => m.bucket === "waiting_merchant").length,
+    resolved: threadMeta.filter((m) => m.bucket === "resolved").length,
+    other: threadMeta.filter((m) => m.bucket === "other").length,
   };
 
-  const filteredThreads =
-    activeTab === "all"
-      ? threads
-      : threads.filter((t) => getThreadClassification(t) === activeTab);
+  const matchesFilters = (m: (typeof threadMeta)[number]): boolean => {
+    if (filters.confidence !== "all" && m.confidence !== filters.confidence) return false;
+    if (filters.orderLinked === "yes" && !m.linkedOrder) return false;
+    if (filters.orderLinked === "no" && m.linkedOrder) return false;
+    if (filters.nature !== "all" && m.nature !== filters.nature) return false;
+    if (filters.search.trim()) {
+      const q = filters.search.trim().toLowerCase();
+      const e = m.thread.latest;
+      const hay = `${e.subject} ${e.fromName} ${e.fromAddress} ${e.snippet}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  };
+
+  const filteredThreadMeta = threadMeta
+    .filter((m) => activeBucket === "all" || m.bucket === activeBucket)
+    .filter(matchesFilters);
 
   const report = actionData?.report as ProcessingReport | null;
   const isPolling = bgSyncActive && revalidator.state !== "idle";
@@ -1069,39 +1287,62 @@ export default function InboxPage() {
           </s-section>
 
           <s-section>
-            {/* Tabs */}
             <s-stack direction="block" gap="base">
+              {/* Primary tabs: where the merchant needs to focus attention. */}
               <s-stack direction="inline" gap="small-300">
-                {(["support", "uncertain", "all", "filtered"] as FilterTab[]).map((tab) => (
+                {(
+                  [
+                    { key: "to_process", label: "To process" },
+                    { key: "waiting_customer", label: "Waiting customer" },
+                    { key: "waiting_merchant", label: "Waiting us" },
+                    { key: "resolved", label: "Resolved" },
+                    { key: "other", label: "Other" },
+                    { key: "all", label: "All" },
+                  ] as const
+                ).map((tab) => (
                   <s-button
-                    key={tab}
-                    variant={activeTab === tab ? "primary" : "tertiary"}
-                    onClick={() => setActiveTab(tab)}
+                    key={tab.key}
+                    variant={activeBucket === tab.key ? "primary" : "tertiary"}
+                    onClick={() => setActiveBucket(tab.key)}
                   >
-                    {tab === "all" ? "All" : tab.charAt(0).toUpperCase() + tab.slice(1)} ({tabCounts[tab]})
+                    {tab.label} ({bucketCounts[tab.key]})
                   </s-button>
                 ))}
               </s-stack>
 
+              {/* Secondary filters */}
+              <FiltersBar
+                filters={filters}
+                onChange={setFilters}
+                onReset={() =>
+                  setFilters({
+                    search: "",
+                    confidence: "all",
+                    orderLinked: "any",
+                    nature: "all",
+                  })
+                }
+              />
+
               {/* Thread cards */}
               <s-stack direction="block" gap="small-300">
-                {filteredThreads.length === 0 && (
+                {filteredThreadMeta.length === 0 && (
                   <s-box padding="large-500" background="subdued" borderRadius="base">
-                    <s-paragraph>No emails in this category.</s-paragraph>
+                    <s-paragraph>No emails match the current filters.</s-paragraph>
                   </s-box>
                 )}
-                {filteredThreads.map((thread) => (
+                {filteredThreadMeta.map(({ thread, state }) => (
                   <ThreadCard
                     key={thread.threadId}
                     thread={thread}
-                    threadState={
-                      (thread.latest.canonicalThreadId &&
-                        loaderData.threadStates?.[thread.latest.canonicalThreadId]) ||
-                      null
-                    }
+                    threadState={state}
                     isExpanded={expandedThreadId === thread.threadId}
                     connectedEmail={loaderData.connectedEmail}
-                    onToggle={() => setExpandedThreadId(expandedThreadId === thread.threadId ? null : thread.threadId)}
+                    onToggle={() =>
+                      setExpandedThreadId(
+                        expandedThreadId === thread.threadId ? null : thread.threadId,
+                      )
+                    }
                   />
                 ))}
               </s-stack>

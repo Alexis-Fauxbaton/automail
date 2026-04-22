@@ -3,13 +3,19 @@
 // A single in-process timer wakes up every `TICK_MS`. Each tick:
 //   1. Reclaims zombie jobs (running but startedAt > ZOMBIE_TIMEOUT_MS ago).
 //   2. Enqueues time-based periodic syncs for due shops.
-//   3. Drains the SyncJob queue up to MAX_CONCURRENT.
+//   3. Drains the SyncJob queue up to MAX_CONCURRENT slots in parallel.
+//
+// Multi-shop isolation is enforced by the job queue itself: `claimNextJob`
+// never returns a job for a shop that already has a running job, so a slow
+// shop can never starve or stall another shop. Slots work on distinct shops
+// in parallel.
 //
 // The job queue handles durability and retries; this loop is just a scheduler.
-// For horizontal multi-instance deployments, claimNextJob already uses an
-// optimistic conditional update (safe race). Replacing `setInterval` with an
-// external cron trigger (Render cron, pg_cron, etc.) would remove the need for
-// this process to stay alive — a natural next step when scaling out.
+// For horizontal multi-instance deployments, `claimNextJob` uses
+// `FOR UPDATE SKIP LOCKED` and is safe against concurrent claimers. Replacing
+// `setInterval` with an external cron trigger (Render cron, pg_cron, etc.)
+// would remove the need for this process to stay alive — a natural next step
+// when scaling out.
 
 import prisma from "../../db.server";
 import { processNewEmails } from "../gmail/pipeline";
@@ -25,12 +31,19 @@ import {
 
 const TICK_MS = 60_000;              // check every minute
 const STARTUP_DELAY_MS = 15_000;     // wait a bit after boot
-const MAX_CONCURRENT = 1;            // serialize shops; raise with a proper pool/queue
+// Parallel job slots (across distinct shops). One slow shop must never
+// block another shop's sync, so we process several shops concurrently.
+// Kept conservative: raise via AUTOSYNC_CONCURRENCY when your worker has
+// spare IO/CPU budget.
+const MAX_CONCURRENT = Math.max(
+  1,
+  Number(process.env.AUTOSYNC_CONCURRENCY ?? "4"),
+);
 const ZOMBIE_TIMEOUT_MS = 30 * 60_000; // reclaim jobs stuck > 30 min in "running"
 
 let started = false;
 let inFlight = 0;
-const running = new Set<string>();
+const runningShops = new Set<string>();
 
 /**
  * Start the background auto-sync loop. Idempotent — safe to call
@@ -49,7 +62,9 @@ export function startAutoSyncLoop(): void {
       );
     }, TICK_MS);
   }, STARTUP_DELAY_MS);
-  console.log("[auto-sync] background loop scheduled");
+  console.log(
+    `[auto-sync] background loop scheduled (maxConcurrent=${MAX_CONCURRENT})`,
+  );
 }
 
 async function tick(): Promise<void> {
@@ -96,19 +111,18 @@ async function enqueueDuePeriodicSyncs(): Promise<void> {
 
 /**
  * Claim and execute jobs until either the queue is empty or we hit the
- * concurrency limit. Each job is executed inside `runJob` which handles
- * success/failure bookkeeping.
+ * concurrency limit. Each job runs on a distinct shop — `claimNextJob`
+ * guarantees no two concurrent jobs for the same shop (DB-level filter).
+ *
+ * The local `runningShops` set is passed to `claimNextJob` as an extra
+ * safety net that avoids a round-trip race inside the same tick.
  */
 async function drainJobQueue(): Promise<void> {
   while (inFlight < MAX_CONCURRENT) {
-    const job = await claimNextJob();
+    const job = await claimNextJob([...runningShops]);
     if (!job) break;
-    if (running.has(job.shop)) {
-      // Another job for the same shop is in flight; put it back to
-      // pending and move on — it'll be retried on the next tick.
-      await markJobFailed(job.id, new Error("shop busy")).catch(() => {});
-      continue;
-    }
+    // Fire-and-forget: each slot runs in parallel. Bookkeeping happens
+    // inside runJob's finally block.
     void runJob(job);
   }
 }
@@ -119,8 +133,9 @@ async function runJob(job: {
   kind: "sync" | "backfill" | "resync";
   params: Record<string, unknown>;
 }): Promise<void> {
-  running.add(job.shop);
+  runningShops.add(job.shop);
   inFlight++;
+  const startedAt = Date.now();
   try {
     switch (job.kind) {
       case "sync":
@@ -143,18 +158,24 @@ async function runJob(job: {
         if (!afterDateIso) throw new Error("backfill job missing afterDateIso");
         const res = await runManualBackfill(job.shop, new Date(afterDateIso));
         console.log(
-          `[auto-sync] ${job.shop} backfill: ingested=${res.ingested} skipped=${res.skipped}`,
+          `[auto-sync] shop=${job.shop} backfill: ingested=${res.ingested} skipped=${res.skipped}`,
         );
         break;
       }
     }
     await markJobDone(job.id);
+    console.log(
+      `[auto-sync] shop=${job.shop} job=${job.kind} ok durationMs=${Date.now() - startedAt}`,
+    );
   } catch (err) {
-    console.error(`[auto-sync] job ${job.id} (${job.kind}) failed:`, err);
+    console.error(
+      `[auto-sync] shop=${job.shop} job=${job.id} kind=${job.kind} failed after ${Date.now() - startedAt}ms:`,
+      err,
+    );
     await markJobFailed(job.id, err).catch(() => {});
   } finally {
     inFlight = Math.max(0, inFlight - 1);
-    running.delete(job.shop);
+    runningShops.delete(job.shop);
   }
 }
 
@@ -172,16 +193,17 @@ async function runSyncForShop(
     try {
       const res = await runOnboardingBackfill(shop, opts.onboardingDays);
       console.log(
-        `[auto-sync] ${shop} onboarding backfill: ingested=${res.ingested} skipped=${res.skipped}`,
+        `[auto-sync] shop=${shop} onboarding backfill: ingested=${res.ingested} skipped=${res.skipped}`,
       );
     } catch (err) {
       // Onboarding failure must not block the regular sync that
       // follows — it'll be retried on the next tick.
-      console.error(`[auto-sync] ${shop} onboarding backfill failed:`, err);
+      console.error(`[auto-sync] shop=${shop} onboarding backfill failed:`, err);
     }
   }
   const report = await processNewEmails(shop, admin.graphql);
   console.log(
-    `[auto-sync] ${shop} → ${report.total} fetched, ${report.supportClient} support, ${report.errors} errors`,
+    `[auto-sync] shop=${shop} fetched=${report.total} support=${report.supportClient} errors=${report.errors}`,
   );
 }
+

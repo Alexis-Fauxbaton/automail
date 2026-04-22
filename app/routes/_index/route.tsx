@@ -1,15 +1,32 @@
-import type { LoaderFunctionArgs } from "react-router";
+import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { redirect, Form, useLoaderData } from "react-router";
 
 import { login } from "../../shopify.server";
 
 import styles from "./styles.module.css";
 
+export const headers: HeadersFunction = () => ({
+  "Cache-Control": "no-store",
+});
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
+  const shop = url.searchParams.get("shop");
 
-  if (url.searchParams.get("shop")) {
-    throw redirect(`/app?${url.searchParams.toString()}`);
+  if (shop) {
+    // Reconstruct `host` if missing — the SDK requires it for embedded auth.
+    // After an OAuth callback, `host` is not in the redirect URL, so we
+    // derive it from the shop subdomain (e.g. "2ed20e" from 2ed20e.myshopify.com).
+    if (!url.searchParams.get("host")) {
+      const shopId = shop.split(".")[0];
+      const host = Buffer.from(
+        `admin.shopify.com/store/${shopId}`
+      ).toString("base64");
+      url.searchParams.set("host", host);
+    }
+    throw redirect(`/app?${url.searchParams.toString()}`, {
+      headers: { "Cache-Control": "no-store" },
+    });
   }
 
   return { showForm: Boolean(login) };

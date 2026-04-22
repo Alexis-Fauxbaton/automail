@@ -13,6 +13,7 @@
 
 import type OpenAI from "openai";
 import { getOpenAIClient, trackedChatCompletion, type TrackedCallContext } from "../../llm/client";
+import { safeFetch } from "../../net/safe-fetch";
 import type { TrackingFacts } from "../types";
 
 const SYSTEM_PROMPT = `You are a parcel tracking specialist. Given raw text extracted from a carrier tracking page, extract the current delivery status.
@@ -64,15 +65,18 @@ function htmlToText(html: string): string {
 }
 
 async function fetchTrackingPage(url: string): Promise<string | null> {
+  // The URL originates from Shopify fulfillment data, which is merchant-
+  // controlled. Route it through safeFetch so a malicious / misconfigured
+  // tracking URL cannot hit cloud metadata endpoints or RFC1918 hosts.
   try {
-    const response = await fetch(url, {
+    const response = await safeFetch(url, {
+      timeoutMs: 8000,
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml",
         "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
       },
-      signal: AbortSignal.timeout(8000),
     });
     if (!response.ok) return null;
     const html = await response.text();
