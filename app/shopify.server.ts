@@ -7,12 +7,11 @@ import {
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
 import prisma from "./db.server";
 
-// Scopes are hardcoded here as the canonical source of truth.
-// process.env.SCOPES is kept as an optional override for local dev.
+// Minimum scopes needed for a read-only support copilot.
+// Do NOT add write_* scopes unless a feature explicitly requires them —
+// unnecessary write access triggers extra scrutiny in the App Store review
+// and erodes merchant trust.
 const REQUIRED_SCOPES = [
-  "write_products",
-  "write_metaobjects",
-  "write_metaobject_definitions",
   "read_orders",
   "read_all_orders",
   "read_customers",
