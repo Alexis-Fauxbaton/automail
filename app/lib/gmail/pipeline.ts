@@ -491,7 +491,12 @@ async function classifyAndDraft(
     if (trueLatest && trueLatest.id !== record.id) {
       trueLatestBody = trueLatest.bodyText;
     }
-    agentHasReplied = (threadStateForClassify?.outgoingCount ?? 0) > 0;
+    // "Agent replied" must mean "replied AFTER this message". A stale
+    // outgoing message from earlier in the thread must not flip the flag.
+    const lastAgentIso = threadStateForClassify?.lastAgentMessageAt;
+    if (lastAgentIso) {
+      agentHasReplied = new Date(lastAgentIso).getTime() > record.receivedAt.getTime();
+    }
   }
 
   const classification = await classifyEmail(msg.subject, msg.bodyText, {
@@ -583,6 +588,9 @@ async function classifyAndDraft(
       data: {
         processingStatus: "analyzed",
         analysisResult: JSON.stringify(analysis),
+        // Promoted column — kept in sync with the JSON blob so SQL
+        // dashboards / rules don't have to parse it.
+        detectedIntent: analysis.intent,
         draftReply: analysis.draftReply,
       },
     });
@@ -628,26 +636,35 @@ async function buildThreadContext(
   mailboxAddress: string,
   client?: MailClient,
 ): Promise<{ body: string; messages: ConversationMessage[] }> {
+  // Resolve the semantic "target" of this analysis: it's the latest
+  // incoming message that passed Tier 1, as computed by thread-state.
+  // Falls back to the currently-processed record when no target is set
+  // (e.g. first message in a fresh thread).
+  const targetEmailId = await resolveTargetEmailId(
+    canonicalThreadId,
+    currentEmailId,
+  );
+  const targetRecord = await prisma.incomingEmail.findUnique({
+    where: { id: targetEmailId },
+    select: { externalMessageId: true },
+  });
+  const targetExternalId = targetRecord?.externalMessageId ?? "";
+
   // --- 1. Try provider API for the full thread (incoming + outgoing) ---
   if (threadId && client) {
     try {
       const threadMessages = await client.getThreadMessages(threadId);
       if (threadMessages.length > 0) {
-        const currentRecord = await prisma.incomingEmail.findUnique({
-          where: { id: currentEmailId },
-          select: { externalMessageId: true },
-        });
-        const currentExternalId = currentRecord?.externalMessageId ?? "";
-
         // Sort chronologically (provider may already do it, but be safe)
         threadMessages.sort(
           (a, b) => a.receivedAt.getTime() - b.receivedAt.getTime(),
         );
 
-        // Determine "latest": prefer the message matching the currently-processed email;
-        // otherwise use the most recent one.
+        // "Latest" = the target message (semantic anchor for classify/draft).
+        // If the provider thread doesn't contain the target (stale cache,
+        // external-id mismatch), fall back to the most recent message.
         let latestIdx = threadMessages.findIndex(
-          (m) => m.id === currentExternalId,
+          (m) => m.id === targetExternalId,
         );
         if (latestIdx === -1) latestIdx = threadMessages.length - 1;
 
@@ -730,7 +747,7 @@ async function buildThreadContext(
   for (const email of threadEmails) {
     const direction = getMessageDirection(email.fromAddress, mailboxAddress);
     const date = email.receivedAt.toISOString();
-    const isLatest = email.id === currentEmailId;
+    const isLatest = email.id === targetEmailId;
     const label = isLatest ? "Latest message" : "Earlier message";
     const directionLabel = direction.toUpperCase();
 
@@ -838,6 +855,7 @@ export async function reanalyzeEmail(
       processingStatus: "analyzed",
       tier2Result: "support_client",
       analysisResult: JSON.stringify(analysis),
+      detectedIntent: analysis.intent,
       draftReply: analysis.draftReply,
     },
   });
@@ -864,4 +882,19 @@ function getMessageDirection(
   if (!from) return "unknown";
   if (!mailbox) return "unknown";
   return from === mailbox ? "outgoing" : "incoming";
+}
+
+/**
+ * Resolve the "target" message id: the semantic anchor of a thread's
+ * analysis. Source of truth is thread-state.targetMessageId (the latest
+ * incoming that passed Tier 1). Falls back to the currently-processed
+ * record when no target is set yet.
+ */
+async function resolveTargetEmailId(
+  canonicalThreadId: string | null,
+  currentEmailId: string,
+): Promise<string> {
+  if (!canonicalThreadId) return currentEmailId;
+  const state = await readStructuredState(canonicalThreadId);
+  return state?.targetMessageId ?? currentEmailId;
 }
