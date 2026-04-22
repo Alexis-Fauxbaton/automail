@@ -5,10 +5,10 @@ import { Form, useActionData, useLoaderData, useNavigation, useRevalidator } fro
 import { authenticate } from "../shopify.server";
 import { getAuthUrl as getGmailAuthUrl, getConnection, deleteConnection } from "../lib/gmail/auth";
 import { getZohoAuthUrl } from "../lib/zoho/auth";
-import { processNewEmails, reanalyzeEmail, type ProcessingReport } from "../lib/gmail/pipeline";
+import { reanalyzeEmail, type ProcessingReport } from "../lib/gmail/pipeline";
 import { refineDraft } from "../lib/gmail/refine-draft";
 import { runDiagnosis, type DiagnosisReport } from "../lib/gmail/diagnose";
-import { runManualBackfill } from "../lib/mail/backfill";
+import { enqueueJob } from "../lib/mail/job-queue";
 import { AnalysisDisplay } from "../components/SupportAnalysisDisplay";
 import type { SupportAnalysisExtended } from "../lib/support/orchestrator";
 import type { MailProvider } from "../lib/mail/types";
@@ -111,28 +111,26 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       // Reset cursor + backfill flag so onboarding backfill re-runs.
       data: { historyId: null, lastSyncAt: null, onboardingBackfillDoneAt: null },
     });
-    // Fire and forget: first do a 14-day fresh sync, then the auto-sync
-    // loop will pick up the onboarding backfill (60d) on its next tick.
-    processNewEmails(session.shop, admin).catch((err) =>
-      console.error("[inbox/resync] background error:", err),
-    );
+    // Enqueue a durable resync job. The auto-sync worker picks it up on
+    // the next tick — survives a process restart, unlike the previous
+    // fire-and-forget Promise.
+    await enqueueJob(session.shop, "resync");
     return { syncStarted: true, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
   }
 
   if (intent === "sync") {
-    // Fire and forget — avoids Cloudflare 524 timeout on large mailboxes.
-    processNewEmails(session.shop, admin).catch((err) =>
-      console.error("[inbox/sync] background error:", err),
-    );
+    // Enqueue instead of calling the pipeline inline: avoids Cloudflare
+    // 524 timeouts on large mailboxes AND survives a restart.
+    await enqueueJob(session.shop, "sync");
     return { syncStarted: true, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
   }
 
   if (intent === "backfill") {
     const days = Number(formData.get("days") ?? "60");
     const afterDate = new Date(Date.now() - Math.max(1, days) * 24 * 3600_000);
-    runManualBackfill(session.shop, afterDate).catch((err) =>
-      console.error("[inbox/backfill] background error:", err),
-    );
+    await enqueueJob(session.shop, "backfill", {
+      afterDateIso: afterDate.toISOString(),
+    });
     return {
       syncStarted: true,
       report: null,
