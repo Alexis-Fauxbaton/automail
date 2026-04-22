@@ -1,5 +1,6 @@
 import prisma from "../../db.server";
 import { encrypt, decrypt } from "../gmail/crypto";
+import { signOAuthState } from "../mail/oauth-state";
 
 function getZohoAccountsDomain(): string {
   const apiDomain = process.env.ZOHO_API_DOMAIN || "mail.zoho.com";
@@ -34,7 +35,8 @@ export function getZohoAuthUrl(shop: string): string {
     redirect_uri: getRedirectUri(),
     access_type: "offline",
     prompt: "consent",
-    state: `zoho:${shop}`,
+    // HMAC-signed state — see lib/mail/oauth-state.ts for the rationale.
+    state: signOAuthState("zoho", shop),
   });
   return `https://${getZohoAccountsDomain()}/oauth/v2/auth?${params.toString()}`;
 }

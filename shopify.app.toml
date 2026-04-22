@@ -19,6 +19,11 @@ api_version = "2025-10"
   topics = [ "app/uninstalled" ]
   uri = "/webhooks/app/uninstalled"
 
+[webhooks.privacy_compliance]
+customer_data_request_url = "/webhooks/customers/data_request"
+customer_deletion_url = "/webhooks/customers/redact"
+shop_deletion_url = "/webhooks/shop/redact"
+
 [access_scopes]
 scopes = "read_orders,read_all_orders,read_customers,read_fulfillments"
 

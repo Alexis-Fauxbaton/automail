@@ -7,6 +7,18 @@ import { login } from "../../shopify.server";
 import { loginErrorMessage } from "./error.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
+  // Inject `host` if missing so the SDK doesn't bail out to the login page
+  // after OAuth callbacks that omit the host param.
+  const url = new URL(request.url);
+  const shop = url.searchParams.get("shop");
+  if (shop && !url.searchParams.get("host")) {
+    const shopId = shop.split(".")[0];
+    const host = Buffer.from(`admin.shopify.com/store/${shopId}`).toString("base64");
+    url.searchParams.set("host", host);
+    const patchedRequest = new Request(url.toString(), request);
+    const errors = loginErrorMessage(await login(patchedRequest));
+    return { errors };
+  }
   const errors = loginErrorMessage(await login(request));
 
   return { errors };

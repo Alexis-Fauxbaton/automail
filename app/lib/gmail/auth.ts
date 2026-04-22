@@ -1,6 +1,7 @@
 import { google } from "googleapis";
 import prisma from "../../db.server";
 import { encrypt, decrypt } from "./crypto";
+import { signOAuthState } from "../mail/oauth-state";
 
 function getOAuth2Client() {
   const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -27,7 +28,9 @@ export function getAuthUrl(shop: string): string {
     access_type: "offline",
     prompt: "consent",
     scope: SCOPES,
-    state: `gmail:${shop}`,
+    // HMAC-signed state binds the callback to this server: an attacker
+    // cannot mint a state for an arbitrary shop.
+    state: signOAuthState("gmail", shop),
   });
 }
 

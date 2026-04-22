@@ -1,28 +1,37 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { redirect } from "react-router";
+import { verifyOAuthState } from "../lib/mail/oauth-state";
 
+/**
+ * Public OAuth callback for Gmail / Zoho.
+ *
+ * The route is necessarily public (Google/Zoho redirect here from outside
+ * our app's authenticated admin zone). Security rests entirely on:
+ *   1. HMAC-signed `state` (see lib/mail/oauth-state.ts): guarantees the
+ *      `shop` we bind tokens to was issued by this server. Without this,
+ *      an attacker could forge a state for a victim shop and end up
+ *      binding their own mailbox to that shop.
+ *   2. State TTL (10 min): shrinks replay window if a state ever leaks.
+ *   3. Provider-specific token exchange: the authorization code is
+ *      single-use and verified by the provider against the redirect URI.
+ */
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const rawState = url.searchParams.get("state") ?? "";
 
-  console.log("[mail-auth] OAuth callback received, state:", rawState);
-
   if (!code || !rawState) {
     return redirect("/app/inbox?error=missing_params");
   }
 
-  let provider: "gmail" | "zoho" = "gmail";
-  let shop = rawState;
-  if (rawState.startsWith("zoho:")) {
-    provider = "zoho";
-    shop = rawState.slice(5);
-  } else if (rawState.startsWith("gmail:")) {
-    provider = "gmail";
-    shop = rawState.slice(6);
+  const verified = verifyOAuthState(rawState);
+  if (!verified) {
+    console.warn("[mail-auth] rejected invalid OAuth state");
+    return redirect("/app/inbox?error=invalid_state");
   }
 
-  console.log(`[mail-auth] Exchanging ${provider} token for shop ${shop}`);
+  const { provider, shop } = verified;
+  console.log(`[mail-auth] ${provider} callback for shop=${shop}`);
 
   try {
     if (provider === "zoho") {
@@ -39,15 +48,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       await saveConnection(shop, tokens);
     }
 
-    // Redirect to Shopify admin embedded app URL
     const storeName = shop.replace(".myshopify.com", "");
     const apiKey = process.env.SHOPIFY_API_KEY || "";
     const adminUrl = `https://admin.shopify.com/store/${storeName}/apps/${apiKey}/app/inbox?connected=true`;
-    console.log(`[mail-auth] Success, redirecting to ${adminUrl}`);
-
     return redirect(adminUrl);
   } catch (err) {
-    console.error("[mail-auth] Token exchange failed:", err);
+    console.error(`[mail-auth] ${provider} token exchange failed:`, err);
     return redirect("/app/inbox?error=auth_failed");
   }
 };
