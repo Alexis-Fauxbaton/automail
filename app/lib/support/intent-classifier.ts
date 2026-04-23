@@ -61,8 +61,11 @@ const RULES: Rule[] = [
     intent: "where_is_my_order",
     keywords: [
       /where is my order/i,
+      /where is my (package|parcel|shipment)/i,
+      /where'?s my (order|package|parcel)/i,
       /track(?:ing)? (?:my )?order/i,
       /o[uù] est ma commande/i,
+      /o[uù] est mon colis/i,
       /suivi/i,
       /status of my order/i,
       /statut de ma commande/i,

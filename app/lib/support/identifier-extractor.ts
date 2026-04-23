@@ -6,6 +6,10 @@ import type { ExtractedIdentifiers, ParsedEmail } from "./types";
 const ORDER_WITH_HASH = /#\s?(\d{3,10})\b/i;
 const ORDER_WITH_KEYWORD =
   /\b(?:order|commande|cmd|n[°o]\.?|numero|num[eé]ro)\s*[:#]?\s*(\d{3,10})\b/i;
+// Longer French / English phrases where the number follows a connector word.
+// e.g. "numéro de commande est 1234", "order number is 9999"
+const ORDER_WITH_PHRASE =
+  /\b(?:num[eé]ro\s+de\s+commande|order\s+(?:number|no\.?))\s*(?:est|is|:)?\s*(\d{3,10})\b/i;
 
 const EMAIL_RE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
 
@@ -26,9 +30,11 @@ const CARRIER_PATTERNS: RegExp[] = [
   /\b[A-Z]{2}\d{9}[A-Z]{2}\b/,
 ];
 
-// "I am John Doe" / "Je m'appelle Jean Dupont" / "from John Doe"
+// "I am John Doe" / "Je m’appelle Jean Dupont" / "from John Doe"
+// [\u0027\u2019] covers both straight (‘) and curly (‘) apostrophes from email clients.
+// /ui: Unicode + case-insensitive so sentence-case keywords ("I am", "Je m’appelle") match too.
 const NAME_RE =
-  /\b(?:my name is|i am|i'm|je m'appelle|je suis|from)\s+([A-ZÀ-ÖØ-Þ][\p{L}'’-]+(?:\s+[A-ZÀ-ÖØ-Þ][\p{L}'’-]+){0,2})/u;
+  /\b(?:my name is|i am|i[\u0027\u2019]m|je m[\u0027\u2019]appelle|je suis|from)\s+([A-ZÀ-ÖØ-Þ][\p{L}\u0027\u2019-]+(?:\s+[A-ZÀ-ÖØ-Þ][\p{L}\u0027\u2019-]+){0,2})/ui;
 
 // --- Extractor -------------------------------------------------------------
 
@@ -38,10 +44,13 @@ export function extractIdentifiers(parsed: ParsedEmail): ExtractedIdentifiers {
 
   const orderHash = source.match(ORDER_WITH_HASH);
   const orderKeyword = !orderHash ? source.match(ORDER_WITH_KEYWORD) : null;
+  const orderPhrase = !orderHash && !orderKeyword ? source.match(ORDER_WITH_PHRASE) : null;
   if (orderHash) {
     result.orderNumber = orderHash[1];
   } else if (orderKeyword) {
     result.orderNumber = orderKeyword[1];
+  } else if (orderPhrase) {
+    result.orderNumber = orderPhrase[1];
   }
 
   const email = source.match(EMAIL_RE);
