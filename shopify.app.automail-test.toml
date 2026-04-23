@@ -2,7 +2,7 @@
 
 client_id = "01efe84af5b21eb4f61fe827ef194448"
 name = "automail-test"
-application_url = "https://bread-omaha-fee-handled.trycloudflare.com"
+application_url = "https://bugs-stan-curtis-northern.trycloudflare.com"
 embedded = true
 
 [build]
@@ -32,7 +32,7 @@ use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [
-  "https://bread-omaha-fee-handled.trycloudflare.com/",
-  "https://bread-omaha-fee-handled.trycloudflare.com/auth/callback",
-  "https://bread-omaha-fee-handled.trycloudflare.com/auth/shopify/callback",
+  "https://bugs-stan-curtis-northern.trycloudflare.com/",
+  "https://bugs-stan-curtis-northern.trycloudflare.com/auth/callback",
+  "https://bugs-stan-curtis-northern.trycloudflare.com/auth/shopify/callback",
 ]
