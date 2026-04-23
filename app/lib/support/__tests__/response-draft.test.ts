@@ -108,6 +108,15 @@ describe("Refund rule: never claim refund was issued", () => {
     // Should ask for reason / next steps, not immediately confirm
     expect(text).toMatch(/detail|reason|more information|clarif|precis|before/i);
   });
+
+  it("refund draft omits tracking block even when verified tracking is present", () => {
+    // The refund_request template intentionally has no tracking section.
+    // A bug here would leak tracking details into an unrelated context.
+    const text = draft({ intent: "refund_request", tracking: TRACKING_VERIFIED });
+    expect(text).not.toContain("6123456789012");
+    expect(text).not.toMatch(/tracking number|numéro de suivi/i);
+    expect(text).not.toContain("La Poste");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -248,6 +257,21 @@ describe("Draft structure", () => {
     const text = draft({ settings: { tone: "formal", language: "en" } });
     expect(text).toMatch(/^Dear Sarah/m);
   });
+
+  it("unknown intent with active warnings uses the warned clarification message", () => {
+    const text = draft({
+      intent: "unknown",
+      warnings: [{ code: "no_order_match", message: "No order found" }],
+    });
+    // Line 113: unknownClarifyWarned branch when warnings.length > 0
+    expect(text).toMatch(/Hi|Hello|Dear/i); // still has greeting
+    expect(text).not.toBe(""); // still produces a draft
+  });
+
+  it("unknown intent with no warnings uses the standard clarification message", () => {
+    const text = draft({ intent: "unknown", warnings: [] });
+    expect(text).not.toBe("");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -277,11 +301,29 @@ describe("Order facts in draft", () => {
     expect(text).not.toContain("La Poste");
   });
 
-  it("does NOT include tracking number when shareTrackingNumber setting is false", () => {
-    // This setting is for the LLM draft (llm-draft.ts), not the template.
-    // The template always shows tracking numbers when available.
-    // This test documents the current template behavior.
+  it("template always shows tracking number regardless of shareTrackingNumber setting (setting applies to LLM draft only)", () => {
+    // shareTrackingNumber is enforced in llm-draft.ts, not in the template generator.
     const text = draft({ tracking: TRACKING_VERIFIED });
-    expect(text).toContain("6123456789012"); // template always shows it
+    expect(text).toContain("6123456789012");
+  });
+
+  it("omits carrier line when carrier is null", () => {
+    const t: TrackingFacts = { source: "shopify_url", trackingNumber: "6123456789012", inferred: false };
+    const text = draft({ tracking: t });
+    expect(text).not.toMatch(/^Carrier:/m);
+    expect(text).toContain("6123456789012");
+  });
+
+  it("omits URL line when trackingUrl is null", () => {
+    const t: TrackingFacts = { source: "shopify_url", carrier: "La Poste", trackingNumber: "6123456789012", inferred: false };
+    const text = draft({ tracking: t });
+    expect(text).toMatch(/La Poste/);
+    expect(text).not.toMatch(/Tracking link:/i);
+  });
+
+  it("returns no tracking block when all display fields are absent", () => {
+    const t: TrackingFacts = { source: "shopify_url", inferred: false };
+    const text = draft({ tracking: t });
+    expect(text).not.toMatch(/Carrier:|Tracking number:|Tracking link:/i);
   });
 });

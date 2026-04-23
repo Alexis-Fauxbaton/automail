@@ -111,6 +111,16 @@ describe("extractIdentifiers", () => {
     expect(result.customerName).toBe("Pierre");
   });
 
+  // --- 13-digit numbers: cannot be both order number and tracking number ---
+  it("13-digit number with # prefix is NOT captured as order number (regex limit is 10 digits)", () => {
+    // ORDER_WITH_HASH = /\d{3,10}/ — intentionally capped at 10 digits to avoid
+    // conflating tracking numbers with Shopify order numbers. A 13-digit # value
+    // is therefore captured only as a carrier tracking number, never an orderNumber.
+    const result = extract("#6123456789012", "my order #6123456789012 has not arrived");
+    expect(result.orderNumber).toBeUndefined();
+    expect(result.trackingNumber).toBe("6123456789012");
+  });
+
   // --- Empty / combined ---
   it("returns empty object on empty input", () => {
     expect(extract("", "")).toEqual({});

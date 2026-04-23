@@ -110,11 +110,11 @@ export const EMAIL_SCENARIOS: EmailScenario[] = [
  * Subset used for pipeline tests (scenarios with expected Shopify results).
  */
 export const PIPELINE_SCENARIOS = {
-  wimoOrderFound: EMAIL_SCENARIOS[0],   // S1
-  wimoFrench: EMAIL_SCENARIOS[1],       // S2
-  deliveryDelay: EMAIL_SCENARIOS[2],    // S3
-  markedDelivered: EMAIL_SCENARIOS[4],  // S5
-  packageStuck: EMAIL_SCENARIOS[5],     // S6
-  refundRequest: EMAIL_SCENARIOS[6],    // S7
-  noIdentifiers: EMAIL_SCENARIOS[7],    // S8
+  wimoOrderFound: EMAIL_SCENARIOS.find((s) => s.id === "S1")!,
+  wimoFrench: EMAIL_SCENARIOS.find((s) => s.id === "S2")!,
+  deliveryDelay: EMAIL_SCENARIOS.find((s) => s.id === "S3")!,
+  markedDelivered: EMAIL_SCENARIOS.find((s) => s.id === "S5")!,
+  packageStuck: EMAIL_SCENARIOS.find((s) => s.id === "S6")!,
+  refundRequest: EMAIL_SCENARIOS.find((s) => s.id === "S7")!,
+  noIdentifiers: EMAIL_SCENARIOS.find((s) => s.id === "S8")!,
 };

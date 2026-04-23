@@ -2,7 +2,7 @@
 
 client_id = "ee0f8b1cc6e2ec5052d6b54358c4355e"
 name = "automail"
-application_url = "https://automail-vc6z.onrender.com"
+application_url = "https://automail-vc6z.onrender.com/app/inbox"
 embedded = true
 
 [build]

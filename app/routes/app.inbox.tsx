@@ -5,7 +5,7 @@ import { Form, useActionData, useFetcher, useLoaderData, useNavigation, useReval
 import { authenticate } from "../shopify.server";
 import { getAuthUrl as getGmailAuthUrl, getConnection, deleteConnection } from "../lib/gmail/auth";
 import { getZohoAuthUrl } from "../lib/zoho/auth";
-import { reanalyzeEmail, processNewEmails, type ProcessingReport } from "../lib/gmail/pipeline";
+import { reanalyzeEmail, redraftEmail, processNewEmails, type ProcessingReport } from "../lib/gmail/pipeline";
 import { refineDraft } from "../lib/gmail/refine-draft";
 import { runDiagnosis, type DiagnosisReport } from "../lib/gmail/diagnose";
 import { enqueueJob } from "../lib/mail/job-queue";
@@ -328,6 +328,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const emailId = String(formData.get("emailId") ?? "");
     const analysis = await reanalyzeEmail(emailId, admin, session.shop);
     return { reanalyzed: { emailId, analysis }, report: null, disconnected: false, refined: null };
+  }
+
+  if (intent === "redraft") {
+    const emailId = String(formData.get("emailId") ?? "");
+    await redraftEmail(emailId, session.shop);
+    return { reanalyzed: null, report: null, disconnected: false, refined: null };
   }
 
   if (intent === "refine") {
@@ -1007,18 +1013,18 @@ function MoveThreadControl({
   previousOperationalState: string | null;
 }) {
   const isResolved = bucket === "resolved";
-  // When reopening a manually resolved thread, restore previous state.
-  // For auto-resolved (7-day waiting_customer), default to waiting_merchant.
   const reopenTarget = previousOperationalState ?? "waiting_merchant";
+  const moveFetcher = useFetcher();
+  const moving = moveFetcher.state !== "idle";
   return (
-    <Form method="post" style={{ display: "inline" }}>
+    <moveFetcher.Form method="post" style={{ display: "inline" }}>
       <input type="hidden" name="_action" value="moveThread" />
       <input type="hidden" name="canonicalThreadId" value={canonicalThreadId} />
       <input type="hidden" name="target" value={isResolved ? reopenTarget : "resolved"} />
-      <s-button type="submit" variant="plain" size="slim">
+      <s-button type="submit" variant="plain" size="slim" {...(moving ? { loading: true } : {})}>
         {isResolved ? "Reopen" : "Mark as resolved"}
       </s-button>
-    </Form>
+    </moveFetcher.Form>
   );
 }
 
@@ -1128,6 +1134,8 @@ function ThreadCard({
   const noReplyNeeded = latest.analysisResult?.conversation?.noReplyNeeded === true;
   const requiresReply = threadNeedsReply(thread, connectedEmail);
   const bucket = getOpsBucket(thread, threadState, connectedEmail);
+  const reanalyzeFetcher = useFetcher();
+  const isGenerating = reanalyzeFetcher.state !== "idle";
 
   // The "latest" email may be a new unanalyzed follow-up (e.g. waiting_merchant
   // after a customer reply). Find the most recent email that actually has
@@ -1268,13 +1276,18 @@ function ThreadCard({
             !noReplyNeeded &&
             !latest.tier1Result?.startsWith("filtered:") &&
             latest.tier2Result !== "probable_non_client" && (
-            <Form method="post">
-              <input type="hidden" name="_action" value="reanalyze" />
-              <input type="hidden" name="emailId" value={latest.id} />
-              <s-button type="submit" variant="primary" title="Once generated, the thread will move to &quot;To review&quot;">
-                {latest.processingStatus === "error" ? "Retry analysis" : "Generate draft"}
-              </s-button>
-            </Form>
+            <s-stack direction="inline" gap="small-300" blockAlign="center">
+              <reanalyzeFetcher.Form method="post">
+                <input type="hidden" name="_action" value="reanalyze" />
+                <input type="hidden" name="emailId" value={latest.id} />
+                <s-button type="submit" variant="primary" title="Once generated, the thread will move to &quot;To review&quot;" {...(isGenerating ? { loading: true } : {})}>
+                  {latest.processingStatus === "error" ? "Retry analysis" : "Generate draft"}
+                </s-button>
+              </reanalyzeFetcher.Form>
+              {isGenerating && (
+                <s-text variant="bodySm" tone="subdued">Le brouillon sera disponible dans "À traiter"</s-text>
+              )}
+            </s-stack>
           )}
         </s-stack>
 
@@ -1299,11 +1312,16 @@ function ThreadCard({
                       <s-badge tone="info">Latest</s-badge>
                     )}
                   </s-stack>
-                  <s-paragraph>
-                    {email.bodyText.length > 1500
-                      ? email.bodyText.slice(0, 1500) + "…"
-                      : email.bodyText}
-                  </s-paragraph>
+                  <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: "var(--p-font-size-300)", lineHeight: "var(--p-font-line-height-2)" }}>
+                    {(() => {
+                      const text = email.bodyText
+                        .replace(/\r\n/g, "\n")   // normalize CRLF
+                        .replace(/\r/g, "\n")     // normalize stray CR
+                        .replace(/\n[ \t]*(\n[ \t]*){2,}/g, "\n\n")  // collapse blank lines
+                        .trimEnd();
+                      return text.length > 1500 ? text.slice(0, 1500) + "…" : text;
+                    })()}
+                  </div>
                 </s-stack>
               </s-box>
             ))}
@@ -1356,13 +1374,18 @@ function ThreadCard({
               !noReplyNeeded &&
               !latest.tier1Result?.startsWith("filtered:") &&
               latest.tier2Result !== "probable_non_client" && (
-              <Form method="post">
-                <input type="hidden" name="_action" value="reanalyze" />
-                <input type="hidden" name="emailId" value={latest.id} />
-                <s-button type="submit" variant="primary" title="Once generated, the thread will move to &quot;To review&quot;">
-                  {latest.processingStatus === "error" ? "Retry analysis" : "Generate draft"}
-                </s-button>
-              </Form>
+              <s-stack direction="inline" gap="small-300" blockAlign="center">
+                <reanalyzeFetcher.Form method="post">
+                  <input type="hidden" name="_action" value="reanalyze" />
+                  <input type="hidden" name="emailId" value={latest.id} />
+                  <s-button type="submit" variant="primary" title="Once generated, the thread will move to &quot;To review&quot;" {...(isGenerating ? { loading: true } : {})}>
+                    {latest.processingStatus === "error" ? "Retry analysis" : "Generate draft"}
+                  </s-button>
+                </reanalyzeFetcher.Form>
+                {isGenerating && (
+                  <s-text variant="bodySm" tone="subdued">Le brouillon sera disponible dans "À traiter"</s-text>
+                )}
+              </s-stack>
             )}
 
             {/* Re-analyze — shown for misclassified or uncertain emails (even if they already have a draft) */}
@@ -1387,10 +1410,17 @@ function DraftBlock({ email }: { email: SerializedEmail }) {
   const currentVersion = allVersions[versionIndex] ?? email.draftReply!;
   const isLatest = versionIndex === allVersions.length - 1;
   const total = allVersions.length;
+
+  // Jump to latest version automatically when a new draft is added (e.g. after AI refinement)
+  useEffect(() => {
+    setVersionIndex(allVersions.length - 1);
+  }, [allVersions.length]);
   const refineFetcher = useFetcher();
   const regenerateFetcher = useFetcher();
+  const redraftFetcher = useFetcher();
   const refining = refineFetcher.state !== "idle";
   const regenerating = regenerateFetcher.state !== "idle";
+  const redrafting = redraftFetcher.state !== "idle";
 
   return (
     <s-box padding="base" borderWidth="base" borderRadius="base">
@@ -1449,14 +1479,24 @@ function DraftBlock({ email }: { email: SerializedEmail }) {
           </refineFetcher.Form>
         )}
 
-        {/* Regenerate — re-runs the full pipeline (fresh Shopify + 17track data) */}
-        <regenerateFetcher.Form method="post">
-          <input type="hidden" name="_action" value="reanalyze" />
-          <input type="hidden" name="emailId" value={email.id} />
-          <s-button type="submit" variant="plain" size="slim" disabled={regenerating || refining}>
-            {regenerating ? "Regenerating…" : "Regenerate draft (refresh tracking)"}
-          </s-button>
-        </regenerateFetcher.Form>
+        {/* Regenerate draft + Refresh context — inline, separated from Refine */}
+        <div style={{ display: "flex", gap: "8px", borderTop: "1px solid var(--p-color-border)", paddingTop: "8px" }}>
+          <redraftFetcher.Form method="post">
+            <input type="hidden" name="_action" value="redraft" />
+            <input type="hidden" name="emailId" value={email.id} />
+            <s-button type="submit" variant="secondary" size="slim" disabled={redrafting || regenerating || refining}>
+              {redrafting ? "Regenerating…" : "Regenerate draft"}
+            </s-button>
+          </redraftFetcher.Form>
+
+          <regenerateFetcher.Form method="post">
+            <input type="hidden" name="_action" value="reanalyze" />
+            <input type="hidden" name="emailId" value={email.id} />
+            <s-button type="submit" variant="tertiary" size="slim" disabled={regenerating || redrafting || refining}>
+              {regenerating ? "Refreshing…" : "Refresh context"}
+            </s-button>
+          </regenerateFetcher.Form>
+        </div>
       </s-stack>
     </s-box>
   );

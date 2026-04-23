@@ -875,6 +875,50 @@ export async function reanalyzeEmail(
   return analysis;
 }
 
+/**
+ * Regenerate a draft reply from the existing analysisResult already stored in DB,
+ * without re-fetching Shopify or tracking data. Useful to get a fresh draft
+ * when the context is already up-to-date.
+ */
+export async function redraftEmail(emailId: string, shop: string): Promise<string> {
+  const record = await prisma.incomingEmail.findUnique({ where: { id: emailId } });
+  if (!record || record.shop !== shop) throw new Error("Email not found");
+  if (!record.analysisResult) throw new Error("No analysis result found — run Refresh context first");
+
+  const analysis = JSON.parse(record.analysisResult as string);
+
+  const { generateLLMDraft } = await import("../support/llm-draft");
+  const { getSettings } = await import("../support/settings");
+  const settings = await getSettings(shop);
+
+  const newDraft = await generateLLMDraft({
+    parsed: analysis.parsed ?? { subject: record.subject, body: record.bodyText, identifiers: {} },
+    intent: analysis.intent,
+    order: analysis.order ?? null,
+    orderCandidates: analysis.orderCandidates ?? [],
+    trackings: analysis.trackings ?? [],
+    crawledContexts: analysis.crawledContexts?.filter((c: { success: boolean }) => c.success) ?? [],
+    warnings: analysis.warnings ?? [],
+    settings,
+    conversationMessages: analysis.conversation?.messages ?? undefined,
+    trackedCallContext: { shop, emailId: record.id, threadId: record.threadId },
+  });
+
+  const currentHistory: string[] = (() => {
+    try { return JSON.parse(record.draftHistory || "[]"); } catch { return []; }
+  })();
+  const updatedHistory = record.draftReply
+    ? [...currentHistory, record.draftReply]
+    : currentHistory;
+
+  await prisma.incomingEmail.update({
+    where: { id: emailId },
+    data: { draftReply: newDraft, draftHistory: JSON.stringify(updatedHistory) },
+  });
+
+  return newDraft;
+}
+
 function getMessageDirection(
   fromAddress: string,
   mailboxAddress: string,

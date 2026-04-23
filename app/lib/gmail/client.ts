@@ -184,13 +184,13 @@ function extractPlainBody(payload: gmail_v1.Schema$MessagePart | undefined): str
 
   // Simple text/plain at top level
   if (payload.mimeType === "text/plain" && payload.body?.data) {
-    return decodeBase64Url(payload.body.data);
+    return normalizePlainText(decodeBase64Url(payload.body.data));
   }
 
   // Walk multipart
   for (const part of payload.parts ?? []) {
     if (part.mimeType === "text/plain" && part.body?.data) {
-      return decodeBase64Url(part.body.data);
+      return normalizePlainText(decodeBase64Url(part.body.data));
     }
     // Nested multipart
     if (part.parts) {
@@ -206,6 +206,14 @@ function extractPlainBody(payload: gmail_v1.Schema$MessagePart | undefined): str
   }
 
   return "";
+}
+
+function normalizePlainText(text: string): string {
+  return text
+    .replace(/\r\n/g, "\n")   // normalize CRLF → LF
+    .replace(/\r/g, "\n")     // normalize stray CR → LF
+    .replace(/\n[ \t]*(\n[ \t]*){2,}/g, "\n\n")  // collapse blank lines
+    .trimEnd();
 }
 
 /** Strip style/script blocks, HTML tags, and clean up whitespace. */

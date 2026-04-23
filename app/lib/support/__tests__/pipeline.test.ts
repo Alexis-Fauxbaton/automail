@@ -73,6 +73,7 @@ import { searchOrders } from "../shopify/order-search";
 import { getTrackingFacts } from "../tracking/tracking-service";
 import { llmParseEmail } from "../llm-parser";
 import { generateLLMDraft } from "../llm-draft";
+import { crawlContexts } from "../crawl/context-crawler";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -136,7 +137,7 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("Pipeline: order found by order number", () => {
-  it("S1 – WIMO, order found, verified tracking → high confidence", async () => {
+  it("S1 – WIMO, order found, no tracking data → medium confidence", async () => {
     vi.mocked(searchOrders).mockResolvedValue(SEARCH_RESULT_FULFILLED);
 
     const s = PIPELINE_SCENARIOS.wimoOrderFound;
@@ -305,6 +306,115 @@ describe("Pipeline: graceful degradation", () => {
 
     expect(warningCodes(result.warnings)).toContain("tracking_lookup_error");
     expect(result.order?.name).toBe("#1001"); // order still found
+    expect(result.draftReply).not.toBe("");
+  });
+
+  it("crawler failure → crawl_error warning, analysis still completes", async () => {
+    vi.mocked(searchOrders).mockResolvedValue(SEARCH_RESULT_FULFILLED);
+    vi.mocked(crawlContexts).mockRejectedValue(new Error("crawler down"));
+
+    const result = await analyzeSupportEmail({
+      subject: "Order #1001",
+      body: "Where is my order?",
+      admin: mockAdmin,
+    });
+
+    expect(warningCodes(result.warnings)).toContain("crawl_error");
+    expect(result.order?.name).toBe("#1001");
+    expect(result.draftReply).not.toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// threadResolution — thread-level identifier merging
+// ---------------------------------------------------------------------------
+
+describe("Pipeline: threadResolution", () => {
+  it("high-confidence thread resolution overrides per-message parser result", async () => {
+    vi.mocked(searchOrders).mockResolvedValue(SEARCH_RESULT_FULFILLED);
+
+    const result = await analyzeSupportEmail({
+      subject: "Hello",
+      body: "Can you help me?", // no order number in this message
+      admin: mockAdmin,
+      threadResolution: {
+        identifiers: { orderNumber: "1001" },
+        confidence: "high",
+      },
+    });
+
+    // Thread-level orderNumber should be used even though the body has none
+    expect(result.identifiers.orderNumber).toBe("1001");
+    expect(result.order?.name).toBe("#1001");
+  });
+
+  it("medium-confidence thread resolution also overrides per-message parser result", async () => {
+    vi.mocked(searchOrders).mockResolvedValue(SEARCH_RESULT_FULFILLED);
+
+    const result = await analyzeSupportEmail({
+      subject: "Hello",
+      body: "Can you help me?",
+      admin: mockAdmin,
+      threadResolution: {
+        identifiers: { orderNumber: "1001" },
+        confidence: "medium",
+      },
+    });
+
+    expect(result.identifiers.orderNumber).toBe("1001");
+    expect(result.order?.name).toBe("#1001");
+  });
+
+  it("low-confidence thread resolution does NOT override per-message parser result", async () => {
+    // confidence "low" → parser identifiers win over thread resolution.
+    // Here the body has an order number that differs from the thread's stale guess.
+    vi.mocked(searchOrders).mockResolvedValue(SEARCH_RESULT_FULFILLED);
+
+    const result = await analyzeSupportEmail({
+      subject: "Order #1001",
+      body: "Where is order #1001?",
+      admin: mockAdmin,
+      threadResolution: {
+        identifiers: { orderNumber: "9999" }, // stale/wrong thread resolution
+        confidence: "low",
+      },
+    });
+
+    // Parser found "1001" in the body; that wins over the low-confidence "9999".
+    expect(result.identifiers.orderNumber).toBe("1001");
+  });
+
+  it("pruneEmpty strips empty-string values from thread resolution", async () => {
+    vi.mocked(searchOrders).mockResolvedValue(SEARCH_RESULT_EMPTY);
+
+    const result = await analyzeSupportEmail({
+      subject: "Hello",
+      body: "Can you help me?",
+      admin: mockAdmin,
+      threadResolution: {
+        identifiers: { orderNumber: "", email: "" }, // empty strings must be stripped
+        confidence: "high",
+      },
+    });
+
+    // Empty strings pruned → no identifiers → no order match
+    expect(result.identifiers.orderNumber).toBeUndefined();
+    expect(result.identifiers.email).toBeUndefined();
+  });
+
+  it("no crash when order is null and getTrackingFacts is called", async () => {
+    vi.mocked(searchOrders).mockResolvedValue(SEARCH_RESULT_EMPTY);
+    // getTrackingFacts is called with null order — must not throw
+    vi.mocked(getTrackingFacts).mockResolvedValue([]);
+
+    const result = await analyzeSupportEmail({
+      subject: "Order #9999",
+      body: "Where is my order?",
+      admin: mockAdmin,
+    });
+
+    expect(result.order).toBeNull();
+    expect(result.trackings).toHaveLength(0);
     expect(result.draftReply).not.toBe("");
   });
 });

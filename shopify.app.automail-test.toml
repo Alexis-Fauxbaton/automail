@@ -2,7 +2,7 @@
 
 client_id = "01efe84af5b21eb4f61fe827ef194448"
 name = "automail-test"
-application_url = "https://once-nhs-holmes-airline.trycloudflare.com"
+application_url = "https://emacs-rough-district-peoples.trycloudflare.com/app/inbox"
 embedded = true
 
 [build]
@@ -32,7 +32,7 @@ use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [
-  "https://once-nhs-holmes-airline.trycloudflare.com/",
-  "https://once-nhs-holmes-airline.trycloudflare.com/auth/callback",
-  "https://once-nhs-holmes-airline.trycloudflare.com/auth/shopify/callback",
+  "https://emacs-rough-district-peoples.trycloudflare.com/",
+  "https://emacs-rough-district-peoples.trycloudflare.com/auth/callback",
+  "https://emacs-rough-district-peoples.trycloudflare.com/auth/shopify/callback",
 ]
