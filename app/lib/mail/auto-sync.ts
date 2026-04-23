@@ -21,6 +21,7 @@ import prisma from "../../db.server";
 import { processNewEmails } from "../gmail/pipeline";
 import { unauthenticated } from "../../shopify.server";
 import { runManualBackfill, runOnboardingBackfill } from "./backfill";
+import { recomputeAllOpenThreads } from "../support/thread-state";
 import {
   claimNextJob,
   enqueueJob,
@@ -74,7 +75,10 @@ async function tick(): Promise<void> {
   );
   // 2. Convert due periodic syncs into SyncJob rows (de-dup is inside enqueueJob).
   await enqueueDuePeriodicSyncs();
-  // 3. Execute pending jobs up to the concurrency limit.
+  // 3. Enqueue a recompute job for any shop that still has threads stuck
+  //    in the default "open" state (de-dup prevents duplicate jobs).
+  await enqueueRecomputeIfNeeded();
+  // 4. Execute pending jobs up to the concurrency limit.
   await drainJobQueue();
 }
 
@@ -127,10 +131,27 @@ async function drainJobQueue(): Promise<void> {
   }
 }
 
+/**
+ * For every shop that has threads still in the default "open" state
+ * (never recomputed), enqueue one "recompute" job. The de-dup inside
+ * `enqueueJob` ensures at most one pending/running job per shop at a time.
+ */
+async function enqueueRecomputeIfNeeded(): Promise<void> {
+  const staleShops = await prisma.thread.groupBy({
+    by: ["shop"],
+    where: { operationalState: "open" },
+  });
+  for (const { shop } of staleShops) {
+    await enqueueJob(shop, "recompute").catch((err) =>
+      console.error(`[auto-sync] enqueue recompute for ${shop} failed:`, err),
+    );
+  }
+}
+
 async function runJob(job: {
   id: string;
   shop: string;
-  kind: "sync" | "backfill" | "resync";
+  kind: "sync" | "backfill" | "resync" | "recompute";
   params: Record<string, unknown>;
 }): Promise<void> {
   runningShops.add(job.shop);
@@ -159,6 +180,19 @@ async function runJob(job: {
         const res = await runManualBackfill(job.shop, new Date(afterDateIso));
         console.log(
           `[auto-sync] shop=${job.shop} backfill: ingested=${res.ingested} skipped=${res.skipped}`,
+        );
+        break;
+      }
+      case "recompute": {
+        const conn = await prisma.mailConnection.findUnique({
+          where: { shop: job.shop },
+          select: { email: true },
+        });
+        const res = await recomputeAllOpenThreads(job.shop, {
+          mailboxAddress: conn?.email ?? "",
+        });
+        console.log(
+          `[auto-sync] shop=${job.shop} recompute: processed=${res.processed} errors=${res.errors}`,
         );
         break;
       }

@@ -1,17 +1,18 @@
 import { useEffect, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useActionData, useLoaderData, useNavigation, useRevalidator } from "react-router";
+import { Form, useActionData, useFetcher, useLoaderData, useNavigation, useRevalidator } from "react-router";
 
 import { authenticate } from "../shopify.server";
 import { getAuthUrl as getGmailAuthUrl, getConnection, deleteConnection } from "../lib/gmail/auth";
 import { getZohoAuthUrl } from "../lib/zoho/auth";
-import { reanalyzeEmail, type ProcessingReport } from "../lib/gmail/pipeline";
+import { reanalyzeEmail, processNewEmails, type ProcessingReport } from "../lib/gmail/pipeline";
 import { refineDraft } from "../lib/gmail/refine-draft";
 import { runDiagnosis, type DiagnosisReport } from "../lib/gmail/diagnose";
 import { enqueueJob } from "../lib/mail/job-queue";
 import { AnalysisDisplay } from "../components/SupportAnalysisDisplay";
 import type { SupportAnalysisExtended } from "../lib/support/orchestrator";
 import type { MailProvider } from "../lib/mail/types";
+import { decodeHtmlEntities } from "../lib/gmail/client";
 import prisma from "../db.server";
 
 // ---------------------------------------------------------------------------
@@ -25,13 +26,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   let emails: SerializedEmail[] = [];
   let threadStates: Record<string, SerializedThreadState> = {};
+  let priorContact: Record<string, { byAddress: boolean; byOrder: boolean }> = {};
   if (connection) {
     const rows = await prisma.incomingEmail.findMany({
       where: { shop },
       orderBy: { receivedAt: "desc" },
       take: 500,
     });
-    emails = rows.map(serializeEmail);
 
     const canonicalIds = Array.from(
       new Set(
@@ -40,23 +41,177 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           .filter((id): id is string => !!id),
       ),
     );
+
+    // For threads that appear in the 500-email window, also load the most
+    // recent analyzed email (with analysisResult) per thread — even if it
+    // sits outside the window. Without this, old analyzed emails (first
+    // customer complaint) are invisible and the analysis + draft blocks
+    // never render for long threads.
+    const existingIds = new Set(rows.map((r) => r.id));
+    let extraRows: typeof rows = [];
+    if (canonicalIds.length > 0) {
+      const analyzedPerThread = await prisma.incomingEmail.findMany({
+        where: {
+          shop,
+          canonicalThreadId: { in: canonicalIds },
+          analysisResult: { not: null },
+        },
+        orderBy: { receivedAt: "desc" },
+        distinct: ["canonicalThreadId"],
+      });
+      extraRows = analyzedPerThread.filter((r) => !existingIds.has(r.id));
+    }
+
+    emails = [...rows, ...extraRows].map(serializeEmail);
+    let threadCreatedAt = new Map<string, Date>();
     if (canonicalIds.length > 0) {
       const threads = await prisma.thread.findMany({
         where: { id: { in: canonicalIds } },
         select: {
           id: true,
+          createdAt: true,
           supportNature: true,
           operationalState: true,
+          previousOperationalState: true,
           historyStatus: true,
           resolvedOrderNumber: true,
           resolvedTrackingNumber: true,
+          resolvedEmail: true,
+          resolvedCustomerName: true,
           resolutionConfidence: true,
         },
       });
       threadStates = Object.fromEntries(
         threads.map((t) => [t.id, serializeThreadState(t)]),
       );
+      threadCreatedAt = new Map(threads.map((t) => [t.id, t.createdAt]));
     }
+
+    // Cross-thread prior contact: find customer addresses and order numbers
+    // that the shop has already replied to in OTHER threads (outgoing present).
+    // Done in DB so it covers all history, not just the 500-email window.
+    //
+    // Badge condition: the OTHER thread has an outgoing message sent BEFORE
+    // the current thread was created — i.e. we had already been in contact
+    // before this thread even started.
+    const outgoingRows = await prisma.incomingEmail.findMany({
+      where: { shop, processingStatus: "outgoing" },
+      select: { canonicalThreadId: true, receivedAt: true },
+    });
+    // Map: threadId → earliest AND latest outgoing date in that thread
+    const earliestOutgoingByThread = new Map<string, number>();
+    const latestOutgoingByThread = new Map<string, number>();
+    for (const r of outgoingRows) {
+      if (!r.canonicalThreadId) continue;
+      const t = r.receivedAt.getTime();
+      const prevEarliest = earliestOutgoingByThread.get(r.canonicalThreadId) ?? Infinity;
+      if (t < prevEarliest) earliestOutgoingByThread.set(r.canonicalThreadId, t);
+      const prevLatest = latestOutgoingByThread.get(r.canonicalThreadId) ?? -Infinity;
+      if (t > prevLatest) latestOutgoingByThread.set(r.canonicalThreadId, t);
+    }
+    const repliedCanonicalIds = [...earliestOutgoingByThread.keys()];
+
+    // Collect customer addresses that appeared in those replied threads
+    const repliedAddressRows = repliedCanonicalIds.length > 0
+      ? await prisma.incomingEmail.findMany({
+          where: {
+            shop,
+            canonicalThreadId: { in: repliedCanonicalIds },
+            processingStatus: { not: "outgoing" },
+          },
+          select: { fromAddress: true, canonicalThreadId: true },
+        })
+      : [];
+    // Map: lowercase address → set of threadIds where we replied.
+    // Shared system sender addresses (Shopify contact form forwards, etc.)
+    // are excluded: they're not real customer identities and would match
+    // every forwarded message, making the "same address" signal noise.
+    const SHARED_SYSTEM_ADDRESSES = new Set([
+      "mailer@shopify.com",
+      "noreply@shopify.com",
+      "no-reply@shopify.com",
+    ]);
+    const addressRepliedIn = new Map<string, Set<string>>();
+    for (const r of repliedAddressRows) {
+      if (!r.canonicalThreadId) continue;
+      const addr = r.fromAddress.toLowerCase();
+      if (SHARED_SYSTEM_ADDRESSES.has(addr)) continue;
+      if (!addressRepliedIn.has(addr)) addressRepliedIn.set(addr, new Set());
+      addressRepliedIn.get(addr)!.add(r.canonicalThreadId);
+    }
+    // Map: orderNumber → set of threadIds where we replied
+    const orderRepliedIn = new Map<string, Set<string>>();
+    if (repliedCanonicalIds.length > 0) {
+      const repliedThreadMeta = await prisma.thread.findMany({
+        where: { id: { in: repliedCanonicalIds } },
+        select: { id: true, resolvedOrderNumber: true },
+      });
+      for (const r of repliedThreadMeta) {
+        if (!r.resolvedOrderNumber) continue;
+        if (!orderRepliedIn.has(r.resolvedOrderNumber)) orderRepliedIn.set(r.resolvedOrderNumber, new Set());
+        orderRepliedIn.get(r.resolvedOrderNumber)!.add(r.id);
+      }
+    }
+    // Build lookup: canonicalThreadId → { byAddress, byOrder, recentReply }
+    // - byAddress / byOrder: other thread had an outgoing BEFORE this thread was created
+    // - recentReply: other thread had an outgoing AFTER the latest incoming of this
+    //   thread (relevant for to_process threads: we may have already replied elsewhere
+    //   after the customer sent this message)
+    const priorContactByThread: Record<string, { byAddress: boolean; byOrder: boolean; recentReply: boolean; matchedAddress: string | null }> = {};
+    for (const id of canonicalIds) {
+      const state = threadStates[id];
+      const currentCreatedAt = threadCreatedAt.get(id);
+      if (!currentCreatedAt) continue;
+      const incomingMsgs = rows.filter(
+        (r) => r.canonicalThreadId === id && r.processingStatus !== "outgoing",
+      );
+      const latestIncomingAt = incomingMsgs.reduce(
+        (max, r) => (r.receivedAt.getTime() > max ? r.receivedAt.getTime() : max),
+        0,
+      );
+      // Use the earliest real incoming message date as the reference point for "prior contact".
+      // thread.createdAt reflects the DB insertion time (backfill date), not the actual first
+      // customer message — using it would cause false positives for backfilled threads.
+      const earliestIncomingAt = incomingMsgs.reduce(
+        (min, r) => (r.receivedAt.getTime() < min ? r.receivedAt.getTime() : min),
+        Infinity,
+      );
+      const threadStartedAt = earliestIncomingAt < Infinity ? earliestIncomingAt : currentCreatedAt.getTime();
+      // Filter out shared system sender addresses: matching on them is noise,
+      // not a real customer-identity signal.
+      const addrs = incomingMsgs
+        .map((r) => r.fromAddress.toLowerCase())
+        .filter((a) => !SHARED_SYSTEM_ADDRESSES.has(a));
+      // Other thread sent outgoing BEFORE the first real message of this thread
+      const hadEarlierReply = (tid: string) =>
+        tid !== id && (earliestOutgoingByThread.get(tid) ?? Infinity) < threadStartedAt;
+      // Other thread sent outgoing AFTER latest incoming of this thread
+      const hasRecentReply = (tid: string) =>
+        tid !== id && latestIncomingAt > 0 &&
+        (latestOutgoingByThread.get(tid) ?? -Infinity) > latestIncomingAt;
+      let matchedAddress: string | null = null;
+      const byAddress = addrs.some((addr) => {
+        const ids = addressRepliedIn.get(addr);
+        const hit = ids ? [...ids].some(hadEarlierReply) : false;
+        if (hit && !matchedAddress) matchedAddress = addr;
+        return hit;
+      });
+      const byOrder = !!state?.resolvedOrderNumber && (() => {
+        const ids = orderRepliedIn.get(state.resolvedOrderNumber!);
+        return ids ? [...ids].some(hadEarlierReply) : false;
+      })();
+      const recentReply =
+        addrs.some((addr) => {
+          const ids = addressRepliedIn.get(addr);
+          return ids ? [...ids].some(hasRecentReply) : false;
+        }) ||
+        (!!state?.resolvedOrderNumber && (() => {
+          const ids = orderRepliedIn.get(state.resolvedOrderNumber!);
+          return ids ? [...ids].some(hasRecentReply) : false;
+        })());
+      if (byAddress || byOrder || recentReply) priorContactByThread[id] = { byAddress, byOrder, recentReply, matchedAddress };
+    }
+    priorContact = priorContactByThread;
   }
 
   // Build auth URLs for both providers (only shown when not connected)
@@ -66,6 +221,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     try { gmailAuthUrl = getGmailAuthUrl(shop); } catch { /* credentials not configured */ }
     try { zohoAuthUrl = getZohoAuthUrl(shop); } catch { /* credentials not configured */ }
   }
+
+  // Check if a heavy background job is still pending or running for this shop.
+  // This lets the UI warn the user that badges / states may not yet be final.
+  const activeHeavyJob = await prisma.syncJob.findFirst({
+    where: {
+      shop,
+      kind: { in: ["resync", "backfill", "recompute"] },
+      status: { in: ["pending", "running"] },
+    },
+    select: { kind: true },
+  });
+  const syncInProgress = !!activeHeavyJob;
 
   return {
     connected: !!connection,
@@ -79,6 +246,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     zohoAuthUrl,
     emails,
     threadStates,
+    priorContact,
+    syncInProgress,
   };
 };
 
@@ -119,10 +288,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "sync") {
-    // Enqueue instead of calling the pipeline inline: avoids Cloudflare
-    // 524 timeouts on large mailboxes AND survives a restart.
-    await enqueueJob(session.shop, "sync");
-    return { syncStarted: true, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
+    // Run inline — incremental sync with cursor is fast (seconds, not minutes).
+    // enqueueJob is reserved for heavy backfill/resync operations.
+    const report = await processNewEmails(session.shop, admin.graphql);
+    return { report, syncCompleted: true, disconnected: false, reanalyzed: null, refined: null, stopped: false };
   }
 
   if (intent === "backfill") {
@@ -187,6 +356,81 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return { refined: { emailId, newDraft, draftHistory: history }, report: null, disconnected: false, reanalyzed: null };
   }
 
+  if (intent === "moveThread") {
+    const canonicalThreadId = String(formData.get("canonicalThreadId") ?? "");
+    const target = String(formData.get("target") ?? "");
+    // Allowed operational states for manual override
+    const ALLOWED_STATES = new Set([
+      "waiting_merchant",
+      "waiting_customer",
+      "resolved",
+    ]);
+    if (!canonicalThreadId || !ALLOWED_STATES.has(target)) {
+      return { report: null, disconnected: false, reanalyzed: null, refined: null };
+    }
+    // When reopening (moving to waiting_merchant), ensure the thread is
+    // considered support so it doesn't fall into "other".
+    const forceSupport = target === "waiting_merchant" || target === "waiting_customer";
+    const thread = await prisma.thread.findUnique({
+      where: { id: canonicalThreadId },
+      select: { shop: true, supportNature: true, operationalState: true },
+    });
+    if (!thread || thread.shop !== session.shop) {
+      return { report: null, disconnected: false, reanalyzed: null, refined: null };
+    }
+    // When manually resolving, remember where the thread came from.
+    const previousOperationalState =
+      target === "resolved" ? (thread.operationalState ?? null) : null;
+    await prisma.thread.update({
+      where: { id: canonicalThreadId },
+      data: {
+        operationalState: target,
+        previousOperationalState,
+        operationalStateUpdatedAt: new Date(),
+        ...(forceSupport && thread.supportNature !== "confirmed_support"
+          ? { supportNature: "confirmed_support", supportNatureUpdatedAt: new Date() }
+          : {}),
+      },
+    });
+    return { movedThread: { canonicalThreadId, target }, report: null, disconnected: false, reanalyzed: null, refined: null };
+  }
+
+  if (intent === "editThreadIdentifiers") {
+    const canonicalThreadId = String(formData.get("canonicalThreadId") ?? "");
+    if (!canonicalThreadId) {
+      return { report: null, disconnected: false, reanalyzed: null, refined: null };
+    }
+    const thread = await prisma.thread.findUnique({
+      where: { id: canonicalThreadId },
+      select: { shop: true },
+    });
+    if (!thread || thread.shop !== session.shop) {
+      return { report: null, disconnected: false, reanalyzed: null, refined: null };
+    }
+    // Normalize: empty string → null. Strip leading '#' on order number.
+    const norm = (v: FormDataEntryValue | null): string | null => {
+      const s = (v == null ? "" : String(v)).trim();
+      return s === "" ? null : s;
+    };
+    const orderRaw = norm(formData.get("resolvedOrderNumber"));
+    const resolvedOrderNumber = orderRaw ? orderRaw.replace(/^#/, "").trim() || null : null;
+    const resolvedTrackingNumber = norm(formData.get("resolvedTrackingNumber"));
+    const resolvedEmail = norm(formData.get("resolvedEmail"))?.toLowerCase() ?? null;
+    const resolvedCustomerName = norm(formData.get("resolvedCustomerName"));
+    await prisma.thread.update({
+      where: { id: canonicalThreadId },
+      data: {
+        resolvedOrderNumber,
+        resolvedTrackingNumber,
+        resolvedEmail,
+        resolvedCustomerName,
+        // Merchant-provided values are ground truth.
+        resolutionConfidence: "high",
+      },
+    });
+    return { editedThread: { canonicalThreadId }, report: null, disconnected: false, reanalyzed: null, refined: null };
+  }
+
   return { report: null, disconnected: false, reanalyzed: null, refined: null };
 };
 
@@ -197,26 +441,35 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 interface SerializedThreadState {
   supportNature: string;
   operationalState: string;
+  previousOperationalState: string | null;
   historyStatus: string;
   resolvedOrderNumber: string | null;
   resolvedTrackingNumber: string | null;
+  resolvedEmail: string | null;
+  resolvedCustomerName: string | null;
   resolutionConfidence: string;
 }
 
 function serializeThreadState(t: {
   supportNature: string;
   operationalState: string;
+  previousOperationalState: string | null;
   historyStatus: string;
   resolvedOrderNumber: string | null;
   resolvedTrackingNumber: string | null;
+  resolvedEmail: string | null;
+  resolvedCustomerName: string | null;
   resolutionConfidence: string;
 }): SerializedThreadState {
   return {
     supportNature: t.supportNature,
     operationalState: t.operationalState,
+    previousOperationalState: t.previousOperationalState,
     historyStatus: t.historyStatus,
     resolvedOrderNumber: t.resolvedOrderNumber,
     resolvedTrackingNumber: t.resolvedTrackingNumber,
+    resolvedEmail: t.resolvedEmail,
+    resolvedCustomerName: t.resolvedCustomerName,
     resolutionConfidence: t.resolutionConfidence,
   };
 }
@@ -274,10 +527,10 @@ function serializeEmail(row: {
     threadId: row.threadId,
     canonicalThreadId: row.canonicalThreadId,
     fromAddress: row.fromAddress,
-    fromName: row.fromName,
-    subject: row.subject,
-    snippet: row.snippet,
-    bodyText: row.bodyText,
+    fromName: decodeHtmlEntities(row.fromName),
+    subject: decodeHtmlEntities(row.subject),
+    snippet: decodeHtmlEntities(row.snippet),
+    bodyText: decodeHtmlEntities(row.bodyText),
     receivedAt: row.receivedAt.toISOString(),
     tier1Result: row.tier1Result,
     tier2Result: row.tier2Result,
@@ -296,13 +549,13 @@ function serializeEmail(row: {
 
 // Secondary classification filter, kept from the previous UI.
 // Primary inbox buckets below now drive the main tabs.
-type NatureFilter = "all" | "support" | "uncertain" | "filtered";
+type NatureFilter = "all" | "support" | "uncertain" | "filtered" | "non_support";
 
 function getClassification(email: SerializedEmail): NatureFilter {
   if (email.tier1Result?.startsWith("filtered:")) return "filtered";
   if (email.tier2Result === "support_client") return "support";
   if (email.tier2Result === "incertain") return "uncertain";
-  if (email.tier2Result === "probable_non_client") return "filtered";
+  if (email.tier2Result === "probable_non_client") return "non_support";
   return "all";
 }
 
@@ -313,7 +566,7 @@ type OpsBucket =
   | "to_process"       // support thread waiting for a human reply
   | "waiting_customer" // we replied, awaiting customer
   | "waiting_merchant" // internal / data action required on our side
-  | "resolved"         // closed or no reply needed
+  | "resolved"         // closed, no reply needed, or conversation ended
   | "other";           // filtered / non-support / unknown
 
 function getOpsBucket(
@@ -321,12 +574,52 @@ function getOpsBucket(
   state: SerializedThreadState | null,
   connectedEmail: string | null,
 ): OpsBucket {
+  // Threads explicitly classified as non-support by Tier 2 never belong
+  // in actionable or resolved buckets — they have nothing to do in a support inbox.
+  if (state?.supportNature === "non_support") return "other";
+  // A manual "resolved" set by the agent always wins — never override it
+  // with automatic signal (e.g. last message incoming). This lets agents
+  // explicitly close a thread even when the customer has the last word.
+  if (state?.operationalState === "resolved" || state?.operationalState === "no_reply_needed") {
+    return "resolved";
+  }
   if (threadNeedsReply(thread, connectedEmail)) return "to_process";
   const op = state?.operationalState;
+  // Before trusting the DB operational state, check message direction.
+  // If the last message is outgoing but DB says "waiting_merchant", the
+  // DB state is stale (thread was not recomputed after we sent a reply).
+  // Override to a direction-consistent bucket so the UI is never wrong.
+  const lastDir = getMessageDirection(thread.latest, connectedEmail);
+  if (op === "waiting_merchant" && lastDir === "outgoing") {
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+    const age = Date.now() - new Date(thread.latest.receivedAt).getTime();
+    return age >= sevenDaysMs ? "resolved" : "waiting_customer";
+  }
   if (op === "waiting_merchant") return "waiting_merchant";
-  if (op === "waiting_customer") return "waiting_customer";
-  if (op === "resolved" || op === "no_reply_needed") return "resolved";
+  if (op === "waiting_customer") {
+    // Auto-resolve threads where the customer hasn't replied in 7 days
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+    const age = Date.now() - new Date(thread.latest.receivedAt).getTime();
+    if (age >= sevenDaysMs) return "resolved";
+    return "waiting_customer";
+  }
   if (thread.latest.analysisResult?.conversation?.noReplyNeeded === true) return "resolved";
+  // Support/uncertain threads with no explicit operational state yet
+  // (e.g. old threads before state tracking, or threads where recompute
+  // hasn't run). Infer from the last message direction so the bucket is
+  // at least plausible while the background recompute job catches up.
+  const isLikelySupport =
+    state?.supportNature === "confirmed_support" ||
+    state?.supportNature === "needs_review" ||
+    (!state && getThreadClassification(thread) === "support");
+  if (isLikelySupport) {
+    if (lastDir === "outgoing") {
+      const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+      const age = Date.now() - new Date(thread.latest.receivedAt).getTime();
+      return age >= sevenDaysMs ? "resolved" : "waiting_customer";
+    }
+    return "waiting_merchant";
+  }
   return "other";
 }
 
@@ -663,7 +956,8 @@ function FiltersBar({
           <option value="all">All</option>
           <option value="support">Support</option>
           <option value="uncertain">Uncertain</option>
-          <option value="filtered">Filtered</option>
+          <option value="non_support">Non-support</option>
+          <option value="filtered">Filtered (Tier 1)</option>
         </select>
       </label>
       {!isDefault && (
@@ -703,18 +997,128 @@ function PipelineStats({ emails }: { emails: SerializedEmail[] }) {
   );
 }
 
+function MoveThreadControl({
+  canonicalThreadId,
+  bucket,
+  previousOperationalState,
+}: {
+  canonicalThreadId: string;
+  bucket: OpsBucket;
+  previousOperationalState: string | null;
+}) {
+  const isResolved = bucket === "resolved";
+  // When reopening a manually resolved thread, restore previous state.
+  // For auto-resolved (7-day waiting_customer), default to waiting_merchant.
+  const reopenTarget = previousOperationalState ?? "waiting_merchant";
+  return (
+    <Form method="post" style={{ display: "inline" }}>
+      <input type="hidden" name="_action" value="moveThread" />
+      <input type="hidden" name="canonicalThreadId" value={canonicalThreadId} />
+      <input type="hidden" name="target" value={isResolved ? reopenTarget : "resolved"} />
+      <s-button type="submit" variant="plain" size="slim">
+        {isResolved ? "Reopen" : "Mark as resolved"}
+      </s-button>
+    </Form>
+  );
+}
+
+function ThreadIdentifiersEditor({
+  canonicalThreadId,
+  threadState,
+}: {
+  canonicalThreadId: string;
+  threadState: SerializedThreadState | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const fetcher = useFetcher();
+  const submitting = fetcher.state !== "idle";
+  return (
+    <s-box padding="base" borderWidth="base" borderRadius="base">
+      <s-stack direction="block" gap="small-300">
+        <s-stack direction="inline" gap="small-300" blockAlign="center">
+          <s-text variant="headingSm">Parsed identifiers</s-text>
+          <s-button variant="plain" size="slim" onClick={() => setOpen((v) => !v)}>
+            {open ? "Cancel" : "Edit"}
+          </s-button>
+        </s-stack>
+        {!open ? (
+          <s-stack direction="block" gap="small-100">
+            <s-text variant="bodySm">
+              <strong>Order:</strong>{" "}
+              {threadState?.resolvedOrderNumber ? `#${threadState.resolvedOrderNumber}` : "—"}
+            </s-text>
+            <s-text variant="bodySm">
+              <strong>Tracking:</strong> {threadState?.resolvedTrackingNumber ?? "—"}
+            </s-text>
+            <s-text variant="bodySm">
+              <strong>Customer email:</strong> {threadState?.resolvedEmail ?? "—"}
+            </s-text>
+            <s-text variant="bodySm">
+              <strong>Customer name:</strong> {threadState?.resolvedCustomerName ?? "—"}
+            </s-text>
+          </s-stack>
+        ) : (
+          <fetcher.Form
+            method="post"
+            onSubmit={() => setOpen(false)}
+          >
+            <input type="hidden" name="_action" value="editThreadIdentifiers" />
+            <input type="hidden" name="canonicalThreadId" value={canonicalThreadId} />
+            <s-stack direction="block" gap="small-300">
+              <s-text-field
+                label="Order number"
+                name="resolvedOrderNumber"
+                defaultValue={threadState?.resolvedOrderNumber ?? ""}
+                placeholder="e.g. 257371239"
+              />
+              <s-text-field
+                label="Tracking number"
+                name="resolvedTrackingNumber"
+                defaultValue={threadState?.resolvedTrackingNumber ?? ""}
+              />
+              <s-text-field
+                label="Customer email"
+                name="resolvedEmail"
+                defaultValue={threadState?.resolvedEmail ?? ""}
+              />
+              <s-text-field
+                label="Customer name"
+                name="resolvedCustomerName"
+                defaultValue={threadState?.resolvedCustomerName ?? ""}
+              />
+              <s-stack direction="inline" gap="small-300">
+                <s-button type="submit" variant="primary" disabled={submitting}>
+                  {submitting ? "Saving…" : "Save"}
+                </s-button>
+                <s-button type="button" variant="plain" onClick={() => setOpen(false)}>
+                  Cancel
+                </s-button>
+              </s-stack>
+            </s-stack>
+          </fetcher.Form>
+        )}
+      </s-stack>
+    </s-box>
+  );
+}
+
 function ThreadCard({
   thread,
   threadState,
   isExpanded,
   connectedEmail,
+  previousContact,
   onToggle,
+  onOrderClick,
 }: {
   thread: EmailThread;
   threadState: SerializedThreadState | null;
   isExpanded: boolean;
   connectedEmail: string | null;
+  /** Cross-thread: have we already sent an outgoing to this address/order in another thread? */
+  previousContact: { byAddress: boolean; byOrder: boolean; recentReply: boolean; matchedAddress: string | null };
   onToggle: () => void;
+  onOrderClick: (orderNumber: string) => void;
 }) {
   const { latest, emails } = thread;
   const cls = getThreadClassification(thread);
@@ -723,6 +1127,15 @@ function ThreadCard({
   const latestDirection = getMessageDirection(latest, connectedEmail);
   const noReplyNeeded = latest.analysisResult?.conversation?.noReplyNeeded === true;
   const requiresReply = threadNeedsReply(thread, connectedEmail);
+  const bucket = getOpsBucket(thread, threadState, connectedEmail);
+
+  // The "latest" email may be a new unanalyzed follow-up (e.g. waiting_merchant
+  // after a customer reply). Find the most recent email that actually has
+  // an analysisResult so we can still show the LLM context and the draft.
+  const analysisEmail = [...emails].reverse().find((e) => e.analysisResult) ?? null;
+  // For draft display, prefer the latest email's draft (freshly generated),
+  // fall back to the analysisEmail's draft if latest has none yet.
+  const draftEmail = latest.draftReply ? latest : (analysisEmail?.draftReply ? analysisEmail : null);
 
   const borderColor =
     cls === "support" ? "success" : cls === "uncertain" ? "warning" : undefined;
@@ -740,23 +1153,38 @@ function ThreadCard({
           {/* Classification — uniquement quand non déduit de la bordure */}
           {cls === "uncertain" && <s-badge tone="warning">Uncertain</s-badge>}
           {cls === "filtered" && <s-badge tone="read-only">Filtered</s-badge>}
+          {cls === "non_support" && <s-badge tone="read-only">Non-support</s-badge>}
 
           {/* État actionnable — un seul badge, par priorité décroissante */}
-          {requiresReply ? (
-            <s-badge tone="critical">To process</s-badge>
-          ) : threadState?.operationalState === "waiting_merchant" ? (
+          {bucket === "to_process" ? (
+            <s-badge tone="critical">To review</s-badge>
+          ) : bucket === "waiting_merchant" ? (
             <s-badge tone="critical">Waiting merchant</s-badge>
-          ) : threadState?.operationalState === "waiting_customer" ? (
+          ) : bucket === "waiting_customer" ? (
             <s-badge tone="info">Waiting customer</s-badge>
-          ) : threadState?.operationalState === "resolved" ? (
+          ) : bucket === "resolved" ? (
             <s-badge tone="success">Resolved</s-badge>
           ) : noReplyNeeded ? (
             <s-badge tone="success">No reply needed</s-badge>
           ) : null}
 
-          {/* Numéro de commande */}
+          {/* Numéro de commande — clickable to filter the search bar */}
           {threadState?.resolvedOrderNumber && (
-            <s-badge tone="info">#{threadState.resolvedOrderNumber}</s-badge>
+            <button
+              type="button"
+              onClick={() => onOrderClick(threadState.resolvedOrderNumber!)}
+              title="Filter by this order number"
+              style={{
+                background: "none",
+                border: "none",
+                padding: 0,
+                margin: 0,
+                cursor: "pointer",
+                font: "inherit",
+              }}
+            >
+              <s-badge tone="info">#{threadState.resolvedOrderNumber}</s-badge>
+            </button>
           )}
 
           {/* Nombre de messages */}
@@ -767,6 +1195,30 @@ function ThreadCard({
             <s-badge tone="warning">Partial history</s-badge>
           )}
           {latest.processingStatus === "error" && <s-badge tone="critical">Error</s-badge>}
+
+          {/* Cross-thread: prior contact indicator — shown on actionable buckets
+               only (to_process / waiting_merchant / waiting_customer). Excluded
+               on "resolved" (already handled) and "other" (pure notification
+               threads like billing / Trustpilot). This keeps legitimate customer
+               messages forwarded via mailer@shopify.com covered. */}
+          {(bucket === "to_process" || bucket === "waiting_merchant" || bucket === "waiting_customer") && (previousContact.byAddress || previousContact.byOrder) && (
+            <s-badge tone="warning" title={
+              previousContact.byAddress && previousContact.matchedAddress
+                ? `Known sender: ${previousContact.matchedAddress}`
+                : undefined
+            }>
+              {previousContact.byOrder && previousContact.byAddress
+                ? "Prior contact (address + order)"
+                : previousContact.byOrder
+                ? "Prior contact (same order)"
+                : "Prior contact (same address)"}
+            </s-badge>
+          )}
+          {/* Another thread has replied to this contact AFTER the latest incoming
+               of this thread. Same scoping as above. */}
+          {(bucket === "to_process" || bucket === "waiting_merchant" || bucket === "waiting_customer") && previousContact.recentReply && (
+            <s-badge tone="warning">Replied elsewhere recently</s-badge>
+          )}
         </s-stack>
 
         {/* Row 2: expéditeur + direction + heure */}
@@ -799,9 +1251,32 @@ function ThreadCard({
           </s-text>
         )}
 
-        <s-button variant="plain" onClick={onToggle}>
-          {isExpanded ? "Collapse" : "Details"}
-        </s-button>
+        <s-stack direction="inline" gap="small-300" blockAlign="center">
+          <s-button variant="plain" onClick={onToggle}>
+            {isExpanded ? "Collapse" : "Details"}
+          </s-button>
+          {latest.canonicalThreadId && (
+            <MoveThreadControl
+              canonicalThreadId={latest.canonicalThreadId}
+              bucket={bucket}
+              previousOperationalState={threadState?.previousOperationalState ?? null}
+            />
+          )}
+          {/* Generate draft — always visible for waiting_merchant threads without a draft */}
+          {bucket === "waiting_merchant" &&
+            !latest.draftReply &&
+            !noReplyNeeded &&
+            !latest.tier1Result?.startsWith("filtered:") &&
+            latest.tier2Result !== "probable_non_client" && (
+            <Form method="post">
+              <input type="hidden" name="_action" value="reanalyze" />
+              <input type="hidden" name="emailId" value={latest.id} />
+              <s-button type="submit" variant="primary" title="Once generated, the thread will move to &quot;To review&quot;">
+                {latest.processingStatus === "error" ? "Retry analysis" : "Generate draft"}
+              </s-button>
+            </Form>
+          )}
+        </s-stack>
 
         {/* Expanded content */}
         {isExpanded && (
@@ -839,18 +1314,31 @@ function ThreadCard({
               </s-banner>
             )}
 
-            {/* Analysis (from latest email only) */}
-            {latest.analysisResult && (
+            {/* Edit parsed identifiers — merchant can correct order/tracking/email/name */}
+            {latest.canonicalThreadId && (
+              <ThreadIdentifiersEditor
+                canonicalThreadId={latest.canonicalThreadId}
+                threadState={threadState}
+              />
+            )}
+
+            {/* Analysis (from the most recently analyzed email in the thread) */}
+            {analysisEmail?.analysisResult && (
               <s-box padding="base" borderWidth="base" borderRadius="base">
                 <s-stack direction="block" gap="base">
-                  <s-text variant="headingSm">Analysis</s-text>
-                  <AnalysisDisplay analysis={latest.analysisResult} />
+                  <s-stack direction="inline" gap="small-300" blockAlign="center">
+                    <s-text variant="headingSm">Analysis</s-text>
+                    {analysisEmail !== latest && (
+                      <s-badge tone="warning">Based on previous message</s-badge>
+                    )}
+                  </s-stack>
+                  <AnalysisDisplay analysis={analysisEmail.analysisResult} />
                 </s-stack>
               </s-box>
             )}
 
-            {/* Draft (from latest email only) */}
-            {latest.draftReply && !noReplyNeeded && <DraftBlock email={latest} />}
+            {/* Draft (prefer latest draft, fallback to previous analyzed email's draft) */}
+            {draftEmail && !noReplyNeeded && <DraftBlock email={draftEmail} />}
 
             {noReplyNeeded && (
               <s-banner tone="info">
@@ -863,9 +1351,22 @@ function ThreadCard({
               <s-banner tone="critical">{latest.errorMessage}</s-banner>
             )}
 
-            {/* Re-analyze (on latest email) */}
+            {/* Generate draft — shown when latest has no draft yet and the email is actionable */}
+            {!latest.draftReply &&
+              !noReplyNeeded &&
+              !latest.tier1Result?.startsWith("filtered:") &&
+              latest.tier2Result !== "probable_non_client" && (
+              <Form method="post">
+                <input type="hidden" name="_action" value="reanalyze" />
+                <input type="hidden" name="emailId" value={latest.id} />
+                <s-button type="submit" variant="primary" title="Once generated, the thread will move to &quot;To review&quot;">
+                  {latest.processingStatus === "error" ? "Retry analysis" : "Generate draft"}
+                </s-button>
+              </Form>
+            )}
+
+            {/* Re-analyze — shown for misclassified or uncertain emails (even if they already have a draft) */}
             {(latest.tier2Result === "incertain" ||
-              latest.processingStatus === "error" ||
               latest.tier2Result === "probable_non_client") && (
               <Form method="post">
                 <input type="hidden" name="_action" value="reanalyze" />
@@ -886,6 +1387,10 @@ function DraftBlock({ email }: { email: SerializedEmail }) {
   const currentVersion = allVersions[versionIndex] ?? email.draftReply!;
   const isLatest = versionIndex === allVersions.length - 1;
   const total = allVersions.length;
+  const refineFetcher = useFetcher();
+  const regenerateFetcher = useFetcher();
+  const refining = refineFetcher.state !== "idle";
+  const regenerating = regenerateFetcher.state !== "idle";
 
   return (
     <s-box padding="base" borderWidth="base" borderRadius="base">
@@ -925,7 +1430,7 @@ function DraftBlock({ email }: { email: SerializedEmail }) {
         />
 
         {isLatest && (
-          <Form method="post">
+          <refineFetcher.Form method="post">
             <input type="hidden" name="_action" value="refine" />
             <input type="hidden" name="emailId" value={email.id} />
             <input type="hidden" name="currentDraft" value={currentVersion} />
@@ -937,12 +1442,21 @@ function DraftBlock({ email }: { email: SerializedEmail }) {
                   placeholder="e.g. Be more formal, mention refund policy, shorten…"
                 />
               </div>
-              <s-button type="submit" variant="secondary">
-                Refine with AI
+              <s-button type="submit" variant="secondary" disabled={refining || regenerating}>
+                {refining ? "Refining…" : "Refine with AI"}
               </s-button>
             </s-stack>
-          </Form>
+          </refineFetcher.Form>
         )}
+
+        {/* Regenerate — re-runs the full pipeline (fresh Shopify + 17track data) */}
+        <regenerateFetcher.Form method="post">
+          <input type="hidden" name="_action" value="reanalyze" />
+          <input type="hidden" name="emailId" value={email.id} />
+          <s-button type="submit" variant="plain" size="slim" disabled={regenerating || refining}>
+            {regenerating ? "Regenerating…" : "Regenerate draft (refresh tracking)"}
+          </s-button>
+        </regenerateFetcher.Form>
       </s-stack>
     </s-box>
   );
@@ -1031,69 +1545,24 @@ export default function InboxPage() {
       navigation.formData?.get("_action") === "resync" ||
       navigation.formData?.get("_action") === "backfill");
 
-  const syncStarted = (actionData as { syncStarted?: boolean } | null)?.syncStarted === true;
+  const syncCompleted = (actionData as { syncCompleted?: boolean } | null)?.syncCompleted === true;
   const syncStopped = (actionData as { stopped?: boolean } | null)?.stopped === true;
+  // bgSyncActive: either the loader detected an active job in DB, or the user just
+  // triggered one (syncStarted from action). Cleared only when loader revalidates with
+  // no active job.
+  const syncStarted = (actionData as { syncStarted?: boolean } | null)?.syncStarted === true;
+  const bgSyncActive = loaderData.syncInProgress || syncStarted;
 
-  // Keep background-sync state alive across revalidations (actionData resets each time).
-  const [bgSyncActive, setBgSyncActive] = useState(false);
-  const [syncCancelled, setSyncCancelled] = useState(false);
-  const [bgSyncStart, setBgSyncStart] = useState<number>(0);
-  const [elapsed, setElapsed] = useState(0);       // seconds since sync started
-  const [nextRefresh, setNextRefresh] = useState(8); // seconds until next auto-refresh
-  const POLL_INTERVAL = 8;
-  const MAX_DURATION = 3 * 60; // 3 minutes
-
-  // Start the background sync indicator when the action returns syncStarted.
+  // Passive revalidation — picks up emails ingested by the background auto-sync loop.
+  // Poll every 10s while a heavy job is running, otherwise every 60s.
   useEffect(() => {
-    if (!syncStarted) return;
-    setBgSyncActive(true);
-    setSyncCancelled(false);
-    setBgSyncStart(Date.now());
-    setElapsed(0);
-    setNextRefresh(POLL_INTERVAL);
-  }, [syncStarted]);
-
-  // Stop the background sync indicator when the action returns stopped.
-  useEffect(() => {
-    if (!syncStopped) return;
-    setBgSyncActive(false);
-    setSyncCancelled(true);
-  }, [syncStopped]);
-
-  // Auto-revalidate every 8 s while a background sync is running.
-  useEffect(() => {
-    if (!bgSyncActive) return;
+    const interval = bgSyncActive ? 10_000 : 60_000;
     const poll = setInterval(() => {
-      if (revalidator.state === "idle") {
-        revalidator.revalidate();
-        setNextRefresh(POLL_INTERVAL);
-      }
-    }, POLL_INTERVAL * 1_000);
-    const stop = setTimeout(() => {
-      clearInterval(poll);
-      setBgSyncActive(false);
-    }, MAX_DURATION * 1_000);
-    return () => { clearInterval(poll); clearTimeout(stop); };
+      if (revalidator.state === "idle") revalidator.revalidate();
+    }, interval);
+    return () => clearInterval(poll);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bgSyncActive]);
-
-  // 1-second tick for the elapsed / countdown display.
-  useEffect(() => {
-    if (!bgSyncActive) return;
-    const tick = setInterval(() => {
-      const secs = Math.floor((Date.now() - bgSyncStart) / 1_000);
-      setElapsed(secs);
-      const remaining = POLL_INTERVAL - (secs % POLL_INTERVAL);
-      setNextRefresh(remaining === 0 ? POLL_INTERVAL : remaining);
-      if (secs >= MAX_DURATION) setBgSyncActive(false);
-    }, 1_000);
-    return () => clearInterval(tick);
-  }, [bgSyncActive, bgSyncStart]);
-
-  // Progress 0-100 over the full 3-minute window (used for bar width).
-  const syncProgress = bgSyncActive
-    ? Math.min(100, Math.round((elapsed / MAX_DURATION) * 100))
-    : 0;
 
   const [activeBucket, setActiveBucket] = useState<OpsBucket | "all">("to_process");
   const [filters, setFilters] = useState<InboxFilters>({
@@ -1134,6 +1603,7 @@ export default function InboxPage() {
       (t.latest.canonicalThreadId &&
         loaderData.threadStates?.[t.latest.canonicalThreadId]) ||
       null;
+    const pc = (t.latest.canonicalThreadId && loaderData.priorContact?.[t.latest.canonicalThreadId]) || null;
     return {
       thread: t,
       state,
@@ -1141,6 +1611,7 @@ export default function InboxPage() {
       nature: getThreadClassification(t),
       confidence: getThreadConfidence(t),
       linkedOrder: hasLinkedOrder(state),
+      previousContact: pc ?? { byAddress: false, byOrder: false, recentReply: false, matchedAddress: null },
     };
   });
 
@@ -1161,7 +1632,8 @@ export default function InboxPage() {
     if (filters.search.trim()) {
       const q = filters.search.trim().toLowerCase();
       const e = m.thread.latest;
-      const hay = `${e.subject} ${e.fromName} ${e.fromAddress} ${e.snippet}`.toLowerCase();
+      const orderNum = m.state?.resolvedOrderNumber ?? "";
+      const hay = `${e.subject} ${e.fromName} ${e.fromAddress} ${e.snippet} ${orderNum}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -1172,7 +1644,6 @@ export default function InboxPage() {
     .filter(matchesFilters);
 
   const report = actionData?.report as ProcessingReport | null;
-  const isPolling = bgSyncActive && revalidator.state !== "idle";
 
   if (actionData?.disconnected) {
     return (
@@ -1203,6 +1674,18 @@ export default function InboxPage() {
         />
       </s-section>
 
+      {/* Sync in progress banner — shown when a resync/backfill job is queued or running */}
+      {bgSyncActive && (
+        <s-section>
+          <s-banner tone="info">
+            <s-stack direction="block" gap="small-200">
+              <s-text>Synchronisation en cours…</s-text>
+              <s-text>Le traitement des emails et la mise à jour des badges peuvent prendre quelques minutes. La page se rafraîchit automatiquement toutes les 60 secondes.</s-text>
+            </s-stack>
+          </s-banner>
+        </s-section>
+      )}
+
       {/* Sync error — persisted in DB, visible after page revalidation */}
       {loaderData.lastSyncError && !bgSyncActive && (
         <s-section>
@@ -1223,50 +1706,11 @@ export default function InboxPage() {
       )}
 
       {/* Sync cancelled banner */}
-      {syncCancelled && !bgSyncActive && (
+      {syncStopped && (
         <s-section>
           <s-banner tone="warning">
             Sync annulé.
           </s-banner>
-        </s-section>
-      )}
-
-      {/* Background sync progress bar */}
-      {bgSyncActive && (
-        <s-section>
-          <div style={{
-            background: "var(--p-color-bg-surface-secondary, #f1f1f1)",
-            borderRadius: "8px",
-            overflow: "hidden",
-            height: "8px",
-            width: "100%",
-            marginBottom: "8px",
-          }}>
-            <div style={{
-              height: "100%",
-              width: `${syncProgress}%`,
-              background: "var(--p-color-bg-fill-brand, #008060)",
-              transition: "width 1s linear",
-              // Animated shimmer on top
-              backgroundImage: "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.35) 50%, transparent 100%)",
-              backgroundSize: "200% 100%",
-              animation: "shimmer 1.5s infinite",
-            }} />
-          </div>
-          <style>{`@keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }`}</style>
-          <s-stack direction="inline" gap="small-300" blockAlign="center">
-            <s-spinner size="small" />
-            <s-text variant="bodySm" tone="subdued">
-              Sync en cours… {elapsed}s écoulées
-              {isPolling ? " — chargement…" : ` — prochain rafraîchissement dans ${nextRefresh}s`}
-            </s-text>
-            <Form method="post">
-              <input type="hidden" name="_action" value="stop" />
-              <s-button tone="critical" variant="secondary" type="submit" size="slim">
-                Stopper
-              </s-button>
-            </Form>
-          </s-stack>
         </s-section>
       )}
       {report && (
@@ -1292,7 +1736,7 @@ export default function InboxPage() {
               <s-stack direction="inline" gap="small-300">
                 {(
                   [
-                    { key: "to_process", label: "To process" },
+                    { key: "to_process", label: "To review" },
                     { key: "waiting_customer", label: "Waiting customer" },
                     { key: "waiting_merchant", label: "Waiting us" },
                     { key: "resolved", label: "Resolved" },
@@ -1331,17 +1775,21 @@ export default function InboxPage() {
                     <s-paragraph>No emails match the current filters.</s-paragraph>
                   </s-box>
                 )}
-                {filteredThreadMeta.map(({ thread, state }) => (
+                {filteredThreadMeta.map(({ thread, state, previousContact }) => (
                   <ThreadCard
                     key={thread.threadId}
                     thread={thread}
                     threadState={state}
                     isExpanded={expandedThreadId === thread.threadId}
                     connectedEmail={loaderData.connectedEmail}
+                    previousContact={previousContact}
                     onToggle={() =>
                       setExpandedThreadId(
                         expandedThreadId === thread.threadId ? null : thread.threadId,
                       )
+                    }
+                    onOrderClick={(orderNumber) =>
+                      setFilters((prev) => ({ ...prev, search: orderNumber }))
                     }
                   />
                 ))}

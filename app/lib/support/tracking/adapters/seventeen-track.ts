@@ -166,36 +166,54 @@ export async function fetchTrackingFrom17track(
       apiKey,
     );
 
-    // Step 2: get tracking info
-    const infoRes = await postJson<ApiResponse>(
-      `${BASE}/gettrackinfo`,
-      [{ number: trackingNumber }],
-      apiKey,
-    );
+    // Step 2: get tracking info — retry up to MAX_ATTEMPTS times with a short
+    // delay between attempts. 17track fetches carrier data asynchronously after
+    // register, so the first call may return "pending" for new trackings.
+    const MAX_ATTEMPTS = 3;
+    const RETRY_DELAY_MS = 1500;
 
-    const accepted = infoRes.data?.accepted ?? [];
-    const rejected = infoRes.data?.rejected ?? [];
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      if (attempt > 1) {
+        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+      }
 
-    if (accepted.length > 0) {
-      return parseTrackInfo(accepted[0]);
+      const infoRes = await postJson<ApiResponse>(
+        `${BASE}/gettrackinfo`,
+        [{ number: trackingNumber }],
+        apiKey,
+      );
+
+      const accepted = infoRes.data?.accepted ?? [];
+      const rejected = infoRes.data?.rejected ?? [];
+
+      if (accepted.length > 0) {
+        return parseTrackInfo(accepted[0]);
+      }
+
+      // -18019909 = "No tracking information at this time" (data pending)
+      const rejection = rejected[0];
+      if (rejection?.error?.code === -18019909) {
+        if (attempt < MAX_ATTEMPTS) {
+          console.log(`[17track] pending for ${trackingNumber}, retry ${attempt}/${MAX_ATTEMPTS - 1}…`);
+          continue;
+        }
+        // All attempts exhausted
+        return {
+          state: "pending",
+          carrierName: null,
+          status: null,
+          lastEvent: null,
+          lastLocation: null,
+          lastEventDate: null,
+          delivered: false,
+          events: [],
+        };
+      }
+
+      console.warn("[17track] Unexpected rejection:", rejection);
+      return null;
     }
 
-    // -18019909 = "No tracking information at this time" (data pending)
-    const rejection = rejected[0];
-    if (rejection?.error?.code === -18019909) {
-      return {
-        state: "pending",
-        carrierName: null,
-        status: null,
-        lastEvent: null,
-        lastLocation: null,
-        lastEventDate: null,
-        delivered: false,
-        events: [],
-      };
-    }
-
-    console.warn("[17track] Unexpected rejection:", rejection);
     return null;
   } catch (err) {
     console.error("[17track] Request failed:", err);

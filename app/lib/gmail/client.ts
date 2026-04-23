@@ -209,19 +209,8 @@ function extractPlainBody(payload: gmail_v1.Schema$MessagePart | undefined): str
 }
 
 /** Strip style/script blocks, HTML tags, and clean up whitespace. */
-export function cleanHtml(html: string): string {
-  return html
-    // Remove <style> blocks and their content
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, " ")
-    // Remove <script> blocks and their content
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, " ")
-    // Remove HTML comments
-    .replace(/<!--[\s\S]*?-->/g, " ")
-    // Replace <br>, <p>, <div>, <tr>, <li> with newlines for readability
-    .replace(/<\s*(br|\/p|\/div|\/tr|\/li|\/h[1-6])[^>]*>/gi, "\n")
-    // Remove all remaining HTML tags
-    .replace(/<[^>]+>/g, " ")
-    // Decode common HTML entities
+export function decodeHtmlEntities(text: string): string {
+  return text
     .replace(/&nbsp;/gi, " ")
     .replace(/&amp;/gi, "&")
     .replace(/&lt;/gi, "<")
@@ -229,11 +218,30 @@ export function cleanHtml(html: string): string {
     .replace(/&quot;/gi, '"')
     .replace(/&#39;/gi, "'")
     .replace(/&euro;/gi, "€")
-    // Collapse whitespace
-    .replace(/[ \t]+/g, " ")
-    .replace(/\n[ \t]+/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+    // numeric entities &#123; and &#x1F;
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#([0-9]+);/gi, (_, dec) => String.fromCodePoint(parseInt(dec, 10)));
+}
+
+export function cleanHtml(html: string): string {
+  return decodeHtmlEntities(
+    html
+      // Remove <style> blocks and their content
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, " ")
+      // Remove <script> blocks and their content
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, " ")
+      // Remove HTML comments
+      .replace(/<!--[\s\S]*?-->/g, " ")
+      // Replace <br>, <p>, <div>, <tr>, <li> with newlines for readability
+      .replace(/<\s*(br|\/p|\/div|\/tr|\/li|\/h[1-6])[^>]*>/gi, "\n")
+      // Remove all remaining HTML tags
+      .replace(/<[^>]+>/g, " ")
+      // Collapse whitespace
+      .replace(/[ \t]+/g, " ")
+      .replace(/\n[ \t]+/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim()
+  );
 }
 
 function findHtmlBody(payload: gmail_v1.Schema$MessagePart): string | null {

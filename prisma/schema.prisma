@@ -102,8 +102,9 @@ model Thread {
   //                                // unknown | non_support | probable_support | confirmed_support | mixed | needs_review
   supportNatureUpdatedAt DateTime?
   // Orthogonal operational state — can move freely both ways.
-  operationalState       String   @default("open")
-  //                                // open | waiting_customer | waiting_merchant | resolved | no_reply_needed
+  operationalState         String   @default("open")
+  //                                  // open | waiting_customer | waiting_merchant | resolved | no_reply_needed
+  previousOperationalState String?  // last state before a manual move to resolved
   operationalStateUpdatedAt DateTime?
   // Structured thread state (spec §9). JSON blob consumed by the
   // classifier/draft as compact context. Shape: {

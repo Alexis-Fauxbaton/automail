@@ -2,8 +2,8 @@ import prisma from "../../db.server";
 import { getZohoAccessToken } from "./auth";
 import type { MailMessage, MailClient } from "../mail/types";
 
-// Reuse cleanHtml from gmail client
-import { cleanHtml } from "../gmail/client";
+// Reuse cleanHtml and decodeHtmlEntities from gmail client
+import { cleanHtml, decodeHtmlEntities } from "../gmail/client";
 
 function getApiDomain(): string {
   return process.env.ZOHO_API_DOMAIN || "mail.zoho.com";
@@ -247,16 +247,16 @@ export async function createZohoClient(shop: string): Promise<MailClient> {
 
       // Parse sender
       const fromAddress = extractEmail(detail.fromAddress);
-      const fromName = extractName(detail.fromAddress) || detail.sender || "";
+      const fromName = decodeHtmlEntities(extractName(detail.fromAddress) || detail.sender || "");
 
       return {
         id: String(detail.messageId),
         threadId: String(detail.threadId ?? detail.messageId),
         from: fromAddress,
         fromName,
-        subject: detail.subject || "(no subject)",
+        subject: decodeHtmlEntities(detail.subject || "(no subject)"),
         bodyText,
-        snippet: detail.summary || bodyText.slice(0, 200),
+        snippet: detail.summary ? decodeHtmlEntities(detail.summary) : bodyText.slice(0, 200),
         receivedAt: new Date(parseInt(detail.receivedTime, 10)),
         // Use a virtual "SENT" label when the message lives in the Sent folder
         // so the pipeline can reliably detect outgoing messages on Zoho too.
@@ -323,10 +323,10 @@ export async function createZohoClient(shop: string): Promise<MailClient> {
               id: String(item.messageId),
               threadId: String(item.threadId ?? threadId),
               from: extractEmail(item.fromAddress),
-              fromName: extractName(item.fromAddress) || item.sender || "",
-              subject: item.subject || "(no subject)",
+              fromName: decodeHtmlEntities(extractName(item.fromAddress) || item.sender || ""),
+              subject: decodeHtmlEntities(item.subject || "(no subject)"),
               bodyText,
-              snippet: item.summary || bodyText.slice(0, 200),
+              snippet: item.summary ? decodeHtmlEntities(item.summary) : bodyText.slice(0, 200),
               receivedAt: new Date(parseInt(item.receivedTime, 10)),
               labelIds: [],
               headers: {},

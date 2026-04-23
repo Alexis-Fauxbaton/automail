@@ -183,7 +183,7 @@ export function TrackingsBlock({ trackings }: { trackings: FulfillmentTrackingFa
 }
 
 export function CrawledContextsBlock({ contexts }: { contexts: SupportAnalysisExtended["crawledContexts"] }) {
-  const successful = contexts.filter((c) => c.success);
+  const successful = (contexts ?? []).filter((c) => c.success);
   if (successful.length === 0) return null;
   return (
     <Card title="Live context retrieved">
@@ -201,7 +201,7 @@ export function CrawledContextsBlock({ contexts }: { contexts: SupportAnalysisEx
 }
 
 export function WarningsBlock({ warnings }: { warnings: SupportAnalysisExtended["warnings"] }) {
-  if (warnings.length === 0) return null;
+  if (!warnings || warnings.length === 0) return null;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
       {warnings.map((w) => (
@@ -214,7 +214,9 @@ export function WarningsBlock({ warnings }: { warnings: SupportAnalysisExtended[
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export function AnalysisDisplay({ analysis }: { analysis: SupportAnalysisExtended }) {
-  // Defensive fallback for emails analyzed before the `conversation` field existed
+  // Defensive fallbacks for analyses stored before certain fields were added
+  // to the schema. Any of these being undefined would crash the render and
+  // silently swallow the entire analysis block (and everything after it).
   const conversation = analysis.conversation ?? {
     messageCount: 1,
     incomingCount: 1,
@@ -222,6 +224,9 @@ export function AnalysisDisplay({ analysis }: { analysis: SupportAnalysisExtende
     lastMessageDirection: "unknown" as const,
     noReplyNeeded: false,
   };
+  const orderCandidates = analysis.orderCandidates ?? [];
+  const crawledContexts = analysis.crawledContexts ?? [];
+  const warnings = analysis.warnings ?? [];
 
   const directionLabel =
     conversation.lastMessageDirection === "incoming" ? "Incoming"
@@ -268,8 +273,8 @@ export function AnalysisDisplay({ analysis }: { analysis: SupportAnalysisExtende
 
         <Card
           title="Matched order"
-          footer={analysis.orderCandidates.length > 1
-            ? <span style={{ fontSize: "12px", color: "#b98900" }}>⚠ {analysis.orderCandidates.length} orders matched — verify before replying.</span>
+          footer={orderCandidates.length > 1
+            ? <span style={{ fontSize: "12px", color: "#b98900" }}>⚠ {orderCandidates.length} orders matched — verify before replying.</span>
             : undefined
           }
         >
@@ -282,9 +287,9 @@ export function AnalysisDisplay({ analysis }: { analysis: SupportAnalysisExtende
         <TrackingsBlock trackings={resolveTrackings(analysis)} />
       </Card>
 
-      <CrawledContextsBlock contexts={analysis.crawledContexts} />
+      <CrawledContextsBlock contexts={crawledContexts} />
 
-      <WarningsBlock warnings={analysis.warnings} />
+      <WarningsBlock warnings={warnings} />
 
     </div>
   );

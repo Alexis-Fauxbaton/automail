@@ -64,6 +64,12 @@ export const NOREPLY_PATTERNS: RegExp[] = [
   /^news@/i,
   /^newsletter@/i,
   /^info@.*\.shopify\.com$/i,
+  // Automated billing / payment senders (e.g. invoice+statements+…@stripe.com)
+  /^invoice[+\-_.]/i,
+  /^billing[+\-_.]/i,
+  /^receipts?@/i,
+  /^payments?@/i,
+  /^statements?@/i,
 ];
 
 /** Subject patterns that indicate automated / non-support emails. */

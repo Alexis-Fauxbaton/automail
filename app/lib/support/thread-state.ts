@@ -133,6 +133,9 @@ export async function recomputeThreadState(
     where: { id: canonicalThreadId },
     select: {
       supportNature: true,
+      operationalState: true,
+      previousOperationalState: true,
+      operationalStateUpdatedAt: true,
       resolvedOrderNumber: true,
       resolvedTrackingNumber: true,
       resolutionConfidence: true,
@@ -254,12 +257,66 @@ export async function recomputeThreadState(
   };
 
   const now = new Date();
+
+  // Respect manual resolutions: if an agent explicitly marked this thread
+  // as resolved (operationalState === "resolved" AND previousOperationalState
+  // is set as a breadcrumb), keep that resolved state unless a new incoming
+  // message arrived AFTER the resolution was recorded.
+  const wasManuallyResolved =
+    thread.operationalState === "resolved" &&
+    thread.previousOperationalState !== null &&
+    thread.operationalStateUpdatedAt !== null;
+  if (wasManuallyResolved) {
+    const resolvedAt = thread.operationalStateUpdatedAt!.getTime();
+    const hasNewIncoming =
+      lastCustomerAt !== null && lastCustomerAt.getTime() > resolvedAt;
+    if (!hasNewIncoming) {
+      // No new customer message since the manual resolve — honour it.
+      // Still update supportNature and structuredState.
+      const structured: StructuredThreadState = {
+        messageCount: messages.length,
+        incomingCount,
+        outgoingCount,
+        orderResolved: !!thread.resolvedOrderNumber,
+        trackingResolved: !!thread.resolvedTrackingNumber,
+        resolvedOrderNumber: thread.resolvedOrderNumber,
+        resolvedTrackingNumber: thread.resolvedTrackingNumber,
+        resolutionConfidence:
+          (thread.resolutionConfidence as StructuredThreadState["resolutionConfidence"]) ?? "none",
+        lastCustomerMessageAt: lastCustomerAt?.toISOString() ?? null,
+        lastAgentMessageAt: lastAgentAt?.toISOString() ?? null,
+        lastDirection,
+        awaitingCustomer: false,
+        awaitingMerchant: false,
+        replyNeeded: false,
+        hasDraft,
+        supportNature: finalNature,
+        operationalState: "resolved",
+        trueLatestMessageId: trueLatest?.id ?? null,
+        targetMessageId,
+        historyStatus: (thread.historyStatus as StructuredThreadState["historyStatus"]) ?? "unknown",
+      };
+      await prisma.thread.update({
+        where: { id: canonicalThreadId },
+        data: {
+          supportNature: finalNature,
+          supportNatureUpdatedAt: finalNature !== thread.supportNature ? now : undefined,
+          structuredState: JSON.stringify(structured),
+        },
+      });
+      return structured;
+    }
+    // New incoming after manual resolve — fall through to normal recompute
+    // (thread is reopened automatically).
+  }
+
   await prisma.thread.update({
     where: { id: canonicalThreadId },
     data: {
       supportNature: finalNature,
       supportNatureUpdatedAt: finalNature !== thread.supportNature ? now : undefined,
       operationalState,
+      previousOperationalState: null, // reset — new message clears manual resolve
       operationalStateUpdatedAt: now,
       structuredState: JSON.stringify(structured),
     },
@@ -299,4 +356,39 @@ export function renderStructuredStateForLLM(s: StructuredThreadState): string {
     `historyStatus=${s.historyStatus}`,
   ];
   return lines.join("\n");
+}
+
+/**
+ * Recompute the operational state for every thread in `shop` whose
+ * `operationalState` is still `"open"` (the default value — meaning
+ * `recomputeThreadState` was never called on it).
+ *
+ * This is safe to run in a background job: it is idempotent, batched,
+ * and isolated per shop. Errors on individual threads are logged and
+ * skipped — they don't abort the whole run.
+ */
+export async function recomputeAllOpenThreads(
+  shop: string,
+  opts: { mailboxAddress?: string } = {},
+): Promise<{ processed: number; errors: number }> {
+  const threads = await prisma.thread.findMany({
+    where: { shop, operationalState: "open" },
+    select: { id: true },
+  });
+
+  let processed = 0;
+  let errors = 0;
+  for (const thread of threads) {
+    try {
+      await recomputeThreadState(thread.id, opts);
+      processed++;
+    } catch (err) {
+      errors++;
+      console.error(`[recompute] shop=${shop} thread=${thread.id} failed:`, err);
+    }
+  }
+  console.log(
+    `[recompute] shop=${shop} done: processed=${processed} errors=${errors}`,
+  );
+  return { processed, errors };
 }

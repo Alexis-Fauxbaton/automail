@@ -41,7 +41,25 @@ async function resolveOneFulfillment(
         };
       }
       if (result && result.state === "pending") {
-        console.log(`[tracking] 17track pending for ${trackingNumber} (fulfillment ${fulfillmentIndex}), using Shopify`);
+        // 17track registered the number but data isn't ready yet.
+        // Return a "pending" entry so the draft can say tracking is initializing
+        // instead of falling back to an unreliable scraping source.
+        console.log(`[tracking] 17track pending after retries for ${trackingNumber} (fulfillment ${fulfillmentIndex})`);
+        return {
+          source: "seventeen_track",
+          carrier: fulfillment.carrier ?? null,
+          trackingNumber,
+          trackingUrl: trackingUrl ?? null,
+          status: "Pending (tracking initializing)",
+          inferred: false,
+          events: [],
+          lastEvent: null,
+          lastLocation: null,
+          lastEventDate: null,
+          delivered: false,
+          fulfillmentIndex,
+          lineItems,
+        };
       }
     } catch (err) {
       console.error(`[tracking] 17track failed for fulfillment ${fulfillmentIndex}, using Shopify:`, err);

@@ -23,7 +23,7 @@
 import prisma from "../../db.server";
 import { Prisma } from "@prisma/client";
 
-export type SyncJobKind = "sync" | "backfill" | "resync";
+export type SyncJobKind = "sync" | "backfill" | "resync" | "recompute";
 
 export interface BackfillParams {
   afterDateIso: string;
