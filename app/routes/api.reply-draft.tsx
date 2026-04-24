@@ -6,12 +6,12 @@ import prisma from "../db.server";
 const VALID_REPLY_MODES = ["thread", "new_thread"] as const;
 
 export async function action({ request }: ActionFunctionArgs) {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
-
   if (request.method !== "POST") {
     return data({ error: "Method not allowed" }, { status: 405 });
   }
+
+  const { session } = await authenticate.admin(request);
+  const shop = session.shop;
 
   const body = await request.json() as {
     emailId?: string;
@@ -50,7 +50,11 @@ export async function action({ request }: ActionFunctionArgs) {
     const { upsertReplyDraftBody } = await import("../lib/support/reply-draft");
     await upsertReplyDraftBody(emailId, shop, draftBody);
     if (Object.keys(updateData).length > 0) {
-      await prisma.replyDraft.update({ where: { emailId }, data: updateData });
+      await prisma.replyDraft.upsert({
+        where: { emailId },
+        create: { emailId, shop, ...updateData },
+        update: updateData,
+      });
     }
   } else {
     await prisma.replyDraft.upsert({
