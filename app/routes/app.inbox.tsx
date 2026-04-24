@@ -539,8 +539,6 @@ function serializeEmail(row: {
   isKnownCustomer: boolean;
   processingStatus: string;
   analysisResult: string | null;
-  draftReply: string | null;
-  draftHistory: string;
   errorMessage: string | null;
   replyDraft?: {
     id: string;

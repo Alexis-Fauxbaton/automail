@@ -181,8 +181,6 @@ model IncomingEmail {
   // the JSON blob — written at the same time in the pipeline.
   detectedIntent      String?  // SupportIntent enum value
   analysisConfidence  String?  // "high" | "medium" | "low"
-  draftReply          String?
-  draftHistory     String   @default("[]") // JSON array of previous drafts
   errorMessage     String?
   // Aggregated LLM cost tracking (sum of all LLM calls on this email)
   llmTokensTotal   Int      @default(0)
