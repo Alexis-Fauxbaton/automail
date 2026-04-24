@@ -235,9 +235,10 @@ async function runSyncForShop(
       console.error(`[auto-sync] shop=${shop} onboarding backfill failed:`, err);
     }
   }
-  const report = await processNewEmails(shop, admin.graphql);
+  const report = await processNewEmails(shop, admin);
   console.log(
     `[auto-sync] shop=${shop} fetched=${report.total} support=${report.supportClient} errors=${report.errors}`,
   );
 }
+
 

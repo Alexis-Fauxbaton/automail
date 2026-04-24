@@ -61,6 +61,10 @@ describe("classifyIntent", () => {
     expect(classify("", "mon colis est bloqué depuis 5 jours")).toBe("package_stuck");
   });
 
+  it('detects "pas de mise à jour" as package_stuck (validates bug fix)', () => {
+    expect(classify("", "pas de mise à jour depuis 5 jours")).toBe("package_stuck");
+  });
+
   // --- refund_request ---
   it("detects refund request", () => {
     expect(classify("", "I would like a refund please")).toBe("refund_request");

@@ -402,6 +402,25 @@ describe("Pipeline: threadResolution", () => {
     expect(result.identifiers.email).toBeUndefined();
   });
 
+  it("thread provides email, parser finds orderNumber — both fields present in merged result", async () => {
+    vi.mocked(searchOrders).mockResolvedValue(SEARCH_RESULT_FULFILLED);
+
+    const result = await analyzeSupportEmail({
+      subject: "Order #1001",
+      body: "Where is my order #1001?", // parser finds orderNumber here
+      admin: mockAdmin,
+      threadResolution: {
+        identifiers: { email: "thread@example.com" }, // thread found email, not orderNumber
+        confidence: "low", // low → parser wins for orderNumber; but thread email must be added
+      },
+    });
+
+    // Parser wins for orderNumber (low confidence thread)
+    expect(result.identifiers.orderNumber).toBe("1001");
+    // Thread email must be merged in (parser didn't find one in this message)
+    expect(result.identifiers.email).toBe("thread@example.com");
+  });
+
   it("no crash when order is null and getTrackingFacts is called", async () => {
     vi.mocked(searchOrders).mockResolvedValue(SEARCH_RESULT_EMPTY);
     // getTrackingFacts is called with null order — must not throw

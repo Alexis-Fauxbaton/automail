@@ -121,6 +121,11 @@ describe("extractIdentifiers", () => {
     expect(result.trackingNumber).toBe("6123456789012");
   });
 
+  // --- Curly apostrophe (iOS/Mac Unicode) ---
+  it("extracts name with curly apostrophe from iOS/Mac email client", () => {
+    expect(extract("", "je m’appelle Jean Dupont")).toMatchObject({ customerName: "Jean Dupont" });
+  });
+
   // --- Empty / combined ---
   it("returns empty object on empty input", () => {
     expect(extract("", "")).toEqual({});

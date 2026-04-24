@@ -2,6 +2,15 @@ import { describe, it, expect } from "vitest";
 import { detectEndOfLoop } from "../end-of-loop";
 
 describe("detectEndOfLoop", () => {
+  it("returns false when incomingCount is 0 (no incoming message yet)", () => {
+    const result = detectEndOfLoop({
+      latestMessageBody: "Thank you!",
+      incomingCount: 0,
+      lastMessageDirection: "incoming",
+    });
+    expect(result.noReplyNeeded).toBe(false);
+  });
+
   it("returns false when only 1 incoming message (first reply always needed)", () => {
     const result = detectEndOfLoop({
       latestMessageBody: "thank you!",

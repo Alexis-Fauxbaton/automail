@@ -312,7 +312,10 @@ export async function crawlContexts(
     if (trackingNumber) {
       try {
         const result = await fetchTrackingFrom17track(trackingNumber);
-        if (result) {
+        // "NotFound" means 17track has a stale/wrong-carrier cached entry — skip it
+        // so we fall through to the SSR crawl strategy rather than surfacing bad data.
+        const isUsable = result && result.state === "ok" && result.status !== "NotFound";
+        if (isUsable) {
           const lines: string[] = [];
           if (result.carrierName) lines.push(`Carrier: ${result.carrierName}`);
           if (result.status) lines.push(`Status: ${result.status}`);

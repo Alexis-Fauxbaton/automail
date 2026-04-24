@@ -106,6 +106,9 @@ async function postJson<T>(url: string, body: unknown, apiKey: string): Promise<
 
 const DELIVERED_RE = /livr[ée]|delivered|remis[eé]|distribuée/i;
 
+/** @internal exported for unit testing only */
+export const parseTrackInfoForTest = parseTrackInfo;
+
 function parseTrackInfo(item: AcceptedItem): SevenTrackResult {
   const info = item.track_info;
   if (!info) {
@@ -149,64 +152,126 @@ function parseTrackInfo(item: AcceptedItem): SevenTrackResult {
 }
 
 // ---------------------------------------------------------------------------
+// Carrier code hints for 17track
+// Numeric codes from https://www.17track.net/en/apidoc (carrier list)
+// ---------------------------------------------------------------------------
+
+const CARRIER_CODE_HINTS: Array<{ re: RegExp; code: number; name: string }> = [
+  // Cainiao (190271 — NOT 190072 which is SUNYOU)
+  { re: /^CK\d/i,         code: 190271, name: "Cainiao" },
+  { re: /^CNFR/i,         code: 190271, name: "Cainiao" },
+  // Yanwen
+  { re: /^Y[A-Z]\d{14}$/i, code: 190150, name: "Yanwen" },
+  // 4PX
+  { re: /^4PX/i, code: 190148, name: "4PX" },
+  // UPS
+  { re: /^1Z[0-9A-Z]{16}$/, code: 100002, name: "UPS" },
+  // FedEx (12 or 15 digits)
+  { re: /^\d{12}$|^\d{15}$/, code: 100003, name: "FedEx" },
+  // DHL Express (10 digits)
+  { re: /^\d{10}$/, code: 100001, name: "DHL Express" },
+  // DPD France (13 digits starting with 08 or 09 — must come BEFORE generic 13-digit La Poste)
+  { re: /^(08|09)\d{11}$/, code: 100016, name: "DPD" },
+  // La Poste Colissimo (13 digits)
+  { re: /^\d{13}$/, code: 100068, name: "La Poste" },
+  // La Poste / ePacket international (2 letters + 9 digits + 2 letters)
+  { re: /^[A-Z]{2}\d{9}[A-Z]{2}$/, code: 100068, name: "La Poste" },
+  // Chronopost
+  { re: /^[A-Z]{2}\d{8}[A-Z]{2}$/i, code: 100174, name: "Chronopost" },
+  // GLS (11 digits)
+  { re: /^\d{11}$/, code: 100066, name: "GLS" },
+  // Mondial Relay (MR or 24R prefix followed by digits)
+  { re: /^(MR|24R)\d+$/i, code: 100162, name: "Mondial Relay" },
+];
+
+/**
+ * Return the 17track numeric carrier code if we can guess it from the tracking
+ * number format, or null if unknown. Passing a hint dramatically improves
+ * detection rates for carriers 17track doesn't auto-detect.
+ */
+// Carrier name keywords (from Shopify) → 17track numeric code
+const CARRIER_NAME_MAP: Array<{ keywords: RegExp; code: number }> = [
+  // Cainiao (190271 — NOT 190072 which is SUNYOU)
+  { keywords: /cainiao/i,         code: 190271 },
+  { keywords: /yanwen/i,          code: 190150 },
+  { keywords: /4px/i,             code: 190148 },
+  { keywords: /ups/i,             code: 100002 },
+  { keywords: /fedex/i,           code: 100003 },
+  { keywords: /dhl/i,             code: 100001 },
+  { keywords: /colissimo|la.?poste/i, code: 100068 },
+  { keywords: /chronopost/i,      code: 100174 },
+  { keywords: /mondial.?relay/i,  code: 100162 },
+  { keywords: /gls/i,             code: 100066 },
+  { keywords: /dpd/i,             code: 100016 },
+  { keywords: /tnt/i,             code: 100010 },
+];
+
+export function guessCarrierCode(trackingNumber: string, carrierNameHint?: string | null): number | null {
+  // 1. Pattern match (most reliable)
+  for (const { re, code } of CARRIER_CODE_HINTS) {
+    if (re.test(trackingNumber)) return code;
+  }
+  // 2. Shopify carrier name hint (fallback)
+  if (carrierNameHint) {
+    for (const { keywords, code } of CARRIER_NAME_MAP) {
+      if (keywords.test(carrierNameHint)) return code;
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Main export
 // ---------------------------------------------------------------------------
 
 export async function fetchTrackingFrom17track(
   trackingNumber: string,
+  _carrierNameHint?: string | null,
 ): Promise<SevenTrackResult | null> {
   const apiKey = getApiKey();
   if (!apiKey) return null;
 
-  try {
-    // Step 1: register (idempotent — safe to call every time)
-    await postJson<ApiResponse>(
-      `${BASE}/register`,
-      [{ number: trackingNumber }],
-      apiKey,
-    );
+  // Always let 17track auto-detect the carrier — passing a carrier code locks
+  // the lookup to that carrier's system, causing NotFound if the code is wrong.
+  const payload = [{ number: trackingNumber }];
 
-    // Step 2: get tracking info — retry up to MAX_ATTEMPTS times with a short
-    // delay between attempts. 17track fetches carrier data asynchronously after
-    // register, so the first call may return "pending" for new trackings.
-    const MAX_ATTEMPTS = 3;
+  try {
+    await postJson<ApiResponse>(`${BASE}/register`, payload, apiKey);
+
+    const MAX_POLL = 3;
     const RETRY_DELAY_MS = 1500;
 
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      if (attempt > 1) {
+    for (let poll = 1; poll <= MAX_POLL; poll++) {
+      if (poll > 1) {
         await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
       }
 
-      const infoRes = await postJson<ApiResponse>(
-        `${BASE}/gettrackinfo`,
-        [{ number: trackingNumber }],
-        apiKey,
-      );
+      const infoRes = await postJson<ApiResponse>(`${BASE}/gettrackinfo`, payload, apiKey);
 
       const accepted = infoRes.data?.accepted ?? [];
       const rejected = infoRes.data?.rejected ?? [];
 
       if (accepted.length > 0) {
-        return parseTrackInfo(accepted[0]);
-      }
+          // 17track may return multiple entries for the same number (one per past carrier
+          // registration). Prefer the first entry that has real data over a stale "NotFound".
+          const best =
+            accepted.find((a) => a.track_info?.latest_status?.status !== "NotFound") ??
+            accepted[0];
+          return parseTrackInfo(best);
+        }
+
+      const rejection = rejected[0];
 
       // -18019909 = "No tracking information at this time" (data pending)
-      const rejection = rejected[0];
       if (rejection?.error?.code === -18019909) {
-        if (attempt < MAX_ATTEMPTS) {
-          console.log(`[17track] pending for ${trackingNumber}, retry ${attempt}/${MAX_ATTEMPTS - 1}…`);
+        if (poll < MAX_POLL) {
+          console.log(`[17track] pending for ${trackingNumber}, retry ${poll}/${MAX_POLL - 1}…`);
           continue;
         }
-        // All attempts exhausted
         return {
           state: "pending",
-          carrierName: null,
-          status: null,
-          lastEvent: null,
-          lastLocation: null,
-          lastEventDate: null,
-          delivered: false,
-          events: [],
+          carrierName: null, status: null, lastEvent: null,
+          lastLocation: null, lastEventDate: null, delivered: false, events: [],
         };
       }
 

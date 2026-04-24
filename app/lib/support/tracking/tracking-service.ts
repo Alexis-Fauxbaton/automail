@@ -21,7 +21,7 @@ async function resolveOneFulfillment(
   // --- 1. Try 17track first ---
   if (trackingNumber) {
     try {
-      const result = await fetchTrackingFrom17track(trackingNumber);
+      const result = await fetchTrackingFrom17track(trackingNumber, fulfillment.carrier ?? null);
       if (result && result.state === "ok") {
         return {
           source: "seventeen_track",

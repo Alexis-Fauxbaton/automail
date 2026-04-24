@@ -290,7 +290,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "sync") {
     // Run inline — incremental sync with cursor is fast (seconds, not minutes).
     // enqueueJob is reserved for heavy backfill/resync operations.
-    const report = await processNewEmails(session.shop, admin.graphql);
+    const report = await processNewEmails(session.shop, admin);
     return { report, syncCompleted: true, disconnected: false, reanalyzed: null, refined: null, stopped: false };
   }
 
@@ -1108,6 +1108,76 @@ function ThreadIdentifiersEditor({
   );
 }
 
+function normalizeEmailBody(raw: string): string {
+  return raw
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/\n[ \t]*(\n[ \t]*){2,}/g, "\n\n")
+    .trimEnd();
+}
+
+function EmailMessageBlock({
+  email,
+  idx,
+  total,
+  connectedEmail,
+}: {
+  email: SerializedEmail;
+  idx: number;
+  total: number;
+  connectedEmail: string | null;
+}) {
+  const isLatest = idx === total - 1;
+  const direction = getMessageDirection(email, connectedEmail);
+  const body = normalizeEmailBody(email.bodyText);
+  const PREVIEW_LENGTH = 300;
+  const needsToggle = body.length > PREVIEW_LENGTH;
+  const [expanded, setExpanded] = useState(isLatest); // latest expanded by default
+
+  return (
+    <s-box padding="base" background="subdued" borderRadius="base">
+      <s-stack direction="block" gap="small-300">
+        <button
+          type="button"
+          onClick={() => needsToggle && setExpanded((v) => !v)}
+          style={{
+            all: "unset",
+            display: "block",
+            width: "100%",
+            cursor: needsToggle ? "pointer" : "default",
+          }}
+        >
+          <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontWeight: 600, fontSize: "var(--p-font-size-300)" }}>
+              {email.fromName || email.fromAddress}
+            </span>
+            <span style={{ fontSize: "var(--p-font-size-200)", color: "var(--p-color-text-secondary)" }}>
+              {relativeTime(email.receivedAt)}
+            </span>
+            <span>
+              <s-badge tone={direction === "outgoing" ? "neutral" : "info"}>
+                {direction}
+              </s-badge>
+            </span>
+            {isLatest && total > 1 && <s-badge tone="info">Latest</s-badge>}
+            {needsToggle && (
+              <span style={{ marginLeft: "auto", fontSize: "var(--p-font-size-200)", color: "var(--p-color-text-secondary)" }}>
+                {expanded ? "▲ Collapse" : "▼ Expand"}
+              </span>
+            )}
+          </div>
+        </button>
+
+        <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: "var(--p-font-size-300)", lineHeight: "var(--p-font-line-height-2)" }}>
+          {expanded
+            ? body
+            : body.slice(0, PREVIEW_LENGTH) + (needsToggle ? "…" : "")}
+        </div>
+      </s-stack>
+    </s-box>
+  );
+}
+
 function ThreadCard({
   thread,
   threadState,
@@ -1296,34 +1366,13 @@ function ThreadCard({
           <s-stack direction="block" gap="base">
             {/* Thread messages */}
             {emails.map((email, idx) => (
-              <s-box key={email.id} padding="base" background="subdued" borderRadius="base">
-                <s-stack direction="block" gap="small-300">
-                  <s-stack direction="inline" gap="small-300" blockAlign="center">
-                    <s-text variant="headingSm">
-                      {email.fromName || email.fromAddress}
-                    </s-text>
-                    <s-text variant="bodySm" tone="subdued">
-                      {relativeTime(email.receivedAt)}
-                    </s-text>
-                    <s-badge tone={getMessageDirection(email, connectedEmail) === "outgoing" ? "read-only" : "info"}>
-                      {getMessageDirection(email, connectedEmail)}
-                    </s-badge>
-                    {idx === emails.length - 1 && messageCount > 1 && (
-                      <s-badge tone="info">Latest</s-badge>
-                    )}
-                  </s-stack>
-                  <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: "var(--p-font-size-300)", lineHeight: "var(--p-font-line-height-2)" }}>
-                    {(() => {
-                      const text = email.bodyText
-                        .replace(/\r\n/g, "\n")   // normalize CRLF
-                        .replace(/\r/g, "\n")     // normalize stray CR
-                        .replace(/\n[ \t]*(\n[ \t]*){2,}/g, "\n\n")  // collapse blank lines
-                        .trimEnd();
-                      return text.length > 1500 ? text.slice(0, 1500) + "…" : text;
-                    })()}
-                  </div>
-                </s-stack>
-              </s-box>
+              <EmailMessageBlock
+                key={email.id}
+                email={email}
+                idx={idx}
+                total={emails.length}
+                connectedEmail={connectedEmail}
+              />
             ))}
 
             {reason && (

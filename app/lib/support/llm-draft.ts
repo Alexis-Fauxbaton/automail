@@ -154,6 +154,28 @@ function buildUserMessage(
       sections.push(`Fulfillment status: ${order.displayFulfillmentStatus}`);
     if (order.displayFinancialStatus)
       sections.push(`Financial status: ${order.displayFinancialStatus}`);
+
+    // Partial fulfillment: compute which items haven't shipped yet
+    if (order.displayFulfillmentStatus === "PARTIALLY_FULFILLED" && order.lineItems.length > 0) {
+      // Build a map of quantities already in a fulfillment
+      const shippedQty = new Map<string, number>();
+      for (const f of order.fulfillments) {
+        for (const li of f.lineItems) {
+          shippedQty.set(li.title, (shippedQty.get(li.title) ?? 0) + li.quantity);
+        }
+      }
+      const unshipped = order.lineItems
+        .map((li) => ({ ...li, remaining: li.quantity - (shippedQty.get(li.title) ?? 0) }))
+        .filter((li) => li.remaining > 0);
+      if (unshipped.length > 0) {
+        sections.push(
+          `⚠ Split shipment: This order is being shipped in multiple packages. The following items have NOT yet been shipped:\n` +
+          unshipped.map((li) => `- ${li.remaining}× ${li.title}`).join("\n") +
+          `\nInform the customer clearly that their order is split across several shipments and that the remaining item(s) will be shipped separately.`,
+        );
+      }
+    }
+
     if (orderCandidates.length > 1)
       sections.push(
         `⚠ Ambiguity: ${orderCandidates.length} orders matched. Show the above order but acknowledge the ambiguity and ask the customer to confirm.`,
@@ -183,22 +205,32 @@ function buildUserMessage(
       sections.push(
         `Source: ${t.source}${t.inferred ? " (INFERRED — not verified by carrier API)" : ""}`,
       );
-      if (t.carrier) sections.push(`Carrier: ${t.carrier}`);
 
       if (shareTrackingNumber) {
+        if (t.carrier) sections.push(`Carrier: ${t.carrier}`);
         if (t.trackingNumber) sections.push(`Tracking number: ${t.trackingNumber}`);
         if (t.trackingUrl) sections.push(`Tracking URL: ${t.trackingUrl}`);
+        if (t.status) sections.push(`Status: ${t.status}`);
+        if (t.lastEvent) sections.push(`Last event: ${t.lastEvent}`);
+        if (t.lastLocation) sections.push(`Last location: ${t.lastLocation}`);
+        if (t.lastEventDate) sections.push(`Last event date: ${t.lastEventDate}`);
+        if (t.delivered) sections.push(`Delivered: yes`);
       } else {
+        // Dropshipping mode: pass all tracking facts but instruct the LLM to
+        // self-censor anything that could reveal the shipment comes from China.
+        // Once the parcel is in Europe the location details are useful and safe.
         sections.push(
-          "TRACKING NUMBER RULE: Do NOT mention the tracking number or tracking URL in the reply. The merchant has chosen not to share it.",
+          "TRACKING RULE (dropshipping): Do NOT mention the tracking number, tracking URL, or carrier name. " +
+          "Do NOT mention any location, city or country that could reveal the shipment originates from China " +
+          "(e.g. Chinese cities, sorting centers in Asia, carrier notes mentioning China). " +
+          "If the last known location is in Europe or clearly on its way to the customer, you MAY mention it naturally as a reassurance.",
         );
+        if (t.status) sections.push(`Status: ${t.status}`);
+        if (t.lastEvent) sections.push(`Last event: ${t.lastEvent}`);
+        if (t.lastLocation) sections.push(`Last location: ${t.lastLocation}`);
+        if (t.lastEventDate) sections.push(`Last update date: ${t.lastEventDate}`);
+        if (t.delivered) sections.push(`Delivered: yes`);
       }
-
-      if (t.status) sections.push(`Status: ${t.status}`);
-      if (t.lastEvent) sections.push(`Last event: ${t.lastEvent}`);
-      if (t.lastLocation) sections.push(`Last location: ${t.lastLocation}`);
-      if (t.lastEventDate) sections.push(`Last event date: ${t.lastEventDate}`);
-      if (t.delivered) sections.push(`Delivered: yes`);
     }
   } else if (trackings.length === 0 && !order) {
     // No order means no tracking context to show

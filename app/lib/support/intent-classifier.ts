@@ -32,7 +32,7 @@ const RULES: Rule[] = [
       /hasn'?t moved/i,
       /bloqu[ée]/i,
       /n'avance plus/i,
-      /pas de mise ? jour/i,
+      /pas de mise [àa] jour/i,
     ],
   },
   {
