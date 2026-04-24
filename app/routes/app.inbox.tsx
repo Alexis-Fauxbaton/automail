@@ -1484,6 +1484,9 @@ function DraftBlock({ email, threadSenderEmail }: {
     }, 800);
   };
 
+  // Clear pending debounce timer on unmount to prevent dangling fetch
+  useEffect(() => () => { if (metaSaveTimer.current) clearTimeout(metaSaveTimer.current); }, []);
+
   // Jump to latest version when a new draft arrives
   useEffect(() => {
     setVersionIndex(allVersions.length - 1);
