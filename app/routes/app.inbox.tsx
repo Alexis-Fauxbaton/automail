@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useFetcher, useLoaderData, useNavigation, useRevalidator } from "react-router";
 
@@ -13,6 +13,7 @@ import { AnalysisDisplay } from "../components/SupportAnalysisDisplay";
 import type { SupportAnalysisExtended } from "../lib/support/orchestrator";
 import type { MailProvider } from "../lib/mail/types";
 import { decodeHtmlEntities } from "../lib/gmail/client";
+import { buildReplySubject } from "../lib/support/draft-subject";
 import prisma from "../db.server";
 
 // ---------------------------------------------------------------------------
@@ -1400,7 +1401,7 @@ function ThreadCard({
             )}
 
             {/* Draft (prefer latest draft, fallback to previous analyzed email's draft) */}
-            {draftEmail && !noReplyNeeded && <DraftBlock email={draftEmail} />}
+            {draftEmail && !noReplyNeeded && <DraftBlock email={draftEmail} threadSenderEmail={latest.fromAddress} />}
 
             {noReplyNeeded && (
               <s-banner tone="info">
@@ -1448,17 +1449,46 @@ function ThreadCard({
   );
 }
 
-function DraftBlock({ email }: { email: SerializedEmail }) {
+function DraftBlock({ email, threadSenderEmail }: {
+  email: SerializedEmail;
+  threadSenderEmail: string;
+}) {
   const allVersions = [...email.draftHistory, email.draftReply!];
   const [versionIndex, setVersionIndex] = useState(allVersions.length - 1);
   const currentVersion = allVersions[versionIndex] ?? email.draftReply!;
   const isLatest = versionIndex === allVersions.length - 1;
   const total = allVersions.length;
 
-  // Jump to latest version automatically when a new draft is added (e.g. after AI refinement)
+  // Compose field state
+  const [subject, setSubject] = useState(
+    email.draftSubject ?? buildReplySubject(email.subject)
+  );
+  const [cc, setCC] = useState(email.draftCC ?? "");
+  const [bcc, setBCC] = useState(email.draftBCC ?? "");
+  const [showBCC, setShowBCC] = useState(!!email.draftBCC);
+  const [replyMode, setReplyMode] = useState(email.draftReplyMode ?? "thread");
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [attachments, setAttachments] = useState(email.draftAttachments);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Auto-save debounce for metadata fields
+  const metaSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveMeta = (patch: Record<string, string>) => {
+    if (metaSaveTimer.current) clearTimeout(metaSaveTimer.current);
+    metaSaveTimer.current = setTimeout(async () => {
+      await fetch("/api/reply-draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ emailId: email.id, ...patch }),
+      });
+    }, 800);
+  };
+
+  // Jump to latest version when a new draft arrives
   useEffect(() => {
     setVersionIndex(allVersions.length - 1);
   }, [allVersions.length]);
+
   const refineFetcher = useFetcher();
   const regenerateFetcher = useFetcher();
   const redraftFetcher = useFetcher();
@@ -1466,32 +1496,125 @@ function DraftBlock({ email }: { email: SerializedEmail }) {
   const regenerating = regenerateFetcher.state !== "idle";
   const redrafting = redraftFetcher.state !== "idle";
 
+  async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const formData = new FormData();
+    formData.append("emailId", email.id);
+    formData.append("file", file);
+    const res = await fetch("/api/draft-attachment", { method: "POST", body: formData });
+    if (res.ok) {
+      const att = await res.json() as typeof email.draftAttachments[number];
+      setAttachments((prev) => [...prev, att]);
+    }
+    e.target.value = "";
+  }
+
+  async function handleRemoveAttachment(attId: string) {
+    const res = await fetch(`/api/draft-attachment?id=${attId}`, { method: "DELETE" });
+    if (res.ok) setAttachments((prev) => prev.filter((a) => a.id !== attId));
+  }
+
+  const labelStyle: React.CSSProperties = { fontSize: "12px", color: "var(--p-color-text-subdued)", minWidth: "52px" };
+  const rowStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: "8px" };
+
   return (
     <s-box padding="base" borderWidth="base" borderRadius="base">
       <s-stack direction="block" gap="base">
+
+        {/* Compose header */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <div style={rowStyle}>
+            <span style={labelStyle}>À</span>
+            <span style={{ fontSize: "13px", color: "var(--p-color-text-subdued)" }}>{threadSenderEmail}</span>
+          </div>
+          <div style={rowStyle}>
+            <span style={labelStyle}>Objet</span>
+            <input
+              style={{ flex: 1, border: "none", borderBottom: "1px solid var(--p-color-border)", padding: "2px 0", fontSize: "13px", background: "transparent", outline: "none" }}
+              value={subject}
+              onChange={(e) => {
+                setSubject(e.target.value);
+                saveMeta({ subject: e.target.value });
+              }}
+            />
+          </div>
+          <div style={rowStyle}>
+            <span style={labelStyle}>CC</span>
+            <input
+              style={{ flex: 1, border: "none", borderBottom: "1px solid var(--p-color-border)", padding: "2px 0", fontSize: "13px", background: "transparent", outline: "none" }}
+              placeholder="email@exemple.com"
+              value={cc}
+              onChange={(e) => {
+                setCC(e.target.value);
+                saveMeta({ cc: e.target.value });
+              }}
+            />
+            {!showBCC && (
+              <button
+                onClick={() => setShowBCC(true)}
+                style={{ fontSize: "11px", color: "var(--p-color-text-subdued)", background: "none", border: "none", cursor: "pointer", whiteSpace: "nowrap" }}
+              >
+                + BCC
+              </button>
+            )}
+          </div>
+          {showBCC && (
+            <div style={rowStyle}>
+              <span style={labelStyle}>BCC</span>
+              <input
+                style={{ flex: 1, border: "none", borderBottom: "1px solid var(--p-color-border)", padding: "2px 0", fontSize: "13px", background: "transparent", outline: "none" }}
+                placeholder="email@exemple.com"
+                value={bcc}
+                onChange={(e) => {
+                  setBCC(e.target.value);
+                  saveMeta({ bcc: e.target.value });
+                }}
+              />
+            </div>
+          )}
+
+          {/* Attachments */}
+          <div style={{ marginTop: "4px" }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center" }}>
+              {attachments.map((att) => (
+                <span
+                  key={att.id}
+                  style={{ fontSize: "12px", background: "var(--p-color-bg-surface-secondary)", borderRadius: "4px", padding: "2px 8px", display: "flex", alignItems: "center", gap: "4px" }}
+                >
+                  📎 {att.fileName}
+                  <button
+                    onClick={() => handleRemoveAttachment(att.id)}
+                    style={{ background: "none", border: "none", cursor: "pointer", color: "var(--p-color-text-subdued)", padding: "0 2px", fontSize: "12px" }}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                style={{ fontSize: "12px", color: "var(--p-color-text-subdued)", background: "none", border: "none", cursor: "pointer" }}
+                title="Les fichiers ajoutés sont conservés 7 jours"
+              >
+                + Ajouter une PJ
+              </button>
+              <input ref={fileInputRef} type="file" style={{ display: "none" }} onChange={handleFileSelect} />
+            </div>
+          </div>
+        </div>
+
+        <div style={{ borderTop: "1px solid var(--p-color-border)" }} />
+
+        {/* Draft body */}
         <s-stack direction="inline" gap="small-300" blockAlign="center">
           <s-text variant="headingSm">Draft reply</s-text>
           {total > 1 && (
             <s-stack direction="inline" gap="small-200" blockAlign="center">
-              <s-button
-                variant="plain"
-                size="small"
-                disabled={versionIndex === 0}
-                onClick={() => setVersionIndex(Math.max(0, versionIndex - 1))}
-              >
-                ←
-              </s-button>
-              <s-text variant="bodySm" tone="subdued">
-                v{versionIndex + 1}/{total}{isLatest ? "" : " (old)"}
-              </s-text>
-              <s-button
-                variant="plain"
-                size="small"
-                disabled={isLatest}
-                onClick={() => setVersionIndex(Math.min(total - 1, versionIndex + 1))}
-              >
-                →
-              </s-button>
+              <s-button variant="plain" size="small" disabled={versionIndex === 0}
+                onClick={() => setVersionIndex(Math.max(0, versionIndex - 1))}>←</s-button>
+              <s-text variant="bodySm" tone="subdued">v{versionIndex + 1}/{total}{isLatest ? "" : " (old)"}</s-text>
+              <s-button variant="plain" size="small" disabled={isLatest}
+                onClick={() => setVersionIndex(Math.min(total - 1, versionIndex + 1))}>→</s-button>
             </s-stack>
           )}
         </s-stack>
@@ -1510,11 +1633,8 @@ function DraftBlock({ email }: { email: SerializedEmail }) {
             <input type="hidden" name="currentDraft" value={currentVersion} />
             <s-stack direction="inline" gap="small-300" blockAlign="end">
               <div style={{ flex: 1 }}>
-                <s-text-field
-                  label="Refinement instructions"
-                  name="instructions"
-                  placeholder="e.g. Be more formal, mention refund policy, shorten…"
-                />
+                <s-text-field label="Refinement instructions" name="instructions"
+                  placeholder="e.g. Be more formal, mention refund policy, shorten…" />
               </div>
               <s-button type="submit" variant="secondary" disabled={refining || regenerating}>
                 {refining ? "Refining…" : "Refine with AI"}
@@ -1523,7 +1643,6 @@ function DraftBlock({ email }: { email: SerializedEmail }) {
           </refineFetcher.Form>
         )}
 
-        {/* Regenerate draft + Refresh context — inline, separated from Refine */}
         <div style={{ display: "flex", gap: "8px", borderTop: "1px solid var(--p-color-border)", paddingTop: "8px" }}>
           <redraftFetcher.Form method="post">
             <input type="hidden" name="_action" value="redraft" />
@@ -1532,7 +1651,6 @@ function DraftBlock({ email }: { email: SerializedEmail }) {
               {redrafting ? "Regenerating…" : "Regenerate draft"}
             </s-button>
           </redraftFetcher.Form>
-
           <regenerateFetcher.Form method="post">
             <input type="hidden" name="_action" value="reanalyze" />
             <input type="hidden" name="emailId" value={email.id} />
@@ -1541,6 +1659,36 @@ function DraftBlock({ email }: { email: SerializedEmail }) {
             </s-button>
           </regenerateFetcher.Form>
         </div>
+
+        {/* Advanced options */}
+        <div>
+          <button
+            onClick={() => setShowAdvanced(!showAdvanced)}
+            style={{ fontSize: "12px", color: "var(--p-color-text-subdued)", background: "none", border: "none", cursor: "pointer" }}
+          >
+            {showAdvanced ? "▾" : "▸"} Options avancées
+          </button>
+          {showAdvanced && (
+            <div style={{ marginTop: "8px", display: "flex", flexDirection: "column", gap: "6px" }}>
+              {(["thread", "new_thread"] as const).map((mode) => (
+                <label key={mode} style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", cursor: "pointer" }}>
+                  <input
+                    type="radio"
+                    name={`replyMode-${email.id}`}
+                    value={mode}
+                    checked={replyMode === mode}
+                    onChange={() => {
+                      setReplyMode(mode);
+                      saveMeta({ replyMode: mode });
+                    }}
+                  />
+                  {mode === "thread" ? "Répondre dans ce thread" : "Nouveau thread"}
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+
       </s-stack>
     </s-box>
   );
