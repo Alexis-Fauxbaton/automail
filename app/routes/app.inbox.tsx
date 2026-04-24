@@ -32,6 +32,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       where: { shop },
       orderBy: { receivedAt: "desc" },
       take: 500,
+      include: {
+        replyDraft: { include: { attachments: true } },
+      },
     });
 
     const canonicalIds = Array.from(
@@ -58,6 +61,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         },
         orderBy: { receivedAt: "desc" },
         distinct: ["canonicalThreadId"],
+        include: {
+          replyDraft: { include: { attachments: true } },
+        },
       });
       extraRows = analyzedPerThread.filter((r) => !existingIds.has(r.id));
     }
@@ -341,7 +347,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const instructions = String(formData.get("instructions") ?? "");
     const currentDraft = String(formData.get("currentDraft") ?? "");
     const record = await prisma.incomingEmail.findUnique({ where: { id: emailId } });
-    if (!record || !currentDraft || !instructions) {
+    if (!record || record.shop !== session.shop || !currentDraft || !instructions) {
       return { report: null, disconnected: false, reanalyzed: null, refined: null };
     }
     const newDraft = await refineDraft(currentDraft, instructions, {
@@ -352,13 +358,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       emailId: emailId,
       threadId: record.threadId,
     });
-    let history: string[] = [];
-    try { history = JSON.parse(record.draftHistory || "[]"); } catch { /* ignore */ }
-    history.push(currentDraft);
-    await prisma.incomingEmail.update({
-      where: { id: emailId },
-      data: { draftReply: newDraft, draftHistory: JSON.stringify(history) },
+    const { upsertReplyDraftBody } = await import("../lib/support/reply-draft");
+    await upsertReplyDraftBody(emailId, session.shop, newDraft);
+    const updatedRD = await prisma.replyDraft.findUnique({
+      where: { emailId },
+      select: { bodyHistory: true },
     });
+    const history = Array.isArray(updatedRD?.bodyHistory)
+      ? (updatedRD!.bodyHistory as string[])
+      : [];
     return { refined: { emailId, newDraft, draftHistory: history }, report: null, disconnected: false, reanalyzed: null };
   }
 
@@ -498,6 +506,20 @@ interface SerializedEmail {
   analysisResult: SupportAnalysisExtended | null;
   draftReply: string | null;
   draftHistory: string[];
+  draftCC: string | null;
+  draftBCC: string | null;
+  draftSubject: string | null;
+  draftReplyMode: string;
+  draftAttachments: Array<{
+    id: string;
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+    source: string;
+    storagePath: string | null;
+    threadAttachmentRef: string | null;
+  }>;
+  replyDraftId: string | null;
   errorMessage: string | null;
 }
 
@@ -520,13 +542,31 @@ function serializeEmail(row: {
   draftReply: string | null;
   draftHistory: string;
   errorMessage: string | null;
+  replyDraft?: {
+    id: string;
+    body: string | null;
+    bodyHistory: unknown;
+    cc: string | null;
+    bcc: string | null;
+    subject: string | null;
+    replyMode: string;
+    attachments: Array<{
+      id: string;
+      fileName: string;
+      mimeType: string;
+      sizeBytes: number;
+      source: string;
+      storagePath: string | null;
+      threadAttachmentRef: string | null;
+    }>;
+  } | null;
 }): SerializedEmail {
   let parsed: SupportAnalysisExtended | null = null;
   if (row.analysisResult) {
     try { parsed = JSON.parse(row.analysisResult); } catch { /* ignore */ }
   }
-  let history: string[] = [];
-  try { history = JSON.parse(row.draftHistory || "[]"); } catch { /* ignore */ }
+  const rd = row.replyDraft ?? null;
+  const history: string[] = Array.isArray(rd?.bodyHistory) ? (rd!.bodyHistory as string[]) : [];
   return {
     id: row.id,
     externalMessageId: row.externalMessageId,
@@ -543,8 +583,14 @@ function serializeEmail(row: {
     isKnownCustomer: row.isKnownCustomer,
     processingStatus: row.processingStatus,
     analysisResult: parsed,
-    draftReply: row.draftReply,
+    draftReply: rd?.body ?? null,
     draftHistory: history,
+    draftCC: rd?.cc ?? null,
+    draftBCC: rd?.bcc ?? null,
+    draftSubject: rd?.subject ?? null,
+    draftReplyMode: rd?.replyMode ?? "thread",
+    draftAttachments: rd?.attachments ?? [],
+    replyDraftId: rd?.id ?? null,
     errorMessage: row.errorMessage,
   };
 }
