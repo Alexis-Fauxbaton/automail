@@ -6,6 +6,7 @@ import { type EntryContext } from "react-router";
 import { isbot } from "isbot";
 import { addDocumentResponseHeaders } from "./shopify.server";
 import { startAutoSyncLoop } from "./lib/mail/auto-sync";
+import { runBootCleanup } from "./lib/attachments/boot-cleanup";
 
 export const streamTimeout = 5000;
 
@@ -13,6 +14,7 @@ export const streamTimeout = 5000;
 // (spec §10). The function itself is idempotent, so double-import
 // (HMR, etc.) is safe.
 startAutoSyncLoop();
+runBootCleanup().catch((err) => console.error("[entry.server] boot cleanup failed:", err));
 
 export default async function handleRequest(
   request: Request,
