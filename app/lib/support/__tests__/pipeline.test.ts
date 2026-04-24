@@ -98,12 +98,12 @@ function useTemplateDraft() {
   vi.mocked(generateLLMDraft).mockImplementation(async (input) =>
     buildDraft({
       intent: input.intent,
+      identifiers: input.identifiers,
       order: input.order,
       orderCandidates: input.orderCandidates,
       trackings: input.trackings,
       warnings: input.warnings,
       confidence: "high",
-      draftReply: "",
       conversation: {
         messageCount: 1,
         incomingCount: 1,

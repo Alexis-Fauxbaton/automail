@@ -157,7 +157,7 @@ export async function recomputeThreadState(
       tier1Result: true,
       tier2Result: true,
       analysisResult: true,
-      draftReply: true,
+      replyDraft: { select: { body: true } },
     },
   });
 
@@ -215,7 +215,7 @@ export async function recomputeThreadState(
           /* ignore */
         }
       }
-      hasDraft = !!m.draftReply;
+      hasDraft = !!m.replyDraft?.body;
       targetReplyNeeded = !noReplyNeeded && mergedNature !== "non_support";
     }
   }

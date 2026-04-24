@@ -181,8 +181,6 @@ model IncomingEmail {
   // the JSON blob — written at the same time in the pipeline.
   detectedIntent      String?  // SupportIntent enum value
   analysisConfidence  String?  // "high" | "medium" | "low"
-  draftReply          String?
-  draftHistory     String   @default("[]") // JSON array of previous drafts
   errorMessage     String?
   // Aggregated LLM cost tracking (sum of all LLM calls on this email)
   llmTokensTotal   Int      @default(0)
@@ -191,6 +189,7 @@ model IncomingEmail {
   updatedAt        DateTime @updatedAt
 
   thread Thread? @relation(fields: [canonicalThreadId], references: [id], onDelete: SetNull)
+  replyDraft   ReplyDraft?
 
   @@unique([shop, externalMessageId])
   @@index([shop, processingStatus])
@@ -199,6 +198,47 @@ model IncomingEmail {
   @@index([shop, rfcMessageId])
   @@index([shop, detectedIntent])
   @@index([shop, analysisConfidence])
+}
+
+model ReplyDraft {
+  id          String   @id @default(cuid())
+  shop        String
+  emailId     String   @unique
+  email       IncomingEmail @relation(fields: [emailId], references: [id], onDelete: Cascade)
+
+  body        String?
+  bodyHistory Json     @default("[]")
+
+  subject     String?
+  cc          String?
+  bcc         String?
+  replyMode   String   @default("thread")
+
+  attachments DraftAttachment[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([shop])
+}
+
+model DraftAttachment {
+  id                  String     @id @default(cuid())
+  shop                String
+  replyDraftId        String
+  replyDraft          ReplyDraft @relation(fields: [replyDraftId], references: [id], onDelete: Cascade)
+
+  fileName            String
+  mimeType            String
+  sizeBytes           Int
+  source              String     // "upload" | "thread"
+  storagePath         String?
+  threadAttachmentRef String?
+
+  createdAt           DateTime   @default(now())
+
+  @@index([shop])
+  @@index([replyDraftId])
 }
 
 // Granular log of every OpenAI call. Enables precise cost attribution
