@@ -592,9 +592,12 @@ async function classifyAndDraft(
         // dashboards / rules don't have to parse JSON.
         detectedIntent: analysis.intent,
         analysisConfidence: analysis.confidence,
-        draftReply: analysis.draftReply,
       },
     });
+    if (analysis.draftReply) {
+      const { upsertReplyDraftBody } = await import("../support/reply-draft");
+      await upsertReplyDraftBody(record.id, record.shop, analysis.draftReply);
+    }
     if (record.canonicalThreadId) {
       try {
         await recomputeThreadState(record.canonicalThreadId, {
@@ -858,9 +861,12 @@ export async function reanalyzeEmail(
       analysisResult: JSON.stringify(analysis),
       detectedIntent: analysis.intent,
       analysisConfidence: analysis.confidence,
-      draftReply: analysis.draftReply,
     },
   });
+  if (analysis.draftReply) {
+    const { upsertReplyDraftBody } = await import("../support/reply-draft");
+    await upsertReplyDraftBody(emailId, shop, analysis.draftReply);
+  }
 
   if (record.canonicalThreadId) {
     try {
@@ -904,17 +910,8 @@ export async function redraftEmail(emailId: string, shop: string): Promise<strin
     trackedCallContext: { shop, emailId: record.id, threadId: record.threadId },
   });
 
-  const currentHistory: string[] = (() => {
-    try { return JSON.parse(record.draftHistory || "[]"); } catch { return []; }
-  })();
-  const updatedHistory = record.draftReply
-    ? [...currentHistory, record.draftReply]
-    : currentHistory;
-
-  await prisma.incomingEmail.update({
-    where: { id: emailId },
-    data: { draftReply: newDraft, draftHistory: JSON.stringify(updatedHistory) },
-  });
+  const { upsertReplyDraftBody } = await import("../support/reply-draft");
+  await upsertReplyDraftBody(emailId, shop, newDraft);
 
   return newDraft;
 }
