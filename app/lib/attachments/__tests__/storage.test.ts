@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -14,8 +14,6 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-// Import after setting up — we'll need to pass the base dir
-// Storage module exports a factory to allow injecting the base dir in tests
 import { createStorage } from "../storage";
 
 describe("createStorage", () => {
@@ -63,6 +61,6 @@ describe("createStorage", () => {
   it("getUrl() returns a URL using the storagePath", () => {
     const storage = createStorage(tmpDir);
     const url = storage.getUrl("shop1/email-abc/abc123-doc.pdf");
-    expect(url).toContain("shop1/email-abc/abc123-doc.pdf");
+    expect(url).toBe("/uploads/shop1/email-abc/abc123-doc.pdf");
   });
 });

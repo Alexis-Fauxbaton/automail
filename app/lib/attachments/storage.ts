@@ -14,8 +14,9 @@ export function createStorage(baseDir: string): Storage {
       const dir = path.join(baseDir, shop, emailId);
       fs.mkdirSync(dir, { recursive: true });
 
-      const ext = path.extname(file.name);
-      const base = path.basename(file.name, ext)
+      const rawExt = path.extname(file.name);
+      const ext = /^[a-zA-Z0-9.]{1,10}$/.test(rawExt) ? rawExt : "";
+      const base = path.basename(file.name, rawExt)
         .replace(/[^a-zA-Z0-9._-]/g, "_")
         .slice(0, 60);
       const filename = `${createId()}-${base}${ext}`;
@@ -29,7 +30,11 @@ export function createStorage(baseDir: string): Storage {
     },
 
     async remove(storagePath) {
-      const fullPath = path.join(baseDir, storagePath);
+      const resolvedBase = path.resolve(baseDir);
+      const fullPath = path.resolve(baseDir, storagePath);
+      if (!fullPath.startsWith(resolvedBase + path.sep)) {
+        throw new Error(`[storage] refusing to remove path outside baseDir: ${storagePath}`);
+      }
       try {
         fs.unlinkSync(fullPath);
       } catch (err: unknown) {
