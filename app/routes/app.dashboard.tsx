@@ -212,6 +212,7 @@ export default function Dashboard() {
           {presets.map((p) => (
             <button
               key={p}
+              type="button"
               onClick={() => selectPreset(p)}
               style={{
                 padding: "4px 12px",
