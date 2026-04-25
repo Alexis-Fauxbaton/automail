@@ -1,4 +1,4 @@
-import type { PrismaClient } from "@prisma/client";
+import type { PrismaClient, Prisma } from "@prisma/client";
 
 type HistoryEntry = {
   shop: string;
@@ -23,7 +23,7 @@ export function buildHistoryEntry(params: {
 }
 
 export async function recordStateTransition(
-  prisma: PrismaClient,
+  prisma: PrismaClient | Prisma.TransactionClient,
   params: {
     shop: string;
     threadId: string;

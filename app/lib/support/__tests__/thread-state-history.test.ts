@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { buildHistoryEntry } from "../thread-state-history";
 
 describe("buildHistoryEntry", () => {
-  it("retourne fromState null quand l'ancien état est identique au nouvel état", () => {
+  it("retourne null quand l'ancien état est identique au nouvel état", () => {
     const entry = buildHistoryEntry({
       shop: "test.myshopify.com",
       threadId: "thread_1",
