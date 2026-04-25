@@ -44,6 +44,7 @@ model SupportSettings {
   shareTrackingNumber   Boolean  @default(true)
   customerGreetingStyle String   @default("auto")         // auto | first_name | full_name | neutral
   refundPolicy          String   @default("")
+  autoDraft             Boolean  @default(true)           // auto-generate draft on incoming support email
   updatedAt             DateTime @updatedAt
 }
 
@@ -123,8 +124,9 @@ model Thread {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  providerIds ThreadProviderId[]
-  messages    IncomingEmail[]
+  providerIds  ThreadProviderId[]
+  messages     IncomingEmail[]
+  stateHistory ThreadStateHistory[]
 
   @@index([shop, lastMessageAt])
   @@index([shop, supportNature])
@@ -171,6 +173,7 @@ model IncomingEmail {
   snippet          String   @default("")
   bodyText         String   @default("")
   receivedAt       DateTime
+  labelIds         String   @default("[]")   // JSON array of provider label IDs e.g. ["INBOX","CATEGORY_PROMOTIONS"]
   tier1Result      String?  // "passed" | "filtered:<reason>"
   tier2Result      String?  // "support_client" | "probable_non_client" | "incertain"
   isKnownCustomer  Boolean  @default(false)
@@ -260,6 +263,25 @@ model LlmCallLog {
   @@index([shop, createdAt])
   @@index([emailId])
   @@index([threadId])
+}
+
+// Audit trail of every operationalState transition on a Thread.
+// Populated whenever Thread.operationalState changes. Used by the
+// dashboard stats page to compute conversation trends over time.
+// onDelete: Cascade ensures rows are removed when a Thread is deleted
+// (e.g. GDPR shop/redact webhook).
+model ThreadStateHistory {
+  id        String   @id @default(cuid())
+  shop      String
+  threadId  String
+  fromState String?
+  toState   String
+  changedAt DateTime @default(now())
+
+  thread Thread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([shop, changedAt])
+  @@index([threadId, changedAt])
 }
 
 // Durable background job for anything the auto-sync worker should
