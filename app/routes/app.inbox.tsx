@@ -15,6 +15,7 @@ import type { MailProvider } from "../lib/mail/types";
 import { decodeHtmlEntities } from "../lib/gmail/client";
 import { buildReplySubject } from "../lib/support/draft-subject";
 import prisma from "../db.server";
+import { recordStateTransition } from "../lib/support/thread-state-history";
 
 // ---------------------------------------------------------------------------
 // Loader
@@ -234,7 +235,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const activeHeavyJob = await prisma.syncJob.findFirst({
     where: {
       shop,
-      kind: { in: ["resync", "backfill", "recompute"] },
+      kind: { in: ["resync", "backfill", "recompute", "reclassify"] },
       status: { in: ["pending", "running"] },
     },
     select: { kind: true },
@@ -291,6 +292,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     // the next tick — survives a process restart, unlike the previous
     // fire-and-forget Promise.
     await enqueueJob(session.shop, "resync");
+    return { syncStarted: true, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
+  }
+
+  if (intent === "reclassify") {
+    await enqueueJob(session.shop, "reclassify");
     return { syncStarted: true, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
   }
 
@@ -406,6 +412,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           ? { supportNature: "confirmed_support", supportNatureUpdatedAt: new Date() }
           : {}),
       },
+    });
+    await recordStateTransition(prisma, {
+      shop: session.shop,
+      threadId: canonicalThreadId,
+      fromState: thread.operationalState ?? null,
+      toState: target,
     });
     return { movedThread: { canonicalThreadId, target }, report: null, disconnected: false, reanalyzed: null, refined: null };
   }
@@ -872,6 +884,12 @@ function ConnectionCard({
               <input type="hidden" name="_action" value="resync" />
               <s-button variant="tertiary" type="submit" {...(isSyncing ? { loading: true } : {})}>
                 Re-sync all
+              </s-button>
+            </Form>
+            <Form method="post">
+              <input type="hidden" name="_action" value="reclassify" />
+              <s-button variant="tertiary" type="submit" {...(isSyncing ? { loading: true } : {})}>
+                Re-classify
               </s-button>
             </Form>
             <Form method="post">
