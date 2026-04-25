@@ -9,6 +9,7 @@
 
 import prisma from "../../db.server";
 import { getTrueLatestMessage } from "../mail/thread-resolver";
+import { recordStateTransition } from "./thread-state-history";
 
 export type SupportNature =
   | "unknown"
@@ -132,6 +133,7 @@ export async function recomputeThreadState(
   const thread = await prisma.thread.findUnique({
     where: { id: canonicalThreadId },
     select: {
+      shop: true,
       supportNature: true,
       operationalState: true,
       previousOperationalState: true,
@@ -320,6 +322,13 @@ export async function recomputeThreadState(
       operationalStateUpdatedAt: now,
       structuredState: JSON.stringify(structured),
     },
+  });
+
+  await recordStateTransition(prisma, {
+    shop: thread.shop,
+    threadId: canonicalThreadId,
+    fromState: thread.operationalState ?? null,
+    toState: operationalState,
   });
 
   return structured;
