@@ -22,6 +22,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   await db.llmCallLog.deleteMany({ where: { shop } });
   await db.incomingEmail.deleteMany({ where: { shop } });
   await db.threadProviderId.deleteMany({ where: { shop } });
+  await db.threadStateHistory.deleteMany({ where: { shop } });
   await db.thread.deleteMany({ where: { shop } });
   await db.syncJob.deleteMany({ where: { shop } });
   await db.mailConnection.deleteMany({ where: { shop } });
