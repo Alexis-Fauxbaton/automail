@@ -41,6 +41,7 @@ export default function App() {
         <s-link href="/app">Home</s-link>
         <s-link href="/app/support">Support copilot</s-link>
         <s-link href="/app/inbox">Email inbox</s-link>
+        <s-link href="/app/dashboard">Dashboard</s-link>
         <s-link href="/app/settings">Settings</s-link>
       </s-app-nav>
       <Outlet />
