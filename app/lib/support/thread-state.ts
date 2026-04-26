@@ -68,11 +68,17 @@ const NATURE_RANK: Record<SupportNature, number> = {
  * Apply the STICKY rule (spec §4): once a thread is confirmed support,
  * never downgrade it automatically. All other transitions are allowed,
  * but a higher nature always beats a lower one from the same signal.
+ *
+ * Exception: mixed (multi-intent) threads always override confirmed_support,
+ * because a mixed classification is a higher-level descriptor.
  */
 export function mergeNature(
   current: SupportNature,
   incoming: SupportNature,
 ): SupportNature {
+  // If incoming is mixed, it always wins (higher-level classification).
+  if (incoming === "mixed") return "mixed";
+  // Sticky rule: once confirmed_support, don't downgrade.
   if (current === "confirmed_support") return "confirmed_support";
   // Mixed conversations: customer support + marketing noise etc. Keep
   // the strongest signal overall.
