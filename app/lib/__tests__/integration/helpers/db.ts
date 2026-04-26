@@ -8,12 +8,16 @@ if (process.env.NODE_ENV !== 'test') {
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error('DATABASE_URL must be set for integration tests');
 
+// Prefer the direct (non-pooler) URL when available. Using the pooler URL for
+// testDb while the production prisma singleton also uses the pooler can cause
+// PgBouncer prepared-statement conflicts in transaction-pooling mode, which
+// makes read-after-write invisible across the two clients.
 const directUrl = process.env.DIRECT_URL;
 
 export const testDb = new PrismaClient({
   datasources: {
     db: {
-      url: databaseUrl,
+      url: directUrl ?? databaseUrl,
     },
   },
 });
