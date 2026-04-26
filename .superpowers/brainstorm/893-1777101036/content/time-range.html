@@ -1,0 +1,65 @@
+<h2>Comment naviguer dans les périodes ?</h2>
+<p class="subtitle">Choisis comment l'utilisateur sélectionne la fenêtre temporelle des stats</p>
+
+<div class="cards">
+
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding: 16px; background: #1a1a2e; border-radius: 6px; font-family: monospace; font-size: 13px;">
+      <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+        <span style="background: #6c63ff; color: white; padding: 4px 12px; border-radius: 4px; font-size: 12px;">24h</span>
+        <span style="background: #2a2a3e; color: #888; padding: 4px 12px; border-radius: 4px; font-size: 12px;">7j</span>
+        <span style="background: #2a2a3e; color: #888; padding: 4px 12px; border-radius: 4px; font-size: 12px;">30j</span>
+        <span style="background: #2a2a3e; color: #888; padding: 4px 12px; border-radius: 4px; font-size: 12px;">90j</span>
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;">
+        <div style="background: #2a2a3e; border-radius: 6px; padding: 10px; text-align: center;">
+          <div style="font-size: 22px; color: #6c63ff; font-weight: bold;">142</div>
+          <div style="color: #666; font-size: 11px; margin-top: 4px;">mails reçus</div>
+        </div>
+        <div style="background: #2a2a3e; border-radius: 6px; padding: 10px; text-align: center;">
+          <div style="font-size: 22px; color: #6c63ff; font-weight: bold;">38</div>
+          <div style="color: #666; font-size: 11px; margin-top: 4px;">support client</div>
+        </div>
+        <div style="background: #2a2a3e; border-radius: 6px; padding: 10px; text-align: center;">
+          <div style="font-size: 22px; color: #6c63ff; font-weight: bold;">21</div>
+          <div style="color: #666; font-size: 11px; margin-top: 4px;">brouillons créés</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A — Presets fixes</h3>
+      <p>Boutons 24h / 7j / 30j / 90j. Simple, rapide, adapté à une consultation quotidienne. Pas de date picker.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding: 16px; background: #1a1a2e; border-radius: 6px; font-family: monospace; font-size: 13px;">
+      <div style="display: flex; gap: 8px; margin-bottom: 16px; align-items: center;">
+        <span style="background: #6c63ff; color: white; padding: 4px 12px; border-radius: 4px; font-size: 12px;">24h</span>
+        <span style="background: #2a2a3e; color: #888; padding: 4px 12px; border-radius: 4px; font-size: 12px;">7j</span>
+        <span style="background: #2a2a3e; color: #888; padding: 4px 12px; border-radius: 4px; font-size: 12px;">30j</span>
+        <span style="background: #2a2a3e; color: #888; padding: 4px 12px; border-radius: 4px; font-size: 12px;">Personnalisé</span>
+        <input style="background: #2a2a3e; border: 1px solid #444; color: #aaa; padding: 3px 8px; border-radius: 4px; font-size: 11px; width: 90px;" value="01/04 → 24/04" readonly />
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;">
+        <div style="background: #2a2a3e; border-radius: 6px; padding: 10px; text-align: center;">
+          <div style="font-size: 22px; color: #6c63ff; font-weight: bold;">3 841</div>
+          <div style="color: #666; font-size: 11px; margin-top: 4px;">mails reçus</div>
+        </div>
+        <div style="background: #2a2a3e; border-radius: 6px; padding: 10px; text-align: center;">
+          <div style="font-size: 22px; color: #6c63ff; font-weight: bold;">924</div>
+          <div style="color: #666; font-size: 11px; margin-top: 4px;">support client</div>
+        </div>
+        <div style="background: #2a2a3e; border-radius: 6px; padding: 10px; text-align: center;">
+          <div style="font-size: 22px; color: #6c63ff; font-weight: bold;">512</div>
+          <div style="color: #666; font-size: 11px; margin-top: 4px;">brouillons créés</div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B — Presets + date picker</h3>
+      <p>Presets rapides + option période personnalisée. Plus flexible, utile pour analyser un pic ou une période spécifique.</p>
+    </div>
+  </div>
+
+</div>

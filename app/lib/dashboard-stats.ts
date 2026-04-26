@@ -1,6 +1,19 @@
-// Dashboard statistics helpers — period bounds computation and aggregated DB queries.
+﻿// Dashboard statistics helpers â€” period bounds computation and aggregated DB queries.
 
 import prisma from "../db.server";
+
+// Timezone used for day bucketing (label display and chart grouping).
+// A mail received at 01:22 local time must not appear on the previous UTC day.
+const DISPLAY_TZ = "Europe/Paris";
+
+function toLocalDay(date: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: DISPLAY_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
 
 export type PeriodBounds = {
   start: Date;
@@ -102,8 +115,20 @@ export async function getKpiStats(
     prisma.incomingEmail.count({
       where: { shop, receivedAt: { gte: start, lt: end } },
     }),
+    // Count incoming emails that are either directly classified support, or belong
+    // to a confirmed/probable support thread. The pipeline only LLM-classifies the
+    // latest message per thread, so older messages in a support thread have
+    // tier2=null and would otherwise be missed.
     prisma.incomingEmail.count({
-      where: { shop, receivedAt: { gte: start, lt: end }, tier2Result: "support_client" },
+      where: {
+        shop,
+        receivedAt: { gte: start, lt: end },
+        processingStatus: { not: "outgoing" },
+        OR: [
+          { tier2Result: "support_client" },
+          { thread: { supportNature: { in: ["confirmed_support", "probable_support"] } } },
+        ],
+      },
     }),
     prisma.replyDraft.count({
       where: {
@@ -115,7 +140,15 @@ export async function getKpiStats(
       where: { shop, receivedAt: { gte: prevStart, lt: prevEnd } },
     }),
     prisma.incomingEmail.count({
-      where: { shop, receivedAt: { gte: prevStart, lt: prevEnd }, tier2Result: "support_client" },
+      where: {
+        shop,
+        receivedAt: { gte: prevStart, lt: prevEnd },
+        processingStatus: { not: "outgoing" },
+        OR: [
+          { tier2Result: "support_client" },
+          { thread: { supportNature: { in: ["confirmed_support", "probable_support"] } } },
+        ],
+      },
     }),
     prisma.replyDraft.count({
       where: {
@@ -149,7 +182,7 @@ export async function getDailyBreakdown(
   const byDay = new Map<string, { total: number; support: number }>();
 
   for (const email of emails) {
-    const day = email.receivedAt.toISOString().slice(0, 10);
+    const day = toLocalDay(email.receivedAt);
     const existing = byDay.get(day) ?? { total: 0, support: 0 };
     existing.total += 1;
     if (email.tier2Result === "support_client") existing.support += 1;
@@ -160,10 +193,10 @@ export async function getDailyBreakdown(
   const points: DailyPoint[] = [];
   const cursor = new Date(start);
   cursor.setUTCHours(0, 0, 0, 0);
-  const endDay = end.toISOString().slice(0, 10);
+  const endDay = toLocalDay(end);
 
-  while (cursor.toISOString().slice(0, 10) <= endDay) {
-    const day = cursor.toISOString().slice(0, 10);
+  while (toLocalDay(cursor) <= endDay) {
+    const day = toLocalDay(cursor);
     const data = byDay.get(day) ?? { total: 0, support: 0 };
     points.push({ date: day, ...data });
     cursor.setUTCDate(cursor.getUTCDate() + 1);
@@ -200,12 +233,26 @@ export async function getConversationStats(
   start: Date,
   end: Date
 ): Promise<ConversationStats> {
-  const [newConversations, resolvedConversations, reopenedConversations] = await Promise.all([
+  const [
+    newConversations,
+    resolvedFromHistory,
+    // Fallback: threads currently resolved whose state was last updated in the
+    // period. Covers the gap before ThreadStateHistory was introduced (2026-04-21).
+    resolvedFromState,
+    reopenedConversations,
+  ] = await Promise.all([
     prisma.thread.count({
       where: { shop, firstMessageAt: { gte: start, lt: end } },
     }),
     prisma.threadStateHistory.count({
       where: { shop, toState: "resolved", changedAt: { gte: start, lt: end } },
+    }),
+    prisma.thread.count({
+      where: {
+        shop,
+        operationalState: "resolved",
+        operationalStateUpdatedAt: { gte: start, lt: end },
+      },
     }),
     prisma.threadStateHistory.count({
       where: {
@@ -216,6 +263,11 @@ export async function getConversationStats(
       },
     }),
   ]);
+
+  // Take the higher of the two resolution counts: the history table is
+  // authoritative when populated; the state timestamp is the fallback for
+  // threads resolved before the history table existed.
+  const resolvedConversations = Math.max(resolvedFromHistory, resolvedFromState);
 
   return { newConversations, resolvedConversations, reopenedConversations };
 }
@@ -242,3 +294,5 @@ export async function getIntentBreakdown(
     count: r._count._all,
   }));
 }
+
+

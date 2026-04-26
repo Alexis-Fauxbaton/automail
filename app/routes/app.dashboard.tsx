@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState, Suspense, lazy } from "react";
 import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData, useSearchParams } from "react-router";
 import { authenticate } from "../shopify.server";
@@ -52,50 +52,76 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: percentage change label
+// Helpers
 // ---------------------------------------------------------------------------
 
-function pct(current: number, prev: number): string | null {
+function pct(current: number, prev: number): { label: string; up: boolean } | null {
   if (prev === 0) return null;
   const diff = ((current - prev) / prev) * 100;
-  return (diff >= 0 ? "↑ +" : "↓ ") + Math.abs(diff).toFixed(0) + "%";
+  const up = diff >= 0;
+  return {
+    label: (up ? "↑ +" : "↓ ") + Math.abs(diff).toFixed(0) + "%",
+    up,
+  };
 }
 
 // ---------------------------------------------------------------------------
-// KpiCard component
+// KpiCard
 // ---------------------------------------------------------------------------
 
 function KpiCard({
   label,
   value,
   prev,
-  placeholder,
+  accentColor,
+  comingSoon,
 }: {
   label: string;
   value: number | null;
   prev?: number;
-  placeholder?: string;
+  accentColor?: string;
+  comingSoon?: boolean;
 }) {
   const variation = value !== null && prev !== undefined ? pct(value, prev) : null;
-  const isUp = variation?.startsWith("↑");
   return (
-    <div style={{ background: "var(--p-color-bg-surface-secondary)", borderRadius: 8, padding: 16 }}>
-      <p style={{ margin: 0, fontSize: 12, color: "var(--p-color-text-subdued)", textTransform: "uppercase", letterSpacing: 1 }}>
-        {label}
-      </p>
+    <div
+      style={{
+        borderRadius: 8,
+        border: "1px solid var(--p-color-border)",
+        borderLeft: accentColor ? `3px solid ${accentColor}` : undefined,
+        background: comingSoon ? "var(--p-color-bg-surface-secondary)" : "var(--p-color-bg-surface)",
+        padding: "12px 16px",
+        display: "flex",
+        flexDirection: "column",
+        gap: 4,
+      }}
+    >
+      <s-text variant="bodySm" tone="subdued">
+        {label.toUpperCase()}
+      </s-text>
       {value !== null ? (
         <>
-          <p style={{ margin: "4px 0", fontSize: 28, fontWeight: 700 }}>{value.toLocaleString("fr-FR")}</p>
-          {variation && (
-            <p style={{ margin: 0, fontSize: 12, color: isUp ? "var(--p-color-text-success)" : "var(--p-color-text-critical)" }}>
-              {variation}
-            </p>
+          <s-text variant="headingLg">{value.toLocaleString("fr-FR")}</s-text>
+          {variation ? (
+            <s-text
+              variant="bodySm"
+              tone={variation.up ? "success" : "critical"}
+              title="vs. période précédente"
+            >
+              {variation.label}
+            </s-text>
+          ) : (
+            <s-text variant="bodySm" tone="subdued">&nbsp;</s-text>
           )}
         </>
       ) : (
         <>
-          <p style={{ margin: "4px 0", fontSize: 28, fontWeight: 700, color: "var(--p-color-text-disabled)" }}>—</p>
-          {placeholder && <p style={{ margin: 0, fontSize: 12, color: "var(--p-color-text-disabled)" }}>{placeholder}</p>}
+          <s-text variant="headingLg" tone="subdued">—</s-text>
+          {comingSoon && (
+            <span style={{ marginTop: 2 }}>
+              <s-badge tone="info">Bientôt disponible</s-badge>
+            </span>
+          )}
         </>
       )}
     </div>
@@ -106,56 +132,72 @@ function KpiCard({
 // BarChartClient — SSR-safe Recharts wrapper
 // ---------------------------------------------------------------------------
 
+const RechartsChart = lazy(() =>
+  import("recharts").then((mod) => ({
+    default: function RechartsChartInner({ data }: { data: DailyPoint[] }) {
+      const {
+        ComposedChart,
+        Bar,
+        Line,
+        XAxis,
+        YAxis,
+        Tooltip,
+        ResponsiveContainer,
+        Legend,
+        CartesianGrid,
+      } = mod;
+      return (
+        <ResponsiveContainer width="100%" height={220}>
+          <ComposedChart data={data} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--p-color-border)" vertical={false} />
+            <XAxis
+              dataKey="date"
+              tick={{ fontSize: 10 }}
+              tickFormatter={(v: string) => v.slice(5)}
+              axisLine={false}
+              tickLine={false}
+            />
+            <YAxis tick={{ fontSize: 10 }} allowDecimals={false} axisLine={false} tickLine={false} />
+            <Tooltip
+              formatter={(value: number, name: string) => [
+                value,
+                name === "total" ? "Tous mails" : "Support client",
+              ]}
+              labelFormatter={(label: string) => label}
+              contentStyle={{ fontSize: 12, borderRadius: 6 }}
+            />
+            <Legend
+              verticalAlign="top"
+              align="right"
+              iconSize={10}
+              wrapperStyle={{ fontSize: 11, paddingBottom: 8 }}
+              formatter={(v: string) => (v === "total" ? "Tous mails" : "Support client")}
+            />
+            <Bar dataKey="total" fill="#B5BAE5" radius={[2, 2, 0, 0]} maxBarSize={32} />
+            <Line
+              type="monotone"
+              dataKey="support"
+              stroke="#5C6AC4"
+              strokeWidth={2}
+              dot={false}
+              activeDot={{ r: 4 }}
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
+      );
+    },
+  })),
+);
+
 function BarChartClient({ data }: { data: DailyPoint[] }) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
-  if (!mounted) return <div style={{ height: 200 }} />;
-
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } = require("recharts") as {
-    BarChart: React.ComponentType<React.PropsWithChildren<{
-      data: DailyPoint[];
-      margin?: { top?: number; right?: number; left?: number; bottom?: number };
-    }>>;
-    Bar: React.ComponentType<{
-      dataKey: string;
-      fill?: string;
-      opacity?: number;
-      radius?: [number, number, number, number];
-    }>;
-    XAxis: React.ComponentType<{
-      dataKey?: string;
-      tick?: React.CSSProperties | { fontSize?: number };
-      tickFormatter?: (v: string) => string;
-    }>;
-    YAxis: React.ComponentType<{
-      tick?: React.CSSProperties | { fontSize?: number };
-      allowDecimals?: boolean;
-    }>;
-    Tooltip: React.ComponentType<{
-      formatter?: (value: number, name: string) => [number, string];
-      labelFormatter?: (label: string) => string;
-    }>;
-    ResponsiveContainer: React.ComponentType<React.PropsWithChildren<{ width?: string | number; height?: number }>>;
-    Legend: React.ComponentType<{ formatter?: (v: string) => string }>;
-  };
+  if (!mounted) return <div style={{ height: 220 }} />;
 
   return (
-    <ResponsiveContainer width="100%" height={200}>
-      <BarChart data={data} margin={{ top: 4, right: 0, left: -20, bottom: 0 }}>
-        <XAxis dataKey="date" tick={{ fontSize: 10 }} tickFormatter={(v: string) => v.slice(5)} />
-        <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
-        <Tooltip
-          formatter={(value: number, name: string) =>
-            [value, name === "total" ? "Tous mails" : "Support"]
-          }
-          labelFormatter={(label: string) => label}
-        />
-        <Legend formatter={(v: string) => (v === "total" ? "Tous mails" : "Support client")} />
-        <Bar dataKey="total" fill="#6c63ff" opacity={0.5} radius={[2, 2, 0, 0]} />
-        <Bar dataKey="support" fill="#6c63ff" radius={[2, 2, 0, 0]} />
-      </BarChart>
-    </ResponsiveContainer>
+    <Suspense fallback={<div style={{ height: 220 }} />}>
+      <RechartsChart data={data} />
+    </Suspense>
   );
 }
 
@@ -189,7 +231,50 @@ const INTENT_LABELS: Record<string, string> = {
 };
 
 // ---------------------------------------------------------------------------
-// Dashboard page component
+// StatRow — small row primitive used by the right-column lists
+// ---------------------------------------------------------------------------
+
+function StatRow({
+  label,
+  value,
+  dotColor,
+}: {
+  label: string;
+  value: number | string;
+  dotColor?: string;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 12,
+      }}
+    >
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+        {dotColor && (
+          <span
+            aria-hidden
+            style={{
+              display: "inline-block",
+              width: 8,
+              height: 8,
+              borderRadius: "50%",
+              background: dotColor,
+              flex: "0 0 auto",
+            }}
+          />
+        )}
+        <s-text variant="bodySm">{label}</s-text>
+      </span>
+      <s-text variant="headingSm">{value}</s-text>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard page
 // ---------------------------------------------------------------------------
 
 export default function Dashboard() {
@@ -204,106 +289,81 @@ export default function Dashboard() {
   }
 
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
-        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>Dashboard</h1>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+    <s-page heading="Dashboard">
+      <s-stack direction="block" gap="base">
+        <s-stack direction="inline" gap="small-200">
           {presets.map((p) => (
-            <button
+            <s-button
               key={p}
-              type="button"
+              variant={range === p ? "primary" : "tertiary"}
               onClick={() => selectPreset(p)}
-              style={{
-                padding: "4px 12px",
-                borderRadius: 6,
-                border: "none",
-                cursor: "pointer",
-                background: range === p ? "var(--p-color-bg-fill-brand)" : "var(--p-color-bg-surface-secondary)",
-                color: range === p ? "#fff" : "var(--p-color-text)",
-                fontWeight: range === p ? 600 : 400,
-                fontSize: 13,
-              }}
             >
               {p}
-            </button>
+            </s-button>
           ))}
-        </div>
-      </div>
+        </s-stack>
 
-      {/* 2-column layout */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 20, alignItems: "start" }}>
-
-        {/* Left column */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          {/* KPI cards */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <KpiCard label="Mails reçus" value={kpis.totalEmails} prev={kpis.prevTotalEmails} />
-            <KpiCard label="Support client" value={kpis.supportEmails} prev={kpis.prevSupportEmails} />
-            <KpiCard label="Brouillons créés" value={kpis.draftsCreated} prev={kpis.prevDraftsCreated} />
-            <KpiCard label="Mails envoyés" value={null} placeholder="Bientôt disponible" />
-          </div>
-
-          {/* Bar chart */}
-          <div style={{ background: "var(--p-color-bg-surface-secondary)", borderRadius: 8, padding: 16 }}>
-            <p style={{ margin: "0 0 12px", fontSize: 13, fontWeight: 600 }}>Mails reçus par jour</p>
-            <BarChartClient data={daily} />
-          </div>
-        </div>
-
-        {/* Right column */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          {/* Thread states — TODAY snapshot */}
-          <div style={{ background: "var(--p-color-bg-surface-secondary)", borderRadius: 8, padding: 16 }}>
-            <p style={{ margin: "0 0 12px", fontSize: 13, fontWeight: 600 }}>
-              État actuel{" "}
-              <span style={{ fontWeight: 400, color: "var(--p-color-text-subdued)", fontSize: 12 }}>
-                · {today}
-              </span>
-            </p>
-            {(Object.keys(STATE_LABELS) as Array<keyof ThreadStateCounts>).map((state) => (
-              <div key={state} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                <span style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
-                  <span style={{ color: STATE_COLORS[state], fontSize: 10 }}>●</span>
-                  {STATE_LABELS[state]}
-                </span>
-                <span style={{ fontWeight: 700, fontSize: 14 }}>{threadStates[state] ?? 0}</span>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "minmax(0, 1fr) 360px",
+            gap: 16,
+            alignItems: "start",
+          }}
+        >
+          <s-stack direction="block" gap="base">
+            <s-section>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <KpiCard label="Mails reçus" value={kpis.totalEmails} prev={kpis.prevTotalEmails} accentColor="#5C6AC4" />
+                <KpiCard label="Support client" value={kpis.supportEmails} prev={kpis.prevSupportEmails} accentColor="#8C6AC4" />
+                <KpiCard label="Brouillons créés" value={kpis.draftsCreated} prev={kpis.prevDraftsCreated} accentColor="#22c55e" />
+                <KpiCard label="Mails envoyés" value={null} comingSoon />
               </div>
-            ))}
-          </div>
+            </s-section>
 
-          {/* Conversation stats — period */}
-          <div style={{ background: "var(--p-color-bg-surface-secondary)", borderRadius: 8, padding: 16 }}>
-            <p style={{ margin: "0 0 12px", fontSize: 13, fontWeight: 600 }}>Conversations (période)</p>
-            {[
-              { label: "Nouvelles", value: conversationStats.newConversations },
-              { label: "Résolues", value: conversationStats.resolvedConversations },
-              { label: "Rouvertes", value: conversationStats.reopenedConversations },
-            ].map(({ label, value }) => (
-              <div key={label} style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                <span style={{ fontSize: 13, color: "var(--p-color-text-subdued)" }}>{label}</span>
-                <span style={{ fontWeight: 700, fontSize: 14 }}>{value}</span>
-              </div>
-            ))}
-          </div>
+            <s-section heading="Mails reçus par jour">
+              <BarChartClient data={daily} />
+            </s-section>
+          </s-stack>
 
-          {/* Top intents */}
-          <div style={{ background: "var(--p-color-bg-surface-secondary)", borderRadius: 8, padding: 16 }}>
-            <p style={{ margin: "0 0 12px", fontSize: 13, fontWeight: 600 }}>Top intentions</p>
-            {intents.length === 0 && (
-              <p style={{ margin: 0, fontSize: 13, color: "var(--p-color-text-subdued)" }}>Aucune donnée sur la période.</p>
-            )}
-            {intents.map(({ intent, count }: IntentCount) => (
-              <div key={intent} style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                <span style={{ fontSize: 13, color: "var(--p-color-text-subdued)" }}>
-                  {INTENT_LABELS[intent] ?? intent}
-                </span>
-                <span style={{ fontWeight: 700, fontSize: 14 }}>{count}</span>
-              </div>
-            ))}
-          </div>
+          <s-stack direction="block" gap="base">
+            <s-section heading={`État actuel · ${today}`}>
+              <s-stack direction="block" gap="small-200">
+                {(Object.keys(STATE_LABELS) as Array<keyof ThreadStateCounts>).map((state) => (
+                  <StatRow
+                    key={state}
+                    label={STATE_LABELS[state]}
+                    value={threadStates[state] ?? 0}
+                    dotColor={STATE_COLORS[state]}
+                  />
+                ))}
+              </s-stack>
+            </s-section>
+
+            <s-section heading="Conversations (période)">
+              <s-stack direction="block" gap="small-200">
+                <StatRow label="Nouvelles" value={conversationStats.newConversations} />
+                <StatRow label="Résolues" value={conversationStats.resolvedConversations} />
+                <StatRow label="Rouvertes" value={conversationStats.reopenedConversations} />
+              </s-stack>
+            </s-section>
+
+            <s-section heading="Top intentions">
+              {intents.length === 0 ? (
+                <s-paragraph>
+                  <s-text tone="subdued">Aucune donnée sur la période.</s-text>
+                </s-paragraph>
+              ) : (
+                <s-stack direction="block" gap="small-200">
+                  {intents.map(({ intent, count }: IntentCount) => (
+                    <StatRow key={intent} label={INTENT_LABELS[intent] ?? intent} value={count} />
+                  ))}
+                </s-stack>
+              )}
+            </s-section>
+          </s-stack>
         </div>
-      </div>
-    </div>
+      </s-stack>
+    </s-page>
   );
 }
