@@ -267,6 +267,15 @@ export async function createZohoClient(shop: string): Promise<MailClient> {
 
     async listNewMessages(cursor) {
       // Zoho doesn't have a History API. We use the cursor as a timestamp.
+      //
+      // IMPORTANT: capture the new cursor BEFORE the API call, with a 2-minute
+      // safety margin. This prevents a race condition where a message arrives
+      // during the API round-trip: its receivedTime would be older than a
+      // post-call cursor, causing it to be permanently skipped on all future
+      // syncs (afterDate > receivedTime). The 2-minute margin also absorbs
+      // any Zoho indexing delay.
+      const nextCursorTs = Date.now() - 2 * 60_000;
+
       const afterDate = cursor ? new Date(parseInt(cursor, 10)) : undefined;
       const messageIds = await this.listRecentMessages({
         afterDate,
@@ -274,13 +283,15 @@ export async function createZohoClient(shop: string): Promise<MailClient> {
       });
       return {
         messageIds,
-        latestCursor: String(Date.now()),
+        latestCursor: String(nextCursorTs),
       };
     },
 
     async getSyncCursor() {
-      // Return current timestamp as cursor
-      return String(Date.now());
+      // Return current timestamp minus a 2-minute margin as cursor.
+      // Same rationale as listNewMessages: avoids missing messages that
+      // arrive just before or during the Zoho API call window.
+      return String(Date.now() - 2 * 60_000);
     },
 
     async getThreadMessages(threadId) {
