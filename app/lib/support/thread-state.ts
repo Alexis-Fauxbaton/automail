@@ -108,7 +108,7 @@ function messageNature(tier2Result: string | null): SupportNature {
  * Derive the operational state of a thread from its messages.
  * Pure function of the persisted data — no LLM call.
  */
-function deriveOperationalState(args: {
+export function deriveOperationalState(args: {
   lastDirection: "incoming" | "outgoing" | "unknown";
   replyNeeded: boolean;
   noReplyNeeded: boolean;
