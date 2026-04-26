@@ -1477,6 +1477,7 @@ function DraftBlock({ email, threadSenderEmail }: {
   const [replyMode, setReplyMode] = useState(email.draftReplyMode ?? "thread");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [attachments, setAttachments] = useState(email.draftAttachments);
+  const [attachError, setAttachError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Auto-save debounce for metadata fields
@@ -1535,10 +1536,14 @@ function DraftBlock({ email, threadSenderEmail }: {
     const formData = new FormData();
     formData.append("emailId", email.id);
     formData.append("file", file);
+    setAttachError(null);
     const res = await fetch("/api/draft-attachment", { method: "POST", body: formData });
     if (res.ok) {
       const att = await res.json() as typeof email.draftAttachments[number];
       setAttachments((prev) => [...prev, att]);
+    } else {
+      const body = await res.json().catch(() => ({})) as { error?: string };
+      setAttachError(body.error ?? "Upload failed");
     }
     e.target.value = "";
   }
@@ -1633,6 +1638,11 @@ function DraftBlock({ email, threadSenderEmail }: {
               </button>
               <input ref={fileInputRef} type="file" style={{ display: "none" }} onChange={handleFileSelect} />
             </div>
+            {attachError && (
+              <p data-testid="attachment-error" style={{ fontSize: "12px", color: "var(--p-color-text-critical)", marginTop: "4px" }}>
+                {attachError}
+              </p>
+            )}
           </div>
         </div>
 

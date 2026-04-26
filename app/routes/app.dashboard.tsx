@@ -379,7 +379,9 @@ export default function Dashboard() {
               <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--ui-slate-400)", marginBottom: 8 }}>
                 Mails reçus par jour
               </div>
+              <div data-testid="chart-daily-breakdown">
               <BarChartClient data={daily} />
+              </div>
             </div>
             <div style={{ borderTop: "1px solid var(--ui-slate-100)", paddingTop: 20, marginTop: 8 }}>
               <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--ui-slate-400)", marginBottom: 8 }}>

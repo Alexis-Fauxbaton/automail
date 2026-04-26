@@ -94,7 +94,8 @@ describe('GDPR webhooks — integration DB', () => {
       request: makeRequest(),
       params: {},
       context: {} as any,
-    });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
 
     // 4. Assert HTTP 200.
     expect(response.status).toBe(200);
@@ -137,7 +138,8 @@ describe('GDPR webhooks — integration DB', () => {
       request: makeRequest(),
       params: {},
       context: {} as any,
-    });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
 
     // 4. Assert HTTP 200.
     expect(response.status).toBe(200);
@@ -167,7 +169,8 @@ describe('GDPR webhooks — integration DB', () => {
         request: makeRequest(),
         params: {},
         context: {} as any,
-      });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
     } catch (thrown: unknown) {
       response = thrown as Response;
     }
