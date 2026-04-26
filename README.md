@@ -117,6 +117,71 @@ No write scopes are requested. The app reads Shopify data but never mutates it.
 
 ---
 
+## Testing
+
+The test suite has three independent levels, each requiring more infrastructure than the previous.
+
+### Unit tests
+
+No database or server required.
+
+```shell
+npm test
+```
+
+### Integration tests
+
+Requires a PostgreSQL database. The tests use an isolated shop domain (`integration-test.myshopify.com`) so they can run against the same database as development without polluting real data.
+
+Additional environment variables:
+
+```
+DATABASE_URL_TEST=   # PostgreSQL connection string for the test DB (can be the same as DATABASE_URL)
+DIRECT_URL=          # Optional — direct connection bypassing PgBouncer (recommended if using a pooler)
+GOOGLE_CLIENT_ID=    # Can be a dummy value — used by the token-refresh test
+GOOGLE_CLIENT_SECRET=
+```
+
+```shell
+DATABASE_URL_TEST=postgresql://... npm run test:integration
+```
+
+### E2E tests (Playwright)
+
+Requires the development server running and Chromium installed.
+
+```shell
+# One-time browser install
+npx playwright install chromium
+
+# Terminal 1 — start the dev server
+npm run dev
+
+# Terminal 2 — run E2E tests
+npm run test:e2e
+```
+
+By default the tests connect to `http://localhost:58496`. Override with:
+
+```shell
+E2E_BASE_URL=http://localhost:PORT npm run test:e2e
+```
+
+Additional options:
+
+```shell
+npm run test:e2e:headed   # watch the browser
+npm run test:e2e:ui       # interactive Playwright UI
+```
+
+### Run all levels
+
+```shell
+npm test && npm run test:integration && npm run test:e2e
+```
+
+---
+
 ## Deployment
 
 The app runs as a single Node process on Render. The auto-sync background loop
