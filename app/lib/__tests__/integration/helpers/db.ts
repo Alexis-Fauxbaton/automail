@@ -14,7 +14,6 @@ export const testDb = new PrismaClient({
   datasources: {
     db: {
       url: databaseUrl,
-      ...(directUrl ? { directUrl } : {}),
     },
   },
 });
