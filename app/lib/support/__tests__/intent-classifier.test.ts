@@ -20,6 +20,14 @@ describe("classifyIntent", () => {
     expect(classify("Status of my order #1234", "")).toBe("where_is_my_order");
   });
 
+  it("détecte une question de suivi avec formulation neutre", () => {
+    const result = classify(
+      "Bonjour",
+      "Je voulais juste avoir des nouvelles de mon colis. Commande passée il y a 10 jours."
+    );
+    expect(result).toBe("where_is_my_order");
+  });
+
   // --- delivery_delay ---
   it("detects delivery delay via 'late'", () => {
     expect(classify("", "my order is late, please help")).toBe("delivery_delay");
@@ -31,6 +39,14 @@ describe("classifyIntent", () => {
 
   it("detects 'still waiting'", () => {
     expect(classify("", "I am still waiting for my package")).toBe("delivery_delay");
+  });
+
+  it("détecte un délai avec formulation indirecte", () => {
+    const result = classify(
+      "Ma commande",
+      "Cela fait maintenant 3 semaines que j'attends, je ne sais pas ce qui se passe."
+    );
+    expect(result).toBe("delivery_delay");
   });
 
   // --- marked_delivered_not_received ---
@@ -65,6 +81,14 @@ describe("classifyIntent", () => {
     expect(classify("", "pas de mise à jour depuis 5 jours")).toBe("package_stuck");
   });
 
+  it("détecte un colis bloqué depuis plusieurs jours", () => {
+    const result = classify(
+      "Colis",
+      "Mon tracking n'a pas bougé depuis 5 jours. Il est toujours au même endroit."
+    );
+    expect(result).toBe("package_stuck");
+  });
+
   // --- refund_request ---
   it("detects refund request", () => {
     expect(classify("", "I would like a refund please")).toBe("refund_request");
@@ -78,6 +102,11 @@ describe("classifyIntent", () => {
     expect(classify("", "I want my money back")).toBe("refund_request");
   });
 
+  it("détecte une demande de remboursement très courte", () => {
+    const result = classify("Remboursement", "Je veux être remboursé svp");
+    expect(result).toBe("refund_request");
+  });
+
   // --- unknown ---
   it("returns unknown when no keywords match", () => {
     expect(classify("Hello", "How are you?")).toBe("unknown");
@@ -85,6 +114,15 @@ describe("classifyIntent", () => {
 
   it("returns unknown for empty text", () => {
     expect(classify("", "")).toBe("unknown");
+  });
+
+  it("retourne unknown pour une question générale sans intent support clair", () => {
+    // "délais" (accented) ne déclenche pas /delay/ (ASCII) — résultat attendu : unknown
+    const result = classify(
+      "Question",
+      "Bonjour, j'ai une question sur vos produits. Quels sont vos délais habituels ?"
+    );
+    expect(result).toBe("unknown");
   });
 
   // --- priority: more specific intent wins ---
@@ -99,5 +137,15 @@ describe("classifyIntent", () => {
     expect(classify("", "marked as delivered but not received, I want a refund")).toBe(
       "marked_delivered_not_received",
     );
+  });
+
+  // --- multi-intent / edge cases ---
+  it("email avec tracking + demande remboursement → intent dominant détecté (pas d'erreur)", () => {
+    const result = classify(
+      "Problème commande #9999",
+      "Mon colis est marqué livré mais je ne l'ai jamais reçu. Je veux aussi un remboursement."
+    );
+    expect(result).not.toBe(undefined);
+    expect(["marked_delivered_not_received", "refund_request"]).toContain(result);
   });
 });

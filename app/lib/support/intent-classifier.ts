@@ -33,6 +33,8 @@ const RULES: Rule[] = [
       /bloqu[ée]/i,
       /n'avance plus/i,
       /pas de mise [àa] jour/i,
+      /n'a pas bougé/i,
+      /pas boug[ée]/i,
     ],
   },
   {
@@ -55,6 +57,7 @@ const RULES: Rule[] = [
       /en retard/i,
       /retard/i,
       /toujours pas/i,
+      /j'attends/i,
     ],
   },
   {
@@ -69,6 +72,8 @@ const RULES: Rule[] = [
       /suivi/i,
       /status of my order/i,
       /statut de ma commande/i,
+      /nouvelles de mon colis/i,
+      /avoir des nouvelles/i,
     ],
   },
 ];
