@@ -39,6 +39,7 @@ export async function cleanTestShop() {
 /** Creates a minimal Thread for testing state transitions. */
 export async function createTestThread(overrides: Partial<{
   operationalState: string;
+  previousOperationalState: string;
   supportNature: string;
   lastMessageAt: Date;
   operationalStateUpdatedAt: Date;

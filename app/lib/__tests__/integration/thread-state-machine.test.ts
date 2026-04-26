@@ -70,38 +70,71 @@ describe('thread state machine — integration DB', () => {
   });
 
   it('previousOperationalState preserved on manual resolve (REQ-STATE-09)', async () => {
-    // Start in waiting_merchant, then simulate an agent manually resolving the thread.
-    const thread = await createTestThread({ operationalState: 'waiting_merchant' });
+    // Scenario: agent manually resolved a thread that had a prior incoming message.
+    // A second call to recomputeThreadState must honour the manual resolve and NOT
+    // re-open the thread, because the only incoming message is dated BEFORE the
+    // resolution timestamp.
+    const messageReceivedAt = new Date(Date.now() - 120_000); // 2 min ago
+    const resolvedAt = new Date(Date.now() - 60_000);         // 1 min ago (after message)
 
-    await testDb.thread.update({
-      where: { id: thread.id },
+    const thread = await createTestThread({
+      operationalState: 'resolved',
+      previousOperationalState: 'waiting_merchant',
+      operationalStateUpdatedAt: resolvedAt,
+    });
+
+    // Insert the pre-existing message (received BEFORE the manual resolve).
+    await testDb.incomingEmail.create({
       data: {
-        previousOperationalState: 'waiting_merchant',
-        operationalState: 'resolved',
-        operationalStateUpdatedAt: new Date(),
+        shop: TEST_SHOP,
+        externalMessageId: 'msg-preresolve-001',
+        canonicalThreadId: thread.id,
+        fromAddress: 'client@example.com',
+        subject: 'Question',
+        bodyText: 'Où est ma commande ?',
+        receivedAt: messageReceivedAt,
+        processingStatus: 'pending',
+        tier1Result: 'passed',
+        tier2Result: 'support_client',
       },
     });
 
+    // Recompute — the guard must detect no new message after resolvedAt and preserve
+    // the resolved state.
+    await recomputeThreadState(thread.id, { mailboxAddress: 'shop@example.com' });
+
     const updated = await testDb.thread.findUniqueOrThrow({ where: { id: thread.id } });
     expect(updated.operationalState).toBe('resolved');
+    // previousOperationalState is kept (the early-return path does not clear it)
     expect(updated.previousOperationalState).toBe('waiting_merchant');
   });
 
   it('supportNature does not regress after merge — confirmed_support beats non_support (REQ-STATE-14)', async () => {
-    // Thread already classified as confirmed_support.
+    // Thread already classified as confirmed_support in the DB.
+    // A new incoming message arrives with tier2Result = 'probable_non_client'
+    // (maps to non_support). The full pipeline (recomputeThreadState) must
+    // apply the sticky rule and keep confirmed_support in the DB.
     const thread = await createTestThread({ supportNature: 'confirmed_support' });
 
-    // mergeNature is the function the pipeline calls: confirmed_support must win.
-    const merged = mergeNature('confirmed_support', 'non_support');
-    expect(merged).toBe('confirmed_support');
-
-    // Persist the merged value (as the pipeline does) and verify the DB row.
-    await testDb.thread.update({
-      where: { id: thread.id },
-      data: { supportNature: merged },
+    await testDb.incomingEmail.create({
+      data: {
+        shop: TEST_SHOP,
+        externalMessageId: 'msg-non-client-001',
+        canonicalThreadId: thread.id,
+        fromAddress: 'bot@spam.com',
+        subject: 'Newsletter',
+        bodyText: 'Ceci est un message non-client.',
+        receivedAt: new Date(),
+        processingStatus: 'pending',
+        tier1Result: 'passed',
+        tier2Result: 'probable_non_client',
+      },
     });
 
+    await recomputeThreadState(thread.id, { mailboxAddress: 'shop@example.com' });
+
     const updated = await testDb.thread.findUniqueOrThrow({ where: { id: thread.id } });
+    // Sticky rule: confirmed_support must never be downgraded by non_support.
     expect(updated.supportNature).toBe('confirmed_support');
   });
 });
