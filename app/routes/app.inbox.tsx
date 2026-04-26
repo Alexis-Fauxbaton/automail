@@ -16,6 +16,15 @@ import { decodeHtmlEntities } from "../lib/gmail/client";
 import { buildReplySubject } from "../lib/support/draft-subject";
 import prisma from "../db.server";
 import { recordStateTransition } from "../lib/support/thread-state-history";
+import {
+  MetricCard,
+  SegmentedTabs,
+  Card,
+  InboxIcon,
+  SparklesIcon,
+  CheckCircleIcon,
+  MailIcon,
+} from "../components/ui";
 
 // ---------------------------------------------------------------------------
 // Loader
@@ -1045,24 +1054,36 @@ function PipelineStats({ emails }: { emails: SerializedEmail[] }) {
   const tier3 = emails.filter((e) => e.processingStatus === "analyzed").length;
 
   return (
-    <s-stack direction="inline" gap="large-500">
-      <s-stack direction="block" gap="small-100" align="center">
-        <s-text variant="headingLg">{tier1}</s-text>
-        <s-text variant="bodySm" tone="subdued">Tier 1 (free)</s-text>
-      </s-stack>
-      <s-stack direction="block" gap="small-100" align="center">
-        <s-text variant="headingLg">{tier2}</s-text>
-        <s-text variant="bodySm" tone="subdued">Tier 2 (LLM)</s-text>
-      </s-stack>
-      <s-stack direction="block" gap="small-100" align="center">
-        <s-text variant="headingLg">{tier3}</s-text>
-        <s-text variant="bodySm" tone="subdued">Tier 3 (full)</s-text>
-      </s-stack>
-      <s-stack direction="block" gap="small-100" align="center">
-        <s-text variant="headingLg">{emails.length}</s-text>
-        <s-text variant="bodySm" tone="subdued">Total</s-text>
-      </s-stack>
-    </s-stack>
+    <div className="ui-grid-4">
+      <MetricCard
+        label="Total mails"
+        value={emails.length.toLocaleString("fr-FR")}
+        helper="Tous statuts confondus"
+        icon={<MailIcon size={20} />}
+        iconTone="info"
+      />
+      <MetricCard
+        label="Tier 1 (filtres)"
+        value={tier1.toLocaleString("fr-FR")}
+        helper="Filtrage local, gratuit"
+        icon={<InboxIcon size={20} />}
+        iconTone="neutral"
+      />
+      <MetricCard
+        label="Tier 2 (LLM)"
+        value={tier2.toLocaleString("fr-FR")}
+        helper="Classification rapide"
+        icon={<SparklesIcon size={20} />}
+        iconTone="primary"
+      />
+      <MetricCard
+        label="Tier 3 (analyse)"
+        value={tier3.toLocaleString("fr-FR")}
+        helper="Analyse complète Shopify"
+        icon={<CheckCircleIcon size={20} />}
+        iconTone="success"
+      />
+    </div>
   );
 }
 
@@ -1211,10 +1232,10 @@ function EmailMessageBlock({
           }}
         >
           <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ fontWeight: 600, fontSize: "var(--p-font-size-300)" }}>
+            <span style={{ fontWeight: 600, fontSize: "0.875rem" }}>
               {email.fromName || email.fromAddress}
             </span>
-            <span style={{ fontSize: "var(--p-font-size-200)", color: "var(--p-color-text-secondary)" }}>
+            <span style={{ fontSize: "0.8125rem", color: "#6b7280" }}>
               {relativeTime(email.receivedAt)}
             </span>
             <span>
@@ -1224,14 +1245,14 @@ function EmailMessageBlock({
             </span>
             {isLatest && total > 1 && <s-badge tone="info">Latest</s-badge>}
             {needsToggle && (
-              <span style={{ marginLeft: "auto", fontSize: "var(--p-font-size-200)", color: "var(--p-color-text-secondary)" }}>
+              <span style={{ marginLeft: "auto", fontSize: "0.8125rem", color: "#6b7280" }}>
                 {expanded ? "▲ Collapse" : "▼ Expand"}
               </span>
             )}
           </div>
         </button>
 
-        <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: "var(--p-font-size-300)", lineHeight: "var(--p-font-line-height-2)" }}>
+        <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: "0.875rem", lineHeight: "1.6", fontFamily: "-apple-system, BlinkMacSystemFont, 'San Francisco', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" }}>
           {expanded
             ? body
             : body.slice(0, PREVIEW_LENGTH) + (needsToggle ? "…" : "")}
@@ -1244,19 +1265,19 @@ function EmailMessageBlock({
 function ThreadCard({
   thread,
   threadState,
-  isExpanded,
+  isSelected,
   connectedEmail,
   previousContact,
-  onToggle,
+  onSelect,
   onOrderClick,
 }: {
   thread: EmailThread;
   threadState: SerializedThreadState | null;
-  isExpanded: boolean;
+  isSelected: boolean;
   connectedEmail: string | null;
   /** Cross-thread: have we already sent an outgoing to this address/order in another thread? */
   previousContact: { byAddress: boolean; byOrder: boolean; recentReply: boolean; matchedAddress: string | null };
-  onToggle: () => void;
+  onSelect: () => void;
   onOrderClick: (orderNumber: string) => void;
 }) {
   const { latest, emails } = thread;
@@ -1282,237 +1303,135 @@ function ThreadCard({
     cls === "support" ? "success" : cls === "uncertain" ? "warning" : undefined;
 
   return (
-    <s-box
-      padding="base"
-      borderWidth="base"
-      borderRadius="base"
-      {...(borderColor ? { borderColor } : {})}
+    <div
+      onClick={onSelect}
+      className={["ui-card ui-card--compact", isSelected ? "ui-card--selected" : ""].join(" ")}
+      style={{ cursor: "pointer" }}
     >
-      <s-stack direction="block" gap="small-300">
-        {/* Row 1: badges — concis */}
-        <s-stack direction="inline" gap="small-200">
-          {/* Classification — uniquement quand non déduit de la bordure */}
-          {cls === "uncertain" && <s-badge tone="warning">Uncertain</s-badge>}
-          {cls === "filtered" && <s-badge tone="read-only">Filtered</s-badge>}
-          {cls === "non_support" && <s-badge tone="read-only">Non-support</s-badge>}
+      {/* Row 1 : badges */}
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px", marginBottom: "10px" }}>
+        {cls === "uncertain" && <span className="ui-pill ui-pill--warning">Uncertain</span>}
+        {cls === "filtered" && <span className="ui-pill">Filtered</span>}
+        {cls === "non_support" && <span className="ui-pill">Non-support</span>}
 
-          {/* État actionnable — un seul badge, par priorité décroissante */}
-          {bucket === "to_process" ? (
-            <s-badge tone="critical">To review</s-badge>
-          ) : bucket === "waiting_merchant" ? (
-            <s-badge tone="critical">Waiting merchant</s-badge>
-          ) : bucket === "waiting_customer" ? (
-            <s-badge tone="info">Waiting customer</s-badge>
-          ) : bucket === "resolved" ? (
-            <s-badge tone="success">Resolved</s-badge>
-          ) : noReplyNeeded ? (
-            <s-badge tone="success">No reply needed</s-badge>
-          ) : null}
+        {bucket === "to_process" ? (
+          <span className="ui-pill ui-pill--warning">Waiting merchant</span>
+        ) : bucket === "waiting_merchant" ? (
+          <span className="ui-pill ui-pill--warning">Waiting merchant</span>
+        ) : bucket === "waiting_customer" ? (
+          <span className="ui-pill ui-pill--info">Waiting customer</span>
+        ) : bucket === "resolved" ? (
+          <span className="ui-pill ui-pill--success">Resolved</span>
+        ) : noReplyNeeded ? (
+          <span className="ui-pill ui-pill--success">No reply needed</span>
+        ) : null}
 
-          {/* Numéro de commande — clickable to filter the search bar */}
-          {threadState?.resolvedOrderNumber && (
-            <button
-              type="button"
-              onClick={() => onOrderClick(threadState.resolvedOrderNumber!)}
-              title="Filter by this order number"
-              style={{
-                background: "none",
-                border: "none",
-                padding: 0,
-                margin: 0,
-                cursor: "pointer",
-                font: "inherit",
-              }}
-            >
-              <s-badge tone="info">#{threadState.resolvedOrderNumber}</s-badge>
-            </button>
-          )}
-
-          {/* Nombre de messages */}
-          {messageCount > 1 && <s-badge>{messageCount} msg</s-badge>}
-
-          {/* Alertes secondaires */}
-          {threadState?.historyStatus === "partial" && (
-            <s-badge tone="warning">Partial history</s-badge>
-          )}
-          {latest.processingStatus === "error" && <s-badge tone="critical">Error</s-badge>}
-
-          {/* Cross-thread: prior contact indicator — shown on actionable buckets
-               only (to_process / waiting_merchant / waiting_customer). Excluded
-               on "resolved" (already handled) and "other" (pure notification
-               threads like billing / Trustpilot). This keeps legitimate customer
-               messages forwarded via mailer@shopify.com covered. */}
-          {(bucket === "to_process" || bucket === "waiting_merchant" || bucket === "waiting_customer") && (previousContact.byAddress || previousContact.byOrder) && (
-            <s-badge tone="warning" title={
-              previousContact.byAddress && previousContact.matchedAddress
-                ? `Known sender: ${previousContact.matchedAddress}`
-                : undefined
-            }>
-              {previousContact.byOrder && previousContact.byAddress
-                ? "Prior contact (address + order)"
-                : previousContact.byOrder
-                ? "Prior contact (same order)"
-                : "Prior contact (same address)"}
-            </s-badge>
-          )}
-          {/* Another thread has replied to this contact AFTER the latest incoming
-               of this thread. Same scoping as above. */}
-          {(bucket === "to_process" || bucket === "waiting_merchant" || bucket === "waiting_customer") && previousContact.recentReply && (
-            <s-badge tone="warning">Replied elsewhere recently</s-badge>
-          )}
-        </s-stack>
-
-        {/* Row 2: expéditeur + direction + heure */}
-        <s-stack direction="inline" gap="small-300" blockAlign="center">
-          <s-paragraph>
-            <strong>{latest.fromName || latest.fromAddress}</strong>
-            {latest.fromName && (
-              <s-text tone="subdued"> {latest.fromAddress}</s-text>
-            )}
-          </s-paragraph>
-          <s-text variant="bodySm" tone="subdued">
-            {latestDirection === "incoming" ? "↓" : latestDirection === "outgoing" ? "↑" : "·"}{" "}
-            {relativeTime(latest.receivedAt)}
-          </s-text>
-        </s-stack>
-
-        {/* Row 3: subject + snippet */}
-        <s-paragraph>
-          <strong>{latest.subject}</strong>
-        </s-paragraph>
-        {!isExpanded && (
-          <s-text variant="bodySm" tone="subdued">
-            {latest.snippet.slice(0, 120)}{latest.snippet.length > 120 ? "…" : ""}
-          </s-text>
+        {threadState?.resolvedOrderNumber && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onOrderClick(threadState.resolvedOrderNumber!); }}
+            style={{ background: "none", border: "none", padding: 0, margin: 0, cursor: "pointer" }}
+          >
+            <span className="ui-pill ui-pill--info">#{threadState.resolvedOrderNumber}</span>
+          </button>
         )}
 
-        {reason && !isExpanded && (
-          <s-text variant="bodySm" tone="subdued">
-            {reason}
-          </s-text>
+        {messageCount > 1 && <span className="ui-pill">{messageCount} msg</span>}
+        {threadState?.historyStatus === "partial" && <span className="ui-pill ui-pill--warning">Partial history</span>}
+        {latest.processingStatus === "error" && <span className="ui-pill ui-pill--danger">Error</span>}
+
+        {(bucket === "to_process" || bucket === "waiting_merchant" || bucket === "waiting_customer") && (previousContact.byAddress || previousContact.byOrder) && (
+          <span className="ui-pill ui-pill--warning">
+            {previousContact.byOrder && previousContact.byAddress
+              ? "Prior contact (address + order)"
+              : previousContact.byOrder
+              ? "Prior contact (same order)"
+              : "Prior contact (same address)"}
+          </span>
         )}
-
-        <s-stack direction="inline" gap="small-300" blockAlign="center">
-          <s-button variant="plain" onClick={onToggle}>
-            {isExpanded ? "Collapse" : "Details"}
-          </s-button>
-          {latest.canonicalThreadId && (
-            <MoveThreadControl
-              canonicalThreadId={latest.canonicalThreadId}
-              bucket={bucket}
-              previousOperationalState={threadState?.previousOperationalState ?? null}
-            />
-          )}
-          {/* Generate draft — always visible for waiting_merchant threads without a draft */}
-          {bucket === "waiting_merchant" &&
-            !latest.draftReply &&
-            !noReplyNeeded &&
-            !latest.tier1Result?.startsWith("filtered:") &&
-            latest.tier2Result !== "probable_non_client" && (
-            <s-stack direction="inline" gap="small-300" blockAlign="center">
-              <reanalyzeFetcher.Form method="post">
-                <input type="hidden" name="_action" value="reanalyze" />
-                <input type="hidden" name="emailId" value={latest.id} />
-                <s-button type="submit" variant="primary" title="Once generated, the thread will move to &quot;To review&quot;" {...(isGenerating ? { loading: true } : {})}>
-                  {latest.processingStatus === "error" ? "Retry analysis" : "Generate draft"}
-                </s-button>
-              </reanalyzeFetcher.Form>
-              {isGenerating && (
-                <s-text variant="bodySm" tone="subdued">Le brouillon sera disponible dans "À traiter"</s-text>
-              )}
-            </s-stack>
-          )}
-        </s-stack>
-
-        {/* Expanded content */}
-        {isExpanded && (
-          <s-stack direction="block" gap="base">
-            {/* Thread messages */}
-            {emails.map((email, idx) => (
-              <EmailMessageBlock
-                key={email.id}
-                email={email}
-                idx={idx}
-                total={emails.length}
-                connectedEmail={connectedEmail}
-              />
-            ))}
-
-            {reason && (
-              <s-banner tone="info">
-                Filtered by: {reason}
-              </s-banner>
-            )}
-
-            {/* Edit parsed identifiers — merchant can correct order/tracking/email/name */}
-            {latest.canonicalThreadId && (
-              <ThreadIdentifiersEditor
-                canonicalThreadId={latest.canonicalThreadId}
-                threadState={threadState}
-              />
-            )}
-
-            {/* Analysis (from the most recently analyzed email in the thread) */}
-            {analysisEmail?.analysisResult && (
-              <s-box padding="base" borderWidth="base" borderRadius="base">
-                <s-stack direction="block" gap="base">
-                  <s-stack direction="inline" gap="small-300" blockAlign="center">
-                    <s-text variant="headingSm">Analysis</s-text>
-                    {analysisEmail !== latest && (
-                      <s-badge tone="warning">Based on previous message</s-badge>
-                    )}
-                  </s-stack>
-                  <AnalysisDisplay analysis={analysisEmail.analysisResult} />
-                </s-stack>
-              </s-box>
-            )}
-
-            {/* Draft (prefer latest draft, fallback to previous analyzed email's draft) */}
-            {draftEmail && !noReplyNeeded && <DraftBlock email={draftEmail} threadSenderEmail={latest.fromAddress} />}
-
-            {noReplyNeeded && (
-              <s-banner tone="info">
-                No draft generated: latest customer message appears to close the loop.
-              </s-banner>
-            )}
-
-            {/* Error */}
-            {latest.errorMessage && (
-              <s-banner tone="critical">{latest.errorMessage}</s-banner>
-            )}
-
-            {/* Generate draft — shown when latest has no draft yet and the email is actionable */}
-            {!latest.draftReply &&
-              !noReplyNeeded &&
-              !latest.tier1Result?.startsWith("filtered:") &&
-              latest.tier2Result !== "probable_non_client" && (
-              <s-stack direction="inline" gap="small-300" blockAlign="center">
-                <reanalyzeFetcher.Form method="post">
-                  <input type="hidden" name="_action" value="reanalyze" />
-                  <input type="hidden" name="emailId" value={latest.id} />
-                  <s-button type="submit" variant="primary" title="Once generated, the thread will move to &quot;To review&quot;" {...(isGenerating ? { loading: true } : {})}>
-                    {latest.processingStatus === "error" ? "Retry analysis" : "Generate draft"}
-                  </s-button>
-                </reanalyzeFetcher.Form>
-                {isGenerating && (
-                  <s-text variant="bodySm" tone="subdued">Le brouillon sera disponible dans "À traiter"</s-text>
-                )}
-              </s-stack>
-            )}
-
-            {/* Re-analyze — shown for misclassified or uncertain emails (even if they already have a draft) */}
-            {(latest.tier2Result === "incertain" ||
-              latest.tier2Result === "probable_non_client") && (
-              <Form method="post">
-                <input type="hidden" name="_action" value="reanalyze" />
-                <input type="hidden" name="emailId" value={latest.id} />
-                <s-button type="submit">Analyze as support email</s-button>
-              </Form>
-            )}
-          </s-stack>
+        {(bucket === "to_process" || bucket === "waiting_merchant" || bucket === "waiting_customer") && previousContact.recentReply && (
+          <span className="ui-pill ui-pill--warning">Replied elsewhere recently</span>
         )}
-      </s-stack>
-    </s-box>
+      </div>
+
+      {/* Row 2 : sender + time */}
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "8px", marginBottom: "4px" }}>
+        <div style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          <span style={{ fontWeight: 600, fontSize: "0.9375rem", color: "var(--ui-slate-900)" }}>
+            {latest.fromName || latest.fromAddress}
+          </span>
+          {latest.fromName && (
+            <span style={{ fontWeight: 400, fontSize: "0.8125rem", color: "var(--ui-slate-500)", marginLeft: "6px" }}>
+              {latest.fromAddress}
+            </span>
+          )}
+        </div>
+        <span style={{ flexShrink: 0, fontSize: "0.8125rem", color: "var(--ui-slate-500)" }}>
+          {latestDirection === "incoming" ? "↓" : latestDirection === "outgoing" ? "↑" : "·"}{" "}
+          {relativeTime(latest.receivedAt)}
+        </span>
+      </div>
+
+      {/* Row 3 : subject */}
+      <div style={{
+        fontWeight: 600,
+        fontSize: "0.9375rem",
+        color: "var(--ui-slate-800)",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        marginBottom: "4px",
+      }}>
+        {latest.subject}
+      </div>
+
+      {/* Row 4 : snippet (only when not selected) */}
+      {!isSelected && (
+        <div style={{
+          fontSize: "0.8125rem",
+          color: "var(--ui-slate-500)",
+          overflow: "hidden",
+          display: "-webkit-box",
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: "vertical",
+          marginBottom: "10px",
+        }}>
+          {reason || latest.snippet.slice(0, 140)}
+          {!reason && latest.snippet.length > 140 ? "…" : ""}
+        </div>
+      )}
+
+      {/* Row 5 : actions (stop propagation so clicks don't re-select) */}
+      <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "6px" }}>
+        {latest.canonicalThreadId && (
+          <MoveThreadControl
+            canonicalThreadId={latest.canonicalThreadId}
+            bucket={bucket}
+            previousOperationalState={threadState?.previousOperationalState ?? null}
+          />
+        )}
+        {bucket === "waiting_merchant" &&
+          !latest.draftReply &&
+          !noReplyNeeded &&
+          !latest.tier1Result?.startsWith("filtered:") &&
+          latest.tier2Result !== "probable_non_client" && (
+          <reanalyzeFetcher.Form method="post">
+            <input type="hidden" name="_action" value="reanalyze" />
+            <input type="hidden" name="emailId" value={latest.id} />
+            <s-button type="submit" variant="primary" {...(isGenerating ? { loading: true } : {})}>
+              {latest.processingStatus === "error" ? "Retry analysis" : "Generate draft"}
+            </s-button>
+          </reanalyzeFetcher.Form>
+        )}
+      </div>
+
+      {/* Row 6 : Draft generated */}
+      {latest.draftReply && (
+        <div style={{ marginTop: "8px", paddingTop: "8px", borderTop: "1px solid var(--ui-slate-100)" }}>
+          <span className="ui-pill ui-pill--success" style={{ fontSize: "11px", padding: "2px 8px" }}>Draft generated</span>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1525,6 +1444,28 @@ function DraftBlock({ email, threadSenderEmail }: {
   const currentVersion = allVersions[versionIndex] ?? email.draftReply!;
   const isLatest = versionIndex === allVersions.length - 1;
   const total = allVersions.length;
+
+  // Local editable body state (only applies to the latest version)
+  const [bodyText, setBodyText] = useState(currentVersion);
+  // Sync bodyText when switching versions or when a new draft arrives
+  useEffect(() => { setBodyText(currentVersion); }, [currentVersion]);
+
+  // Auto-save debounce for body text
+  const bodySaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveBody = (text: string) => {
+    if (bodySaveTimer.current) clearTimeout(bodySaveTimer.current);
+    bodySaveTimer.current = setTimeout(async () => {
+      await fetch("/api/reply-draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ emailId: email.id, draftBody: text }),
+      });
+    }, 800);
+  };
+
+  // Ref for the s-text-area web component (captures native input/change events)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const textareaRef = useRef<any>(null);
 
   // Compose field state
   const [subject, setSubject] = useState(
@@ -1551,8 +1492,30 @@ function DraftBlock({ email, threadSenderEmail }: {
     }, 800);
   };
 
-  // Clear pending debounce timer on unmount to prevent dangling fetch
-  useEffect(() => () => { if (metaSaveTimer.current) clearTimeout(metaSaveTimer.current); }, []);
+  // Clear pending debounce timers on unmount
+  useEffect(() => () => {
+    if (metaSaveTimer.current) clearTimeout(metaSaveTimer.current);
+    if (bodySaveTimer.current) clearTimeout(bodySaveTimer.current);
+  }, []);
+
+  // Attach input listener to the s-text-area web component
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const handler = (e: Event) => {
+      const textarea = (e.target as HTMLElement).shadowRoot?.querySelector("textarea") ??
+        (el.shadowRoot?.querySelector("textarea"));
+      const value = textarea?.value ?? (e as InputEvent).data ?? "";
+      // Fallback: read from the inner textarea if event.target is the wrapper
+      const inner = el.querySelector("textarea") ?? el.shadowRoot?.querySelector("textarea");
+      const text = inner?.value ?? value;
+      setBodyText(text);
+      saveBody(text);
+    };
+    el.addEventListener("input", handler);
+    return () => el.removeEventListener("input", handler);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Jump to latest version when a new draft arrives
   useEffect(() => {
@@ -1690,9 +1653,10 @@ function DraftBlock({ email, threadSenderEmail }: {
         </s-stack>
 
         <s-text-area
+          ref={textareaRef}
           label={isLatest ? "Editable draft" : `Version ${versionIndex + 1} (read-only)`}
           rows={10}
-          value={currentVersion}
+          value={isLatest ? bodyText : currentVersion}
           readOnly={!isLatest}
         />
 
@@ -1700,7 +1664,7 @@ function DraftBlock({ email, threadSenderEmail }: {
           <refineFetcher.Form method="post">
             <input type="hidden" name="_action" value="refine" />
             <input type="hidden" name="emailId" value={email.id} />
-            <input type="hidden" name="currentDraft" value={currentVersion} />
+            <input type="hidden" name="currentDraft" value={bodyText} />
             <s-stack direction="inline" gap="small-300" blockAlign="end">
               <div style={{ flex: 1 }}>
                 <s-text-field label="Refinement instructions" name="instructions"
@@ -1833,6 +1797,282 @@ function DiagnosisView({ diagnosis }: { diagnosis: DiagnosisReport }) {
 }
 
 // ---------------------------------------------------------------------------
+// Thread detail panel (right side of split layout)
+// ---------------------------------------------------------------------------
+
+function ThreadDetailPanel({
+  thread,
+  threadState,
+  connectedEmail,
+  bucket,
+  confidence,
+  onClose,
+}: {
+  thread: EmailThread;
+  threadState: SerializedThreadState | null;
+  connectedEmail: string | null;
+  bucket: OpsBucket | "all";
+  confidence: "high" | "medium" | "low" | null;
+  onClose: () => void;
+}) {
+  const { latest, emails } = thread;
+  const noReplyNeeded = latest.analysisResult?.conversation?.noReplyNeeded === true;
+  const reanalyzeFetcher = useFetcher();
+  const isGenerating = reanalyzeFetcher.state !== "idle";
+  const [showThread, setShowThread] = useState(false);
+
+  const analysisEmail = [...emails].reverse().find((e) => e.analysisResult) ?? null;
+  const draftEmail = latest.draftReply ? latest : (analysisEmail?.draftReply ? analysisEmail : null);
+  const order = analysisEmail?.analysisResult?.order;
+  const intent = analysisEmail?.analysisResult?.intent;
+
+  const bucketPill =
+    bucket === "to_process" ? <span className="ui-pill ui-pill--warning">Waiting merchant</span>
+    : bucket === "waiting_merchant" ? <span className="ui-pill ui-pill--warning">Waiting merchant</span>
+    : bucket === "waiting_customer" ? <span className="ui-pill ui-pill--info">Waiting customer</span>
+    : bucket === "resolved" ? <span className="ui-pill ui-pill--success">Resolved</span>
+    : null;
+
+  const confColor = confidence === "high" ? "#10b981" : confidence === "medium" ? "#3b82f6" : "#f59e0b";
+  const confBg   = confidence === "high" ? "#d1fae5" : confidence === "medium" ? "#dbeafe" : "#fef3c7";
+
+  const sectionLabel: React.CSSProperties = {
+    fontSize: "10px", fontWeight: 700, textTransform: "uppercase",
+    letterSpacing: "0.07em", color: "var(--ui-slate-400)", marginBottom: "12px",
+  };
+
+  const kvLabel: React.CSSProperties = {
+    margin: 0, fontSize: "10px", fontWeight: 600, color: "var(--ui-slate-400)",
+    textTransform: "uppercase", letterSpacing: "0.05em",
+  };
+  const kvValue: React.CSSProperties = {
+    margin: 0, fontSize: "0.875rem", color: "var(--ui-slate-800)", fontWeight: 500,
+  };
+
+  return (
+    <div className="ui-card" style={{ padding: 0, display: "flex", flexDirection: "column" }}>
+
+      {/* ── Sticky header ── */}
+      <div style={{
+        position: "sticky", top: 0, background: "#fff", zIndex: 2,
+        borderBottom: "1px solid var(--ui-slate-200)",
+        borderRadius: "var(--ui-radius-2xl) var(--ui-radius-2xl) 0 0",
+        padding: "14px 18px 12px",
+      }}>
+        {/* Row 1 : badges */}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "10px" }}>
+          {bucketPill}
+          {threadState?.resolvedOrderNumber && (
+            <span className="ui-pill ui-pill--info">#{threadState.resolvedOrderNumber}</span>
+          )}
+          {emails.length > 1 && <span className="ui-pill">{emails.length} msg</span>}
+          {intent && (
+            <span className="ui-pill" style={{ textTransform: "capitalize" }}>
+              {intent.replace(/_/g, " ")}
+            </span>
+          )}
+        </div>
+
+        {/* Row 2 : sender + collapse button */}
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "12px", marginBottom: "4px" }}>
+          <div style={{ minWidth: 0, overflow: "hidden" }}>
+            <span style={{ fontWeight: 700, fontSize: "0.9375rem", color: "var(--ui-slate-900)" }}>
+              {latest.fromName || latest.fromAddress}
+            </span>
+            {latest.fromName && (
+              <span style={{ fontWeight: 400, fontSize: "0.8125rem", color: "var(--ui-slate-500)", marginLeft: "8px" }}>
+                {latest.fromAddress}
+              </span>
+            )}
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              flexShrink: 0, background: "none",
+              border: "1px solid var(--ui-slate-200)", borderRadius: "6px",
+              padding: "3px 10px", fontSize: "0.8125rem",
+              color: "var(--ui-slate-600)", cursor: "pointer",
+              display: "flex", alignItems: "center", gap: "4px", whiteSpace: "nowrap",
+            }}
+          >
+            ▲ Collapse
+          </button>
+        </div>
+
+        {/* Row 3 : subject */}
+        <div style={{
+          fontSize: "0.875rem", fontWeight: 600, color: "var(--ui-slate-700)",
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          marginBottom: "12px",
+        }}>
+          {latest.subject}
+        </div>
+
+        {/* Row 4 : action buttons */}
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+          {latest.canonicalThreadId && bucket !== "all" && (
+            <MoveThreadControl
+              canonicalThreadId={latest.canonicalThreadId}
+              bucket={bucket}
+              previousOperationalState={threadState?.previousOperationalState ?? null}
+            />
+          )}
+          {!noReplyNeeded &&
+            !latest.tier1Result?.startsWith("filtered:") &&
+            latest.tier2Result !== "probable_non_client" && (
+            <reanalyzeFetcher.Form method="post">
+              <input type="hidden" name="_action" value="reanalyze" />
+              <input type="hidden" name="emailId" value={latest.id} />
+              <s-button type="submit" variant="primary" {...(isGenerating ? { loading: true } : {})}>
+                {latest.draftReply ? "Regenerate draft" : latest.processingStatus === "error" ? "Retry analysis" : "Generate draft"}
+              </s-button>
+            </reanalyzeFetcher.Form>
+          )}
+          {isGenerating && <span style={{ fontSize: "0.8125rem", color: "var(--ui-slate-500)", alignSelf: "center" }}>Génération…</span>}
+        </div>
+      </div>
+
+      {/* ── Latest message ── */}
+      <div style={{ padding: "16px 18px", borderBottom: "1px solid var(--ui-slate-100)" }}>
+        <div style={sectionLabel}>Latest message</div>
+        <EmailMessageBlock
+          email={latest}
+          idx={emails.length - 1}
+          total={emails.length}
+          connectedEmail={connectedEmail}
+        />
+      </div>
+
+      {/* ── 2-column body : order context | draft ── */}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "minmax(160px, 220px) minmax(0, 1fr)",
+        borderBottom: "1px solid var(--ui-slate-100)",
+      }}>
+        {/* Left : order context */}
+        <div style={{ padding: "16px 18px", borderRight: "1px solid var(--ui-slate-100)" }}>
+          <div style={sectionLabel}>Order context</div>
+          {order ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+              {([
+                ["Customer", order.customerName ?? "—"],
+                ["Order",    order.name],
+                ["Items",    `${order.lineItems.length} item${order.lineItems.length !== 1 ? "s" : ""}`],
+                ["Status",   order.displayFulfillmentStatus ?? "—"],
+              ] as [string, string][]).map(([label, value]) => (
+                <div key={label}>
+                  <div style={kvLabel}>{label}</div>
+                  <div style={kvValue}>{value}</div>
+                </div>
+              ))}
+              {confidence && (
+                <div>
+                  <div style={kvLabel}>Confidence</div>
+                  <span style={{
+                    display: "inline-block", marginTop: "3px",
+                    padding: "2px 10px", borderRadius: "999px",
+                    fontSize: "0.75rem", fontWeight: 700,
+                    background: confBg, color: confColor,
+                    textTransform: "uppercase", letterSpacing: "0.04em",
+                  }}>
+                    {confidence}
+                  </span>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div style={{ fontSize: "0.8125rem", color: "var(--ui-slate-400)", fontStyle: "italic" }}>
+              No order found.
+            </div>
+          )}
+        </div>
+
+        {/* Right : draft */}
+        <div style={{ padding: "16px 18px", display: "flex", flexDirection: "column", gap: "16px" }}>
+          <div>
+            <div style={sectionLabel}>Suggested AI draft</div>
+            {draftEmail && !noReplyNeeded ? (
+              <DraftBlock email={draftEmail} threadSenderEmail={latest.fromAddress} />
+            ) : noReplyNeeded ? (
+              <div style={{ fontSize: "0.8125rem", color: "var(--ui-slate-500)", fontStyle: "italic" }}>
+                No reply needed — the conversation appears closed.
+              </div>
+            ) : (
+              <div style={{ fontSize: "0.8125rem", color: "var(--ui-slate-500)", fontStyle: "italic" }}>
+                No draft yet. Click "Generate draft" above.
+              </div>
+            )}
+          </div>
+
+          {/* Analysis — below draft, in the right column */}
+          {analysisEmail?.analysisResult && (
+            <div>
+              <div style={{ ...sectionLabel, display: "flex", gap: "8px", alignItems: "center", marginBottom: "14px" }}>
+                Analysis
+                {analysisEmail !== latest && (
+                  <span className="ui-pill ui-pill--warning" style={{ fontSize: "10px" }}>Based on previous message</span>
+                )}
+              </div>
+              <AnalysisDisplay analysis={analysisEmail.analysisResult} />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Thread complet (repliable) ── */}
+      <div>
+        <button
+          type="button"
+          onClick={() => setShowThread((v) => !v)}
+          style={{
+            width: "100%", background: "none", border: "none",
+            padding: "10px 18px", display: "flex", alignItems: "center", gap: "8px",
+            fontSize: "0.8125rem", fontWeight: 600, color: "var(--ui-slate-500)",
+            cursor: "pointer", textAlign: "left",
+          }}
+        >
+          <span>{showThread ? "▲" : "▼"}</span>
+          Thread complet ({emails.length} message{emails.length !== 1 ? "s" : ""})
+        </button>
+
+        {showThread && (
+          <div style={{ padding: "0 18px 20px", display: "flex", flexDirection: "column", gap: "12px" }}>
+            {emails.map((email, idx) => (
+              <EmailMessageBlock
+                key={email.id}
+                email={email}
+                idx={idx}
+                total={emails.length}
+                connectedEmail={connectedEmail}
+              />
+            ))}
+
+            {latest.canonicalThreadId && (
+              <ThreadIdentifiersEditor
+                canonicalThreadId={latest.canonicalThreadId}
+                threadState={threadState}
+              />
+            )}
+
+            {latest.errorMessage && (
+              <s-banner tone="critical">{latest.errorMessage}</s-banner>
+            )}
+
+            {(latest.tier2Result === "incertain" || latest.tier2Result === "probable_non_client") && (
+              <Form method="post">
+                <input type="hidden" name="_action" value="reanalyze" />
+                <input type="hidden" name="emailId" value={latest.id} />
+                <s-button type="submit">Analyze as support email</s-button>
+              </Form>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
@@ -1866,7 +2106,7 @@ export default function InboxPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bgSyncActive]);
 
-  const [activeBucket, setActiveBucket] = useState<OpsBucket | "all">("to_process");
+  const [activeBucket, setActiveBucket] = useState<OpsBucket | "all" | "to_handle">("to_handle");
   const [filters, setFilters] = useState<InboxFilters>({
     search: "",
     confidence: "all",
@@ -1913,18 +2153,30 @@ export default function InboxPage() {
       nature: getThreadClassification(t),
       confidence: getThreadConfidence(t),
       linkedOrder: hasLinkedOrder(state),
-      previousContact: pc ?? { byAddress: false, byOrder: false, recentReply: false, matchedAddress: null },
+      previousContact: {
+        byAddress: pc?.byAddress ?? false,
+        byOrder: pc?.byOrder ?? false,
+        recentReply: (pc as { recentReply?: boolean } | null)?.recentReply ?? false,
+        matchedAddress: (pc as { matchedAddress?: string | null } | null)?.matchedAddress ?? null,
+      },
     };
   });
 
-  const bucketCounts: Record<OpsBucket | "all", number> = {
+  const bucketCounts: Record<OpsBucket | "all" | "to_handle", number> = {
     all: threadMeta.length,
+    to_handle: threadMeta.filter((m) => m.bucket === "to_process" || m.bucket === "waiting_merchant").length,
     to_process: threadMeta.filter((m) => m.bucket === "to_process").length,
     waiting_customer: threadMeta.filter((m) => m.bucket === "waiting_customer").length,
     waiting_merchant: threadMeta.filter((m) => m.bucket === "waiting_merchant").length,
     resolved: threadMeta.filter((m) => m.bucket === "resolved").length,
     other: threadMeta.filter((m) => m.bucket === "other").length,
   };
+
+  // Selected thread for the right-side detail panel (searched across ALL threads,
+  // not just filtered, so the panel stays open when filters change).
+  const selectedThreadMeta = expandedThreadId
+    ? threadMeta.find((m) => m.thread.threadId === expandedThreadId) ?? null
+    : null;
 
   const matchesFilters = (m: (typeof threadMeta)[number]): boolean => {
     if (filters.confidence !== "all" && m.confidence !== filters.confidence) return false;
@@ -1942,27 +2194,33 @@ export default function InboxPage() {
   };
 
   const filteredThreadMeta = threadMeta
-    .filter((m) => activeBucket === "all" || m.bucket === activeBucket)
+    .filter((m) =>
+      activeBucket === "all" ||
+      (activeBucket === "to_handle" ? m.bucket === "to_process" || m.bucket === "waiting_merchant" : m.bucket === activeBucket)
+    )
     .filter(matchesFilters);
 
   const report = actionData?.report as ProcessingReport | null;
 
   if (actionData?.disconnected) {
     return (
-      <s-page heading="Email inbox">
+      <div className="ui-inbox-root">
+        <div className="ui-inbox-heading"><h1>Email inbox</h1></div>
         <s-section>
           <s-banner tone="success">
             Email disconnected. Refresh the page to reconnect.
           </s-banner>
         </s-section>
-      </s-page>
+      </div>
     );
   }
 
   return (
-    <s-page heading="Email inbox">
+    <div className="ui-inbox-root">
+      <div className="ui-inbox-heading"><h1>Email inbox</h1></div>
+
       {/* Connection */}
-      <s-section>
+      <div className="ui-inbox-section">
         <ConnectionCard
           connected={loaderData.connected}
           provider={loaderData.provider}
@@ -1974,87 +2232,79 @@ export default function InboxPage() {
           autoSyncEnabled={loaderData.autoSyncEnabled}
           autoSyncIntervalMinutes={loaderData.autoSyncIntervalMinutes}
         />
-      </s-section>
+      </div>
 
-      {/* Sync in progress banner — shown when a resync/backfill job is queued or running */}
+      {/* Sync in progress banner */}
       {bgSyncActive && (
-        <s-section>
+        <div className="ui-inbox-section">
           <s-banner tone="info">
             <s-stack direction="block" gap="small-200">
               <s-text>Synchronisation en cours…</s-text>
               <s-text>Le traitement des emails et la mise à jour des badges peuvent prendre quelques minutes. La page se rafraîchit automatiquement toutes les 60 secondes.</s-text>
             </s-stack>
           </s-banner>
-        </s-section>
+        </div>
       )}
 
-      {/* Sync error — persisted in DB, visible after page revalidation */}
+      {/* Sync error */}
       {loaderData.lastSyncError && !bgSyncActive && (
-        <s-section>
+        <div className="ui-inbox-section">
           <s-banner tone="critical">
             <s-stack direction="block" gap="small-200">
               <s-text variant="headingSm">Erreur de synchronisation</s-text>
               <s-text variant="bodySm">{loaderData.lastSyncError}</s-text>
             </s-stack>
           </s-banner>
-        </s-section>
+        </div>
       )}
 
       {/* Diagnosis report */}
       {(actionData as { diagnosis?: DiagnosisReport })?.diagnosis && (
-        <s-section heading="Diagnosis">
+        <div className="ui-inbox-section">
+          <p style={{ fontWeight: 600, marginBottom: 8 }}>Diagnosis</p>
           <DiagnosisView diagnosis={(actionData as { diagnosis: DiagnosisReport }).diagnosis} />
-        </s-section>
+        </div>
       )}
 
-      {/* Sync cancelled banner */}
+      {/* Sync cancelled */}
       {syncStopped && (
-        <s-section>
-          <s-banner tone="warning">
-            Sync annulé.
-          </s-banner>
-        </s-section>
+        <div className="ui-inbox-section">
+          <s-banner tone="warning">Sync annulé.</s-banner>
+        </div>
       )}
+
+      {/* Sync report */}
       {report && (
-        <s-section>
+        <div className="ui-inbox-section">
           <s-banner tone="info">
             Synced {report.total} emails: {report.supportClient} support, {report.uncertain} uncertain,{" "}
             {report.filtered + report.nonClient} filtered, {report.errors > 0 ? `${report.errors} errors` : "no errors"}.
           </s-banner>
-        </s-section>
+        </div>
       )}
 
       {/* Email list */}
       {loaderData.connected && (
         <>
-          {/* Pipeline stats */}
-          <s-section heading="Pipeline overview">
+          {/* Pipeline stats — KPI tiles */}
+          <div className="ui-inbox-section">
             <PipelineStats emails={displayEmails} />
-          </s-section>
+          </div>
 
-          <s-section>
-            <s-stack direction="block" gap="base">
-              {/* Primary tabs: where the merchant needs to focus attention. */}
-              <s-stack direction="inline" gap="small-300">
-                {(
-                  [
-                    { key: "to_process", label: "To review" },
-                    { key: "waiting_customer", label: "Waiting customer" },
-                    { key: "waiting_merchant", label: "Waiting us" },
-                    { key: "resolved", label: "Resolved" },
-                    { key: "other", label: "Other" },
-                    { key: "all", label: "All" },
-                  ] as const
-                ).map((tab) => (
-                  <s-button
-                    key={tab.key}
-                    variant={activeBucket === tab.key ? "primary" : "tertiary"}
-                    onClick={() => setActiveBucket(tab.key)}
-                  >
-                    {tab.label} ({bucketCounts[tab.key]})
-                  </s-button>
-                ))}
-              </s-stack>
+          <div className="ui-inbox-section">
+            <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+              {/* Primary tabs */}
+              <SegmentedTabs
+                tabs={[
+                  { key: "to_handle", label: "To handle", count: bucketCounts.to_handle },
+                  { key: "waiting_customer", label: "Waiting customer", count: bucketCounts.waiting_customer },
+                  { key: "resolved", label: "Resolved", count: bucketCounts.resolved },
+                  { key: "other", label: "Other", count: bucketCounts.other },
+                  { key: "all", label: "All", count: bucketCounts.all },
+                ]}
+                active={activeBucket}
+                onChange={(k) => setActiveBucket(k)}
+              />
 
               {/* Secondary filters */}
               <FiltersBar
@@ -2070,36 +2320,60 @@ export default function InboxPage() {
                 }
               />
 
-              {/* Thread cards */}
-              <s-stack direction="block" gap="small-300">
-                {filteredThreadMeta.length === 0 && (
-                  <s-box padding="large-500" background="subdued" borderRadius="base">
-                    <s-paragraph>No emails match the current filters.</s-paragraph>
-                  </s-box>
+              {/* Thread list + detail split */}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: selectedThreadMeta ? "minmax(0, 1fr) minmax(0, 2fr)" : "1fr",
+                  gap: "16px",
+                  alignItems: "start",
+                }}
+              >
+                {/* Left: compact thread list */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                  {filteredThreadMeta.length === 0 && (
+                    <s-box padding="large-500" background="subdued" borderRadius="base">
+                      <s-paragraph>No emails match the current filters.</s-paragraph>
+                    </s-box>
+                  )}
+                  {filteredThreadMeta.map(({ thread, state, previousContact }) => (
+                    <ThreadCard
+                      key={thread.threadId}
+                      thread={thread}
+                      threadState={state}
+                      isSelected={expandedThreadId === thread.threadId}
+                      connectedEmail={loaderData.connectedEmail}
+                      previousContact={previousContact}
+                      onSelect={() =>
+                        setExpandedThreadId(
+                          expandedThreadId === thread.threadId ? null : thread.threadId,
+                        )
+                      }
+                      onOrderClick={(orderNumber) =>
+                        setFilters((prev) => ({ ...prev, search: orderNumber }))
+                      }
+                    />
+                  ))}
+                </div>
+
+                {/* Right: thread detail panel (sticky) */}
+                {selectedThreadMeta && (
+                  <div style={{ position: "sticky", top: "16px", maxHeight: "calc(100vh - 120px)", overflowY: "auto", borderRadius: "var(--ui-radius-2xl)" }}>
+                    <ThreadDetailPanel
+                      thread={selectedThreadMeta.thread}
+                      threadState={selectedThreadMeta.state}
+                      connectedEmail={loaderData.connectedEmail}
+                      bucket={selectedThreadMeta.bucket}
+                      confidence={selectedThreadMeta.confidence}
+                      onClose={() => setExpandedThreadId(null)}
+                    />
+                  </div>
                 )}
-                {filteredThreadMeta.map(({ thread, state, previousContact }) => (
-                  <ThreadCard
-                    key={thread.threadId}
-                    thread={thread}
-                    threadState={state}
-                    isExpanded={expandedThreadId === thread.threadId}
-                    connectedEmail={loaderData.connectedEmail}
-                    previousContact={previousContact}
-                    onToggle={() =>
-                      setExpandedThreadId(
-                        expandedThreadId === thread.threadId ? null : thread.threadId,
-                      )
-                    }
-                    onOrderClick={(orderNumber) =>
-                      setFilters((prev) => ({ ...prev, search: orderNumber }))
-                    }
-                  />
-                ))}
-              </s-stack>
-            </s-stack>
-          </s-section>
+              </div>
+            </div>
+          </div>
         </>
       )}
-    </s-page>
+    </div>
   );
 }

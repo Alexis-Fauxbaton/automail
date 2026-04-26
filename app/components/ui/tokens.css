@@ -1,0 +1,461 @@
+/* ---------------------------------------------------------------------------
+ * UI design tokens — reproduces the look of the supportinbox redesign mockup
+ * (slate palette, rounded-2xl cards, soft shadows, indigo/blue accents)
+ * inside the Shopify Admin embedded shell.
+ * ------------------------------------------------------------------------- */
+
+:root {
+  /* Palette (slate / indigo / emerald / amber / rose) */
+  --ui-slate-50: #f8fafc;
+  --ui-slate-100: #f1f5f9;
+  --ui-slate-200: #e2e8f0;
+  --ui-slate-300: #cbd5e1;
+  --ui-slate-400: #94a3b8;
+  --ui-slate-500: #64748b;
+  --ui-slate-600: #475569;
+  --ui-slate-700: #334155;
+  --ui-slate-800: #1e293b;
+  --ui-slate-900: #0f172a;
+  --ui-slate-950: #020617;
+
+  --ui-blue-50: #eff6ff;
+  --ui-blue-100: #dbeafe;
+  --ui-blue-200: #bfdbfe;
+  --ui-blue-500: #3b82f6;
+  --ui-blue-600: #2563eb;
+  --ui-blue-700: #1d4ed8;
+
+  --ui-indigo-50: #eef2ff;
+  --ui-indigo-200: #c7d2fe;
+  --ui-indigo-600: #4f46e5;
+  --ui-indigo-700: #4338ca;
+
+  --ui-emerald-50: #ecfdf5;
+  --ui-emerald-200: #a7f3d0;
+  --ui-emerald-600: #059669;
+  --ui-emerald-700: #047857;
+
+  --ui-amber-50: #fffbeb;
+  --ui-amber-200: #fde68a;
+  --ui-amber-700: #b45309;
+
+  --ui-rose-50: #fff1f2;
+  --ui-rose-200: #fecdd3;
+  --ui-rose-700: #be123c;
+  --ui-red-50: #fef2f2;
+  --ui-red-200: #fecaca;
+  --ui-red-700: #b91c1c;
+
+  /* Surfaces / radii / shadows */
+  --ui-radius-md: 12px;
+  --ui-radius-lg: 16px;
+  --ui-radius-xl: 20px;
+  --ui-radius-2xl: 24px;
+  --ui-radius-pill: 9999px;
+
+  --ui-shadow-card: 0 8px 24px rgba(15, 23, 42, 0.05);
+  --ui-shadow-card-strong: 0 12px 30px rgba(15, 23, 42, 0.08);
+  --ui-shadow-button: 0 8px 20px rgba(15, 23, 42, 0.18);
+}
+
+/* ---------------- Card ---------------- */
+.ui-card {
+  background: #ffffff;
+  border: 1px solid var(--ui-slate-200);
+  border-radius: var(--ui-radius-2xl);
+  box-shadow: var(--ui-shadow-card);
+  padding: 20px;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+.ui-card:hover {
+  border-color: var(--ui-slate-300);
+  box-shadow: 0 4px 16px rgba(15,23,42,0.08);
+}
+.ui-card--selected {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  box-shadow: 0 8px 24px rgba(37,99,235,0.10);
+}
+.ui-card--selected:hover {
+  border-color: #60a5fa;
+}
+.ui-card--compact {
+  padding: 14px 18px;
+}
+.ui-card--flush {
+  padding: 0;
+  overflow: hidden;
+}
+.ui-card--ghost {
+  background: var(--ui-slate-50);
+  box-shadow: none;
+}
+.ui-card--accent-left {
+  border-left: 4px solid var(--ui-indigo-600);
+}
+.ui-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.ui-card__title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ui-slate-900);
+  margin: 0;
+  line-height: 1.3;
+}
+.ui-card__subtitle {
+  font-size: 13px;
+  color: var(--ui-slate-500);
+  margin: 4px 0 0 0;
+}
+
+/* ---------------- Pill ---------------- */
+.ui-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: var(--ui-radius-pill);
+  border: 1px solid var(--ui-slate-200);
+  background: var(--ui-slate-100);
+  color: var(--ui-slate-700);
+  white-space: nowrap;
+}
+.ui-pill--info {
+  background: var(--ui-blue-50);
+  color: var(--ui-blue-700);
+  border-color: var(--ui-blue-200);
+}
+.ui-pill--primary {
+  background: var(--ui-indigo-50);
+  color: var(--ui-indigo-700);
+  border-color: var(--ui-indigo-200);
+}
+.ui-pill--success {
+  background: var(--ui-emerald-50);
+  color: var(--ui-emerald-700);
+  border-color: var(--ui-emerald-200);
+}
+.ui-pill--warning {
+  background: var(--ui-amber-50);
+  color: var(--ui-amber-700);
+  border-color: var(--ui-amber-200);
+}
+.ui-pill--danger {
+  background: var(--ui-red-50);
+  color: var(--ui-red-700);
+  border-color: var(--ui-red-200);
+}
+
+/* ---------------- Metric card ---------------- */
+.ui-metric {
+  background: #ffffff;
+  border: 1px solid var(--ui-slate-200);
+  border-radius: var(--ui-radius-2xl);
+  box-shadow: var(--ui-shadow-card);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ui-metric__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.ui-metric__icon {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--ui-radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--ui-slate-200);
+  background: var(--ui-slate-100);
+  color: var(--ui-slate-700);
+}
+.ui-metric__icon--info {
+  background: var(--ui-blue-50);
+  color: var(--ui-blue-700);
+  border-color: var(--ui-blue-200);
+}
+.ui-metric__icon--primary {
+  background: var(--ui-indigo-50);
+  color: var(--ui-indigo-700);
+  border-color: var(--ui-indigo-200);
+}
+.ui-metric__icon--success {
+  background: var(--ui-emerald-50);
+  color: var(--ui-emerald-700);
+  border-color: var(--ui-emerald-200);
+}
+.ui-metric__icon--warning {
+  background: var(--ui-amber-50);
+  color: var(--ui-amber-700);
+  border-color: var(--ui-amber-200);
+}
+.ui-metric__icon--danger {
+  background: var(--ui-red-50);
+  color: var(--ui-red-700);
+  border-color: var(--ui-red-200);
+}
+.ui-metric__value {
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--ui-slate-950);
+  line-height: 1.1;
+}
+.ui-metric__label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ui-slate-900);
+  margin-top: 4px;
+}
+.ui-metric__helper {
+  font-size: 13px;
+  color: var(--ui-slate-500);
+  margin-top: 2px;
+}
+.ui-metric__helper--up { color: var(--ui-emerald-700); }
+.ui-metric__helper--down { color: var(--ui-red-700); }
+
+/* ---------------- Progress row ---------------- */
+.ui-progress__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  gap: 16px;
+}
+.ui-progress__bar {
+  height: 8px;
+  border-radius: var(--ui-radius-pill);
+  background: var(--ui-slate-100);
+  overflow: hidden;
+}
+.ui-progress__fill {
+  height: 100%;
+  border-radius: var(--ui-radius-pill);
+  background: var(--ui-indigo-600);
+  transition: width 200ms ease;
+}
+.ui-progress__fill--info { background: var(--ui-blue-600); }
+.ui-progress__fill--success { background: var(--ui-emerald-600); }
+.ui-progress__fill--warning { background: #f59e0b; }
+.ui-progress__fill--danger { background: #dc2626; }
+
+/* ---------------- Section heading ---------------- */
+.ui-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.ui-section-head__title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--ui-slate-950);
+  margin: 0;
+}
+.ui-section-head__subtitle {
+  font-size: 13px;
+  color: var(--ui-slate-500);
+  margin: 4px 0 0 0;
+}
+
+/* ---------------- Hero / intro card ---------------- */
+.ui-hero {
+  background: linear-gradient(135deg, var(--ui-blue-50), #ffffff 60%, var(--ui-indigo-50));
+  border: 1px solid var(--ui-blue-100);
+  border-radius: var(--ui-radius-2xl);
+  padding: 24px;
+  box-shadow: var(--ui-shadow-card);
+}
+.ui-hero__eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--ui-blue-200);
+  background: #ffffff;
+  border-radius: var(--ui-radius-pill);
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ui-blue-700);
+}
+.ui-hero__title {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: 16px 0 8px 0;
+  color: var(--ui-slate-950);
+}
+.ui-hero__lead {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ui-slate-600);
+  max-width: 720px;
+  margin: 0;
+}
+
+/* ---------------- Toolbar tabs (rounded segmented) ---------------- */
+.ui-tabs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  background: var(--ui-slate-100);
+  padding: 6px;
+  border-radius: var(--ui-radius-xl);
+}
+.ui-tab {
+  border: 0;
+  background: transparent;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ui-slate-600);
+  border-radius: var(--ui-radius-md);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: background 120ms ease, color 120ms ease;
+}
+.ui-tab:hover { background: rgba(255, 255, 255, 0.6); color: var(--ui-slate-900); }
+.ui-tab--active:hover { background: var(--ui-slate-800); color: #ffffff; }
+.ui-tab--active {
+  background: var(--ui-slate-900);
+  color: #ffffff;
+  box-shadow: var(--ui-shadow-button);
+}
+.ui-tab__count {
+  font-size: 11px;
+  background: #ffffff;
+  color: var(--ui-slate-500);
+  padding: 1px 8px;
+  border-radius: var(--ui-radius-pill);
+}
+.ui-tab--active .ui-tab__count {
+  background: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+}
+
+/* ---------------- Stat row (label/value list) ---------------- */
+.ui-statrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 6px 0;
+}
+.ui-statrow__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--ui-slate-700);
+  min-width: 0;
+}
+.ui-statrow__dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--ui-slate-400);
+}
+.ui-statrow__value {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ui-slate-900);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------- Page wrapper ---------------- */
+.ui-page {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* Widen the Shopify s-page container to full available width */
+s-page {
+  --pc-page-max-width: none;
+  display: block;
+  width: 100%;
+}
+s-page::part(content) {
+  max-width: none !important;
+  width: 100% !important;
+  padding-left: 20px !important;
+  padding-right: 20px !important;
+  box-sizing: border-box;
+  margin: 0 auto;
+}
+s-page::part(header) {
+  max-width: none !important;
+  width: 100% !important;
+  box-sizing: border-box;
+  padding-left: 20px !important;
+  padding-right: 20px !important;
+}
+
+/* Full-width inbox layout (replaces s-page) */
+.ui-inbox-root {
+  width: 100%;
+  min-height: 100vh;
+  padding: 0 20px 40px;
+  box-sizing: border-box;
+  background: var(--ui-slate-50);
+  font-family: -apple-system, BlinkMacSystemFont, "San Francisco", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 0.875rem;
+  color: var(--ui-slate-800);
+  -webkit-font-smoothing: antialiased;
+}
+.ui-inbox-heading {
+  padding: 20px 0 12px;
+}
+.ui-inbox-heading h1 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--ui-slate-900);
+  margin: 0;
+}
+.ui-inbox-section {
+  margin-bottom: 12px;
+}
+.ui-grid-2 {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 1fr 1fr;
+}
+.ui-grid-4 {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+@media (max-width: 1024px) {
+  .ui-grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .ui-grid-4, .ui-grid-2 { grid-template-columns: 1fr; }
+}
+.ui-split {
+  display: grid;
+  gap: 24px;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+}
+@media (max-width: 1100px) {
+  .ui-split { grid-template-columns: 1fr; }
+}

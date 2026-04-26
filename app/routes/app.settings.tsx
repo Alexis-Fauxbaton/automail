@@ -3,6 +3,7 @@ import { Form, useActionData, useLoaderData, useNavigation } from "react-router"
 
 import { authenticate } from "../shopify.server";
 import { getSettings, saveSettings } from "../lib/support/settings";
+import { SettingsIcon } from "../components/ui";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -40,6 +41,19 @@ export default function SettingsPage() {
     <s-page heading="Reply settings">
       <Form method="post">
         <s-stack direction="block" gap="base">
+
+          <div className="ui-hero">
+            <span className="ui-hero__eyebrow">
+              <SettingsIcon size={14} />
+              Personnalisation
+            </span>
+            <h2 className="ui-hero__title">Réglez le ton et le contenu de vos brouillons IA</h2>
+            <p className="ui-hero__lead">
+              Ces paramètres sont appliqués à chaque réponse générée par le copilot. Adaptez-les
+              à votre marque, à votre tonalité et à votre politique commerciale pour des
+              brouillons immédiatement utilisables.
+            </p>
+          </div>
 
           <s-section heading="Draft personalization">
             <s-paragraph>

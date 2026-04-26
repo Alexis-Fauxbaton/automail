@@ -74,6 +74,12 @@ export type DailyPoint = {
   support: number;
 };
 
+export type DailyActivityPoint = {
+  date: string; // "YYYY-MM-DD"
+  drafts: number;
+  sent: number;
+};
+
 export type ThreadStateCounts = {
   open: number;
   waiting_customer: number;
@@ -113,7 +119,7 @@ export async function getKpiStats(
     prevDraftsCreated,
   ] = await Promise.all([
     prisma.incomingEmail.count({
-      where: { shop, receivedAt: { gte: start, lt: end } },
+      where: { shop, receivedAt: { gte: start, lt: end }, processingStatus: { not: "outgoing" } },
     }),
     // Count incoming emails that are either directly classified support, or belong
     // to a confirmed/probable support thread. The pipeline only LLM-classifies the
@@ -133,11 +139,11 @@ export async function getKpiStats(
     prisma.replyDraft.count({
       where: {
         shop,
-        email: { receivedAt: { gte: start, lt: end } },
+        createdAt: { gte: start, lt: end },
       },
     }),
     prisma.incomingEmail.count({
-      where: { shop, receivedAt: { gte: prevStart, lt: prevEnd } },
+      where: { shop, receivedAt: { gte: prevStart, lt: prevEnd }, processingStatus: { not: "outgoing" } },
     }),
     prisma.incomingEmail.count({
       where: {
@@ -153,7 +159,7 @@ export async function getKpiStats(
     prisma.replyDraft.count({
       where: {
         shop,
-        email: { receivedAt: { gte: prevStart, lt: prevEnd } },
+        createdAt: { gte: prevStart, lt: prevEnd },
       },
     }),
   ]);
@@ -175,17 +181,26 @@ export async function getDailyBreakdown(
   end: Date
 ): Promise<DailyPoint[]> {
   const emails = await prisma.incomingEmail.findMany({
-    where: { shop, receivedAt: { gte: start, lt: end } },
-    select: { receivedAt: true, tier2Result: true },
+    where: { shop, receivedAt: { gte: start, lt: end }, processingStatus: { not: "outgoing" } },
+    select: {
+      receivedAt: true,
+      tier2Result: true,
+      thread: { select: { supportNature: true } },
+    },
   });
 
   const byDay = new Map<string, { total: number; support: number }>();
+
+  const SUPPORT_NATURES = new Set(["confirmed_support", "probable_support"]);
 
   for (const email of emails) {
     const day = toLocalDay(email.receivedAt);
     const existing = byDay.get(day) ?? { total: 0, support: 0 };
     existing.total += 1;
-    if (email.tier2Result === "support_client") existing.support += 1;
+    const isSupport =
+      email.tier2Result === "support_client" ||
+      SUPPORT_NATURES.has(email.thread?.supportNature ?? "");
+    if (isSupport) existing.support += 1;
     byDay.set(day, existing);
   }
 
@@ -295,4 +310,48 @@ export async function getIntentBreakdown(
   }));
 }
 
+export async function getDailyActivityBreakdown(
+  shop: string,
+  start: Date,
+  end: Date
+): Promise<DailyActivityPoint[]> {
+  const [drafts, sent] = await Promise.all([
+    prisma.replyDraft.findMany({
+      where: { shop, createdAt: { gte: start, lt: end } },
+      select: { createdAt: true },
+    }),
+    prisma.incomingEmail.findMany({
+      where: { shop, receivedAt: { gte: start, lt: end }, processingStatus: "outgoing" },
+      select: { receivedAt: true },
+    }),
+  ]);
 
+  const byDay = new Map<string, { drafts: number; sent: number }>();
+
+  for (const d of drafts) {
+    const day = toLocalDay(d.createdAt);
+    const existing = byDay.get(day) ?? { drafts: 0, sent: 0 };
+    existing.drafts += 1;
+    byDay.set(day, existing);
+  }
+  for (const s of sent) {
+    const day = toLocalDay(s.receivedAt);
+    const existing = byDay.get(day) ?? { drafts: 0, sent: 0 };
+    existing.sent += 1;
+    byDay.set(day, existing);
+  }
+
+  const points: DailyActivityPoint[] = [];
+  const cursor = new Date(start);
+  cursor.setUTCHours(0, 0, 0, 0);
+  const endDay = toLocalDay(end);
+
+  while (toLocalDay(cursor) <= endDay) {
+    const day = toLocalDay(cursor);
+    const data = byDay.get(day) ?? { drafts: 0, sent: 0 };
+    points.push({ date: day, ...data });
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+
+  return points;
+}
