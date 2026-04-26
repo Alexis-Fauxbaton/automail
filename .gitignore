@@ -31,3 +31,8 @@ database.sqlite
 
 # Claude Code working directory (worktrees, session state)
 .claude/
+
+# Playwright
+test-results/
+playwright-report/
+tests/e2e/.auth/
