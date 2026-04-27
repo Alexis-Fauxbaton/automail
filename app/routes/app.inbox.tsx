@@ -244,7 +244,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const activeHeavyJob = await prisma.syncJob.findFirst({
     where: {
       shop,
-      kind: { in: ["resync", "backfill", "recompute", "reclassify"] },
+      kind: { in: ["sync", "resync", "backfill", "recompute", "reclassify"] },
       status: { in: ["pending", "running"] },
     },
     select: { kind: true },

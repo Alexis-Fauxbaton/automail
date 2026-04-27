@@ -386,8 +386,11 @@ export async function recomputeAllOpenThreads(
   shop: string,
   opts: { mailboxAddress?: string } = {},
 ): Promise<{ processed: number; errors: number }> {
+  // Only process threads that have never been through recomputeThreadState
+  // (operationalStateUpdatedAt IS NULL). Threads already computed but stuck
+  // in "open" (e.g. outgoing-only) must not be re-enqueued every tick.
   const threads = await prisma.thread.findMany({
-    where: { shop, operationalState: "open" },
+    where: { shop, operationalState: "open", operationalStateUpdatedAt: null },
     select: { id: true },
   });
 
