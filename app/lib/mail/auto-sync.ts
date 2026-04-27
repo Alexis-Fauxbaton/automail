@@ -137,9 +137,13 @@ async function drainJobQueue(): Promise<void> {
  * `enqueueJob` ensures at most one pending/running job per shop at a time.
  */
 async function enqueueRecomputeIfNeeded(): Promise<void> {
+  // Only target threads whose operationalState has NEVER been computed
+  // (operationalStateUpdatedAt IS NULL). Threads that were already processed
+  // but legitimately stay "open" (e.g. outgoing-only) must NOT trigger a new
+  // job every tick — that would create an infinite recompute loop.
   const staleShops = await prisma.thread.groupBy({
     by: ["shop"],
-    where: { operationalState: "open" },
+    where: { operationalState: "open", operationalStateUpdatedAt: null },
   });
   for (const { shop } of staleShops) {
     await enqueueJob(shop, "recompute").catch((err) =>
@@ -222,7 +226,18 @@ async function runSyncForShop(
   shop: string,
   opts: { runOnboarding: boolean; onboardingDays: number },
 ): Promise<void> {
-  const { admin } = await unauthenticated.admin(shop);
+  // unauthenticated.admin may throw a Response object (Remix redirect) when
+  // the shop's offline token is missing or expired. Convert it to a proper
+  // Error so markJobFailed captures a readable message.
+  let admin: Awaited<ReturnType<typeof unauthenticated.admin>>["admin"];
+  try {
+    ({ admin } = await unauthenticated.admin(shop));
+  } catch (err) {
+    if (err instanceof Response) {
+      throw new Error(`Shopify auth failed for shop ${shop}: HTTP ${err.status} ${err.statusText || err.url}`);
+    }
+    throw err;
+  }
   if (opts.runOnboarding) {
     try {
       const res = await runOnboardingBackfill(shop, opts.onboardingDays);

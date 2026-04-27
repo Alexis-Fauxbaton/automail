@@ -172,12 +172,29 @@ export async function markJobFailed(id: string, err: unknown): Promise<void> {
  * Reset jobs stuck in "running" whose startedAt is older than `timeoutMs`.
  * This handles crashed or OOM-killed workers that never called markJobDone/
  * markJobFailed. Call once per tick before claiming new work.
+ *
+ * Exhausted jobs (attempts >= MAX_ATTEMPTS) are marked "error" rather than
+ * "pending" — putting them back to "pending" would block the queue forever
+ * because claimNextJob requires attempts < MAX_ATTEMPTS.
  */
 export async function reclaimZombieJobs(timeoutMs: number): Promise<void> {
   const cutoff = new Date(Date.now() - timeoutMs);
+  // Zombies that have used all their attempts → permanent error.
   await prisma.syncJob.updateMany({
-    where: { status: "running", startedAt: { lt: cutoff } },
+    where: { status: "running", startedAt: { lt: cutoff }, attempts: { gte: MAX_ATTEMPTS } },
+    data: { status: "error", startedAt: null, finishedAt: new Date(), lastError: "Zombie job: exhausted all retry attempts" },
+  });
+  // Zombies with remaining attempts → back to pending for retry.
+  await prisma.syncJob.updateMany({
+    where: { status: "running", startedAt: { lt: cutoff }, attempts: { lt: MAX_ATTEMPTS } },
     data: { status: "pending", startedAt: null, nextRetryAt: null },
+  });
+  // Safety net: jobs stuck in "pending" with attempts >= MAX_ATTEMPTS can
+  // never be claimed (claimNextJob checks attempts < MAX_ATTEMPTS). Mark them
+  // as errors so they don't permanently pollute the active-job check.
+  await prisma.syncJob.updateMany({
+    where: { status: "pending", attempts: { gte: MAX_ATTEMPTS } },
+    data: { status: "error", finishedAt: new Date(), lastError: "Stuck pending job: exhausted all retry attempts" },
   });
 }
 
