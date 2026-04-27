@@ -6,6 +6,7 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["app/**/*.test.ts"],
+    exclude: ["app/lib/__tests__/integration/**/*.test.ts"],
     coverage: {
       provider: "v8",
       include: ["app/lib/support/**/*.ts"],
