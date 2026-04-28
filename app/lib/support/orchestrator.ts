@@ -37,6 +37,12 @@ export interface AnalyzeInput {
     identifiers: ExtractedIdentifiers;
     confidence: "none" | "low" | "medium" | "high";
   };
+  /**
+   * When true, skip the LLM draft generation step (step 6).
+   * Use this during background auto-sync to avoid generating drafts
+   * automatically — the user must click "Generate draft" explicitly.
+   */
+  skipDraft?: boolean;
 }
 
 export interface SupportAnalysisExtended extends SupportAnalysis {
@@ -173,20 +179,23 @@ export async function analyzeSupportEmail(
   };
 
   // 6. LLM draft (template fallback built-in)
-  const draftReply = endOfLoop.noReplyNeeded
-    ? ""
-    : await generateLLMDraft({
-        parsed,
-        intent,
-        order,
-        orderCandidates: candidates,
-        trackings,
-        crawledContexts: crawledContexts.filter((c) => c.success),
-        warnings: allWarnings,
-        settings: resolvedSettings,
-        conversationMessages: input.conversationMessages,
-        trackedCallContext: tctx,
-      });
+  // Skipped when skipDraft=true (e.g. background auto-sync — draft is
+  // generated on demand when the user clicks "Generate draft").
+  const draftReply =
+    input.skipDraft || endOfLoop.noReplyNeeded
+      ? ""
+      : await generateLLMDraft({
+          parsed,
+          intent,
+          order,
+          orderCandidates: candidates,
+          trackings,
+          crawledContexts: crawledContexts.filter((c) => c.success),
+          warnings: allWarnings,
+          settings: resolvedSettings,
+          conversationMessages: input.conversationMessages,
+          trackedCallContext: tctx,
+        });
 
   return {
     intent,

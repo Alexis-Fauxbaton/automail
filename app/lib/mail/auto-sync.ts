@@ -21,7 +21,7 @@ import prisma from "../../db.server";
 import { processNewEmails } from "../gmail/pipeline";
 import { unauthenticated } from "../../shopify.server";
 import { runManualBackfill, runOnboardingBackfill } from "./backfill";
-import { recomputeAllOpenThreads } from "../support/thread-state";
+import { recomputeAllOpenThreads, recomputeAllThreadsForShop } from "../support/thread-state";
 import {
   claimNextJob,
   enqueueJob,
@@ -197,6 +197,23 @@ async function runJob(job: {
         });
         console.log(
           `[auto-sync] shop=${job.shop} recompute: processed=${res.processed} errors=${res.errors}`,
+        );
+        break;
+      }
+      case "reclassify": {
+        // Recompute ALL threads (not just open/uninitialized ones).
+        // Used to recover threads incorrectly set to "no_reply_needed" or
+        // "waiting_customer" by a faulty resync. Manually-resolved threads
+        // are protected inside recomputeThreadState.
+        const conn = await prisma.mailConnection.findUnique({
+          where: { shop: job.shop },
+          select: { email: true },
+        });
+        const res = await recomputeAllThreadsForShop(job.shop, {
+          mailboxAddress: conn?.email ?? "",
+        });
+        console.log(
+          `[auto-sync] shop=${job.shop} reclassify: processed=${res.processed} errors=${res.errors}`,
         );
         break;
       }

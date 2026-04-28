@@ -336,6 +336,28 @@ async function ingestAndPrefilter(
   const record = await prisma.incomingEmail.findUniqueOrThrow({
     where: { shop_externalMessageId: { shop, externalMessageId: msgId } },
   });
+
+  // Skip re-running Tier 1 for emails that have already been fully
+  // processed (analyzed, classified). Re-running would reset
+  // processingStatus to "ingested" and trigger unnecessary Tier 2/3
+  // re-processing during a resync, causing misclassification due to
+  // stale context (e.g. agentHasReplied flipping the classifier).
+  // Only re-process emails that are truly new (ingested) or failed.
+  if (
+    record.processingStatus !== "ingested" &&
+    record.processingStatus !== "error"
+  ) {
+    // Already processed — still recompute thread state in case a new
+    // outgoing message changed the conversation context.
+    try {
+      await recomputeThreadState(canonicalThreadId, { mailboxAddress });
+      await evaluateHistoryStatus(canonicalThreadId);
+    } catch (err) {
+      console.error("[pipeline] state recompute (skip-tier1) failed:", err);
+    }
+    return;
+  }
+
   const prefilterResult = prefilterEmail(msg, customerEmails);
   if (!prefilterResult.passed) {
     report.filtered++;
@@ -582,6 +604,9 @@ async function classifyAndDraft(
             confidence: threadResolution.confidence,
           }
         : undefined,
+      // Draft generation is intentionally skipped during auto-sync.
+      // The user must click "Generate draft" explicitly in the inbox.
+      skipDraft: true,
     });
     await prisma.incomingEmail.update({
       where: { id: record.id },
@@ -594,10 +619,6 @@ async function classifyAndDraft(
         analysisConfidence: analysis.confidence,
       },
     });
-    if (analysis.draftReply) {
-      const { upsertReplyDraftBody } = await import("../support/reply-draft");
-      await upsertReplyDraftBody(record.id, record.shop, analysis.draftReply);
-    }
     if (record.canonicalThreadId) {
       try {
         await recomputeThreadState(record.canonicalThreadId, {

@@ -231,6 +231,13 @@ export async function recomputeThreadState(
   // Apply sticky rule against the previously persisted nature.
   const finalNature = mergeNature(thread.supportNature as SupportNature, mergedNature);
 
+  // Use finalNature (sticky) for targetReplyNeeded so that a confirmed
+  // support thread is never silently marked no_reply_needed by a single
+  // reclassification pass that downgrades one message to non_support.
+  if (targetMessageId) {
+    targetReplyNeeded = !noReplyNeeded && finalNature !== "non_support";
+  }
+
   const operationalState = deriveOperationalState({
     lastDirection,
     replyNeeded: targetReplyNeeded,
@@ -407,6 +414,47 @@ export async function recomputeAllOpenThreads(
   }
   console.log(
     `[recompute] shop=${shop} done: processed=${processed} errors=${errors}`,
+  );
+  return { processed, errors };
+}
+
+/**
+ * Recompute the operational state for ALL threads in `shop`, regardless
+ * of their current state. Manually-resolved threads are protected inside
+ * recomputeThreadState (sticky rule). Use this to recover threads that
+ * were incorrectly set to "no_reply_needed" or other wrong states by a
+ * faulty resync.
+ */
+export async function recomputeAllThreadsForShop(
+  shop: string,
+  opts: { mailboxAddress?: string } = {},
+): Promise<{ processed: number; errors: number }> {
+  const threads = await prisma.thread.findMany({
+    where: {
+      shop,
+      // Don't disturb threads that were manually resolved by the agent.
+      // They have previousOperationalState set by the moveThread action.
+      NOT: {
+        operationalState: "resolved",
+        previousOperationalState: { not: null },
+      },
+    },
+    select: { id: true },
+  });
+
+  let processed = 0;
+  let errors = 0;
+  for (const thread of threads) {
+    try {
+      await recomputeThreadState(thread.id, opts);
+      processed++;
+    } catch (err) {
+      errors++;
+      console.error(`[reclassify] shop=${shop} thread=${thread.id} failed:`, err);
+    }
+  }
+  console.log(
+    `[reclassify] shop=${shop} done: processed=${processed} errors=${errors}`,
   );
   return { processed, errors };
 }
