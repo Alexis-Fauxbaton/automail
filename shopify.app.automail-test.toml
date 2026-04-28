@@ -2,37 +2,44 @@
 
 client_id = "01efe84af5b21eb4f61fe827ef194448"
 name = "automail-test"
-application_url = "https://emacs-rough-district-peoples.trycloudflare.com/app/inbox"
+application_url = "https://automail-vc6z.onrender.com/app/inbox"
 embedded = true
-
-[build]
-automatically_update_urls_on_dev = true
 
 [webhooks]
 api_version = "2026-04"
 
   [[webhooks.subscriptions]]
-  topics = [ "app/scopes_update" ]
-  uri = "/webhooks/app/scopes_update"
+  uri = "/webhooks/customers/data_request"
+  compliance_topics = [ "customers/data_request" ]
 
   [[webhooks.subscriptions]]
-  topics = [ "app/uninstalled" ]
-  uri = "/webhooks/app/uninstalled"
+  uri = "/webhooks/customers/redact"
+  compliance_topics = [ "customers/redact" ]
 
-[webhooks.privacy_compliance]
-customer_data_request_url = "/webhooks/customers/data_request"
-customer_deletion_url = "/webhooks/customers/redact"
-shop_deletion_url = "/webhooks/shop/redact"
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/shop/redact"
+  compliance_topics = [ "shop/redact" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/scopes_update"
+  topics = [ "app/scopes_update" ]
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_orders,read_all_orders,read_customers,read_fulfillments"
+scopes = "read_all_orders,read_customers,read_fulfillments,read_orders"
 optional_scopes = [ ]
 use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [
-  "https://emacs-rough-district-peoples.trycloudflare.com/",
-  "https://emacs-rough-district-peoples.trycloudflare.com/auth/callback",
-  "https://emacs-rough-district-peoples.trycloudflare.com/auth/shopify/callback",
+  "https://automail-vc6z.onrender.com/",
+  "https://automail-vc6z.onrender.com/auth/callback",
+  "https://automail-vc6z.onrender.com/auth/shopify/callback"
 ]
+
+[build]
+automatically_update_urls_on_dev = true
