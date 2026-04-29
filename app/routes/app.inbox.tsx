@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useFetcher, useLoaderData, useNavigation, useRevalidator } from "react-router";
+import { useTranslation } from "react-i18next";
 
 import { authenticate } from "../shopify.server";
 import { getAuthUrl as getGmailAuthUrl, getConnection, deleteConnection } from "../lib/gmail/auth";
@@ -710,17 +711,17 @@ function filterReason(email: SerializedEmail): string | null {
   return email.tier1Result.replace("filtered:", "");
 }
 
-function relativeTime(dateStr: string): string {
+function relativeTime(dateStr: string, t: (k: string, o?: Record<string, unknown>) => string): string {
   const now = Date.now();
   const then = new Date(dateStr).getTime();
   const diff = now - then;
   const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
+  if (mins < 1) return t("inbox.justNow");
+  if (mins < 60) return t("inbox.timeAgoMinutes", { n: mins });
   const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
+  if (hours < 24) return t("inbox.timeAgoHours", { n: hours });
   const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
+  if (days < 7) return t("inbox.timeAgoDays", { n: days });
   return new Date(dateStr).toLocaleDateString();
 }
 
@@ -810,25 +811,26 @@ function ConnectionCard({
   autoSyncEnabled: boolean;
   autoSyncIntervalMinutes: number;
 }) {
+  const { t } = useTranslation();
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   if (!connected) {
     return (
       <s-box padding="large-500" borderWidth="base" borderRadius="large-200" background="subdued">
         <s-stack direction="block" gap="base" align="center">
-          <s-heading>Connect your email</s-heading>
+          <s-heading>{t("inbox.connectHeading")}</s-heading>
           <s-paragraph>
-            Automatically scan your inbox for customer support emails, classify them, and generate draft replies.
+            {t("inbox.connectDesc")}
           </s-paragraph>
           <s-stack direction="inline" gap="base">
             {gmailAuthUrl && (
               <s-link href={gmailAuthUrl}>
-                <s-button variant="primary">Connect Gmail</s-button>
+                <s-button variant="primary">{t("inbox.connectGmail")}</s-button>
               </s-link>
             )}
             {zohoAuthUrl && (
               <s-link href={zohoAuthUrl}>
-                <s-button variant="secondary">Connect Zoho Mail</s-button>
+                <s-button variant="secondary">{t("inbox.connectZoho")}</s-button>
               </s-link>
             )}
           </s-stack>
@@ -850,9 +852,9 @@ function ConnectionCard({
           </s-paragraph>
           {lastSyncAt && (
             <s-text variant="bodySm" tone="subdued">
-              Last sync: {relativeTime(lastSyncAt)}
+              {t("inbox.lastSync", { time: relativeTime(lastSyncAt, t) })}
               {" · "}
-              Auto-sync: {autoSyncEnabled ? `every ${autoSyncIntervalMinutes}m` : "off"}
+              {autoSyncEnabled ? t("inbox.autoSyncOn", { minutes: autoSyncIntervalMinutes }) : t("inbox.autoSyncOff")}
             </s-text>
           )}
         </s-stack>
@@ -862,18 +864,18 @@ function ConnectionCard({
           <Form method="post">
             <input type="hidden" name="_action" value="sync" />
             <s-button variant="primary" type="submit" {...(isSyncing ? { loading: true } : {})}>
-              {isSyncing ? "Syncing…" : "Sync now"}
+              {isSyncing ? t("inbox.syncing") : t("inbox.syncNow")}
             </s-button>
           </Form>
           <Form method="post">
             <input type="hidden" name="_action" value="toggleAutoSync" />
             <input type="hidden" name="enable" value={autoSyncEnabled ? "0" : "1"} />
             <s-button variant="tertiary" type="submit">
-              {autoSyncEnabled ? "Pause auto-sync" : "Resume auto-sync"}
+              {autoSyncEnabled ? t("inbox.pauseAutoSync") : t("inbox.resumeAutoSync")}
             </s-button>
           </Form>
           <s-button variant="plain" onClick={() => setShowAdvanced((v) => !v)}>
-            {showAdvanced ? "Hide advanced" : "Advanced"}
+            {showAdvanced ? t("inbox.hideAdvanced") : t("inbox.showAdvanced")}
           </s-button>
         </s-stack>
       </s-stack>
@@ -886,31 +888,31 @@ function ConnectionCard({
               <input type="hidden" name="_action" value="backfill" />
               <input type="hidden" name="days" value="60" />
               <s-button variant="tertiary" type="submit" {...(isSyncing ? { loading: true } : {})}>
-                Backfill 60 days
+                {t("inbox.backfill")}
               </s-button>
             </Form>
             <Form method="post">
               <input type="hidden" name="_action" value="resync" />
               <s-button variant="tertiary" type="submit" {...(isSyncing ? { loading: true } : {})}>
-                Re-sync all
+                {t("inbox.resyncAll")}
               </s-button>
             </Form>
             <Form method="post">
               <input type="hidden" name="_action" value="reclassify" />
               <s-button variant="tertiary" type="submit" {...(isSyncing ? { loading: true } : {})}>
-                Re-classify
+                {t("inbox.reclassify")}
               </s-button>
             </Form>
             <Form method="post">
               <input type="hidden" name="_action" value="diagnose" />
               <s-button variant="tertiary" type="submit">
-                Diagnose
+                {t("inbox.diagnose")}
               </s-button>
             </Form>
             <Form method="post">
               <input type="hidden" name="_action" value="disconnect" />
               <s-button tone="critical" variant="plain" type="submit">
-                Disconnect
+                {t("inbox.disconnect")}
               </s-button>
             </Form>
           </s-stack>
@@ -937,6 +939,7 @@ function FiltersBar({
   onChange: (next: InboxFilters) => void;
   onReset: () => void;
 }) {
+  const { t } = useTranslation();
   const isDefault =
     filters.search === "" &&
     filters.confidence === "all" &&
@@ -978,17 +981,17 @@ function FiltersBar({
       }}
     >
       <label style={{ ...labelStyle, flex: "1 1 220px", minWidth: 180 }}>
-        Search
+        {t("inbox.searchLabel")}
         <input
           type="search"
-          placeholder="Subject, sender, snippet…"
+          placeholder={t("inbox.searchPlaceholder")}
           value={filters.search}
           onChange={(e) => onChange({ ...filters, search: e.target.value })}
           style={inputStyle}
         />
       </label>
       <label style={labelStyle}>
-        Confidence
+        {t("inbox.confidenceLabel")}
         <select
           value={filters.confidence}
           onChange={(e) =>
@@ -999,14 +1002,14 @@ function FiltersBar({
           }
           style={selectStyle}
         >
-          <option value="all">All</option>
-          <option value="high">High</option>
-          <option value="medium">Medium</option>
-          <option value="low">Low</option>
+          <option value="all">{t("inbox.filterAll")}</option>
+          <option value="high">{t("inbox.filterHigh")}</option>
+          <option value="medium">{t("inbox.filterMedium")}</option>
+          <option value="low">{t("inbox.filterLow")}</option>
         </select>
       </label>
       <label style={labelStyle}>
-        Order linked
+        {t("inbox.orderLinkedLabel")}
         <select
           value={filters.orderLinked}
           onChange={(e) =>
@@ -1017,13 +1020,13 @@ function FiltersBar({
           }
           style={selectStyle}
         >
-          <option value="any">Any</option>
-          <option value="yes">Linked</option>
-          <option value="no">Not linked</option>
+          <option value="any">{t("inbox.filterAny")}</option>
+          <option value="yes">{t("inbox.filterLinked")}</option>
+          <option value="no">{t("inbox.filterNotLinked")}</option>
         </select>
       </label>
       <label style={labelStyle}>
-        Classification
+        {t("inbox.classificationLabel")}
         <select
           value={filters.nature}
           onChange={(e) =>
@@ -1031,16 +1034,16 @@ function FiltersBar({
           }
           style={selectStyle}
         >
-          <option value="all">All</option>
-          <option value="support">Support</option>
-          <option value="uncertain">Uncertain</option>
-          <option value="non_support">Non-support</option>
-          <option value="filtered">Filtered (Tier 1)</option>
+          <option value="all">{t("inbox.filterAll")}</option>
+          <option value="support">{t("inbox.filterSupport")}</option>
+          <option value="uncertain">{t("inbox.filterUncertain")}</option>
+          <option value="non_support">{t("inbox.filterNonSupport")}</option>
+          <option value="filtered">{t("inbox.filterFiltered")}</option>
         </select>
       </label>
       {!isDefault && (
         <s-button variant="plain" onClick={onReset}>
-          Reset
+          {t("inbox.resetFilters")}
         </s-button>
       )}
     </div>
@@ -1048,6 +1051,7 @@ function FiltersBar({
 }
 
 function PipelineStats({ emails }: { emails: SerializedEmail[] }) {
+  const { t } = useTranslation();
   if (emails.length === 0) return null;
   const tier1 = emails.filter((e) => e.tier1Result?.startsWith("filtered:")).length;
   const tier2 = emails.filter((e) => e.tier1Result === "passed" && e.tier2Result).length;
@@ -1056,30 +1060,30 @@ function PipelineStats({ emails }: { emails: SerializedEmail[] }) {
   return (
     <div className="ui-grid-4">
       <MetricCard
-        label="Total mails"
+        label={t("inbox.totalMails")}
         value={emails.length.toLocaleString("fr-FR")}
-        helper="Tous statuts confondus"
+        helper={t("inbox.totalMailsHelper")}
         icon={<MailIcon size={20} />}
         iconTone="info"
       />
       <MetricCard
-        label="Tier 1 (filtres)"
+        label={t("inbox.tier1")}
         value={tier1.toLocaleString("fr-FR")}
-        helper="Filtrage local, gratuit"
+        helper={t("inbox.tier1Helper")}
         icon={<InboxIcon size={20} />}
         iconTone="neutral"
       />
       <MetricCard
-        label="Tier 2 (LLM)"
+        label={t("inbox.tier2")}
         value={tier2.toLocaleString("fr-FR")}
-        helper="Classification rapide"
+        helper={t("inbox.tier2Helper")}
         icon={<SparklesIcon size={20} />}
         iconTone="primary"
       />
       <MetricCard
-        label="Tier 3 (analyse)"
+        label={t("inbox.tier3")}
         value={tier3.toLocaleString("fr-FR")}
-        helper="Analyse complète Shopify"
+        helper={t("inbox.tier3Helper")}
         icon={<CheckCircleIcon size={20} />}
         iconTone="success"
       />
@@ -1096,6 +1100,7 @@ function MoveThreadControl({
   bucket: OpsBucket;
   previousOperationalState: string | null;
 }) {
+  const { t } = useTranslation();
   const isResolved = bucket === "resolved";
   const reopenTarget = previousOperationalState ?? "waiting_merchant";
   const moveFetcher = useFetcher();
@@ -1106,7 +1111,7 @@ function MoveThreadControl({
       <input type="hidden" name="canonicalThreadId" value={canonicalThreadId} />
       <input type="hidden" name="target" value={isResolved ? reopenTarget : "resolved"} />
       <s-button type="submit" variant="plain" size="slim" {...(moving ? { loading: true } : {})}>
-        {isResolved ? "Reopen" : "Mark as resolved"}
+        {isResolved ? t("inbox.reopen") : t("inbox.markResolved")}
       </s-button>
     </moveFetcher.Form>
   );
@@ -1119,6 +1124,7 @@ function ThreadIdentifiersEditor({
   canonicalThreadId: string;
   threadState: SerializedThreadState | null;
 }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const fetcher = useFetcher();
   const submitting = fetcher.state !== "idle";
@@ -1126,25 +1132,25 @@ function ThreadIdentifiersEditor({
     <s-box padding="base" borderWidth="base" borderRadius="base">
       <s-stack direction="block" gap="small-300">
         <s-stack direction="inline" gap="small-300" blockAlign="center">
-          <s-text variant="headingSm">Parsed identifiers</s-text>
+          <s-text variant="headingSm">{t("inbox.parsedIdentifiers")}</s-text>
           <s-button variant="plain" size="slim" onClick={() => setOpen((v) => !v)}>
-            {open ? "Cancel" : "Edit"}
+            {open ? t("inbox.cancel") : t("inbox.edit")}
           </s-button>
         </s-stack>
         {!open ? (
           <s-stack direction="block" gap="small-100">
             <s-text variant="bodySm">
-              <strong>Order:</strong>{" "}
+              <strong>{t("inbox.orderNumber")}:</strong>{" "}
               {threadState?.resolvedOrderNumber ? `#${threadState.resolvedOrderNumber}` : "—"}
             </s-text>
             <s-text variant="bodySm">
-              <strong>Tracking:</strong> {threadState?.resolvedTrackingNumber ?? "—"}
+              <strong>{t("inbox.trackingNumber")}:</strong> {threadState?.resolvedTrackingNumber ?? "—"}
             </s-text>
             <s-text variant="bodySm">
-              <strong>Customer email:</strong> {threadState?.resolvedEmail ?? "—"}
+              <strong>{t("inbox.customerEmail")}:</strong> {threadState?.resolvedEmail ?? "—"}
             </s-text>
             <s-text variant="bodySm">
-              <strong>Customer name:</strong> {threadState?.resolvedCustomerName ?? "—"}
+              <strong>{t("inbox.customerName")}:</strong> {threadState?.resolvedCustomerName ?? "—"}
             </s-text>
           </s-stack>
         ) : (
@@ -1156,32 +1162,32 @@ function ThreadIdentifiersEditor({
             <input type="hidden" name="canonicalThreadId" value={canonicalThreadId} />
             <s-stack direction="block" gap="small-300">
               <s-text-field
-                label="Order number"
+                label={t("inbox.orderNumber")}
                 name="resolvedOrderNumber"
                 defaultValue={threadState?.resolvedOrderNumber ?? ""}
                 placeholder="e.g. 257371239"
               />
               <s-text-field
-                label="Tracking number"
+                label={t("inbox.trackingNumber")}
                 name="resolvedTrackingNumber"
                 defaultValue={threadState?.resolvedTrackingNumber ?? ""}
               />
               <s-text-field
-                label="Customer email"
+                label={t("inbox.customerEmail")}
                 name="resolvedEmail"
                 defaultValue={threadState?.resolvedEmail ?? ""}
               />
               <s-text-field
-                label="Customer name"
+                label={t("inbox.customerName")}
                 name="resolvedCustomerName"
                 defaultValue={threadState?.resolvedCustomerName ?? ""}
               />
               <s-stack direction="inline" gap="small-300">
                 <s-button type="submit" variant="primary" disabled={submitting}>
-                  {submitting ? "Saving…" : "Save"}
+                  {submitting ? t("inbox.saving") : t("inbox.save")}
                 </s-button>
                 <s-button type="button" variant="plain" onClick={() => setOpen(false)}>
-                  Cancel
+                  {t("inbox.cancel")}
                 </s-button>
               </s-stack>
             </s-stack>
@@ -1211,6 +1217,7 @@ function EmailMessageBlock({
   total: number;
   connectedEmail: string | null;
 }) {
+  const { t } = useTranslation();
   const isLatest = idx === total - 1;
   const direction = getMessageDirection(email, connectedEmail);
   const body = normalizeEmailBody(email.bodyText);
@@ -1236,17 +1243,17 @@ function EmailMessageBlock({
               {email.fromName || email.fromAddress}
             </span>
             <span style={{ fontSize: "0.8125rem", color: "#6b7280" }}>
-              {relativeTime(email.receivedAt)}
+              {relativeTime(email.receivedAt, t)}
             </span>
             <span>
               <s-badge tone={direction === "outgoing" ? "neutral" : "info"}>
-                {direction}
+                {direction === "incoming" ? t("analysis.directionIncoming") : direction === "outgoing" ? t("analysis.directionOutgoing") : t("analysis.directionUnknown")}
               </s-badge>
             </span>
-            {isLatest && total > 1 && <s-badge tone="info">Latest</s-badge>}
+            {isLatest && total > 1 && <s-badge tone="info">{t("inbox.pillLatest")}</s-badge>}
             {needsToggle && (
               <span style={{ marginLeft: "auto", fontSize: "0.8125rem", color: "#6b7280" }}>
-                {expanded ? "▲ Collapse" : "▼ Expand"}
+                {expanded ? t("inbox.collapse") : t("inbox.expand")}
               </span>
             )}
           </div>
@@ -1280,6 +1287,7 @@ function ThreadCard({
   onSelect: () => void;
   onOrderClick: (orderNumber: string) => void;
 }) {
+  const { t } = useTranslation();
   const { latest, emails } = thread;
   const cls = getThreadClassification(thread);
   const reason = filterReason(latest);
@@ -1310,20 +1318,20 @@ function ThreadCard({
     >
       {/* Row 1 : badges */}
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px", marginBottom: "10px" }}>
-        {cls === "uncertain" && <span className="ui-pill ui-pill--warning">Uncertain</span>}
-        {cls === "filtered" && <span className="ui-pill">Filtered</span>}
-        {cls === "non_support" && <span className="ui-pill">Non-support</span>}
+        {cls === "uncertain" && <span className="ui-pill ui-pill--warning">{t("inbox.pillUncertain")}</span>}
+        {cls === "filtered" && <span className="ui-pill">{t("inbox.filterFiltered")}</span>}
+        {cls === "non_support" && <span className="ui-pill">{t("inbox.pillNonSupport")}</span>}
 
         {bucket === "to_process" ? (
-          <span className="ui-pill ui-pill--warning">Waiting merchant</span>
+          <span className="ui-pill ui-pill--warning">{t("inbox.stateWaitingMerchant")}</span>
         ) : bucket === "waiting_merchant" ? (
-          <span className="ui-pill ui-pill--warning">Waiting merchant</span>
+          <span className="ui-pill ui-pill--warning">{t("inbox.stateWaitingMerchant")}</span>
         ) : bucket === "waiting_customer" ? (
-          <span className="ui-pill ui-pill--info">Waiting customer</span>
+          <span className="ui-pill ui-pill--info">{t("inbox.stateWaitingCustomer")}</span>
         ) : bucket === "resolved" ? (
-          <span className="ui-pill ui-pill--success">Resolved</span>
+          <span className="ui-pill ui-pill--success">{t("inbox.stateResolved")}</span>
         ) : noReplyNeeded ? (
-          <span className="ui-pill ui-pill--success">No reply needed</span>
+          <span className="ui-pill ui-pill--success">{t("inbox.stateNoReplyNeeded")}</span>
         ) : null}
 
         {threadState?.resolvedOrderNumber && (
@@ -1337,20 +1345,20 @@ function ThreadCard({
         )}
 
         {messageCount > 1 && <span className="ui-pill">{messageCount} msg</span>}
-        {threadState?.historyStatus === "partial" && <span className="ui-pill ui-pill--warning">Partial history</span>}
-        {latest.processingStatus === "error" && <span className="ui-pill ui-pill--danger">Error</span>}
+        {threadState?.historyStatus === "partial" && <span className="ui-pill ui-pill--warning">{t("inbox.pillPartialHistory")}</span>}
+        {latest.processingStatus === "error" && <span className="ui-pill ui-pill--danger">{t("inbox.pillError")}</span>}
 
         {(bucket === "to_process" || bucket === "waiting_merchant" || bucket === "waiting_customer") && (previousContact.byAddress || previousContact.byOrder) && (
           <span className="ui-pill ui-pill--warning">
             {previousContact.byOrder && previousContact.byAddress
-              ? "Prior contact (address + order)"
+              ? t("inbox.priorContactBoth")
               : previousContact.byOrder
-              ? "Prior contact (same order)"
-              : "Prior contact (same address)"}
+              ? t("inbox.priorContactOrder")
+              : t("inbox.priorContactAddress")}
           </span>
         )}
         {(bucket === "to_process" || bucket === "waiting_merchant" || bucket === "waiting_customer") && previousContact.recentReply && (
-          <span className="ui-pill ui-pill--warning">Replied elsewhere recently</span>
+          <span className="ui-pill ui-pill--warning">{t("inbox.pillRepliedElsewhere")}</span>
         )}
       </div>
 
@@ -1368,7 +1376,7 @@ function ThreadCard({
         </div>
         <span style={{ flexShrink: 0, fontSize: "0.8125rem", color: "var(--ui-slate-500)" }}>
           {latestDirection === "incoming" ? "↓" : latestDirection === "outgoing" ? "↑" : "·"}{" "}
-          {relativeTime(latest.receivedAt)}
+          {relativeTime(latest.receivedAt, t)}
         </span>
       </div>
 
@@ -1419,7 +1427,7 @@ function ThreadCard({
             <input type="hidden" name="_action" value="reanalyze" />
             <input type="hidden" name="emailId" value={latest.id} />
             <s-button type="submit" variant="primary" {...(isGenerating ? { loading: true } : {})}>
-              {latest.processingStatus === "error" ? "Retry analysis" : "Generate draft"}
+              {latest.processingStatus === "error" ? t("inbox.retryAnalysis") : t("inbox.generateDraft")}
             </s-button>
           </reanalyzeFetcher.Form>
         )}
@@ -1428,7 +1436,7 @@ function ThreadCard({
       {/* Row 6 : Draft generated */}
       {latest.draftReply && (
         <div style={{ marginTop: "8px", paddingTop: "8px", borderTop: "1px solid var(--ui-slate-100)" }}>
-          <span className="ui-pill ui-pill--success" style={{ fontSize: "11px", padding: "2px 8px" }}>Draft generated</span>
+          <span className="ui-pill ui-pill--success" style={{ fontSize: "11px", padding: "2px 8px" }}>{t("inbox.pillDraftGenerated")}</span>
         </div>
       )}
     </div>
@@ -1439,6 +1447,7 @@ function DraftBlock({ email, threadSenderEmail }: {
   email: SerializedEmail;
   threadSenderEmail: string;
 }) {
+  const { t } = useTranslation();
   const allVersions = [...email.draftHistory, email.draftReply!];
   const [versionIndex, setVersionIndex] = useState(allVersions.length - 1);
   const currentVersion = allVersions[versionIndex] ?? email.draftReply!;
@@ -1543,7 +1552,7 @@ function DraftBlock({ email, threadSenderEmail }: {
       setAttachments((prev) => [...prev, att]);
     } else {
       const body = await res.json().catch(() => ({})) as { error?: string };
-      setAttachError(body.error ?? "Upload failed");
+      setAttachError(body.error ?? t("inbox.uploadFailed"));
     }
     e.target.value = "";
   }
@@ -1632,7 +1641,7 @@ function DraftBlock({ email, threadSenderEmail }: {
               <button
                 onClick={() => fileInputRef.current?.click()}
                 style={{ fontSize: "12px", color: "var(--p-color-text-subdued)", background: "none", border: "none", cursor: "pointer" }}
-                title="Les fichiers ajoutés sont conservés 7 jours"
+                title={t("inbox.filesKept")}
               >
                 + Ajouter une PJ
               </button>
@@ -1664,7 +1673,7 @@ function DraftBlock({ email, threadSenderEmail }: {
 
         <s-text-area
           ref={textareaRef}
-          label={isLatest ? "Editable draft" : `Version ${versionIndex + 1} (read-only)`}
+          label={isLatest ? t("inbox.editableDraft") : t("inbox.draftVersion", { n: versionIndex + 1 })}
           rows={10}
           value={isLatest ? bodyText : currentVersion}
           readOnly={!isLatest}
@@ -1677,11 +1686,11 @@ function DraftBlock({ email, threadSenderEmail }: {
             <input type="hidden" name="currentDraft" value={bodyText} />
             <s-stack direction="inline" gap="small-300" blockAlign="end">
               <div style={{ flex: 1 }}>
-                <s-text-field label="Refinement instructions" name="instructions"
+                <s-text-field label={t("inbox.refinementInstructions")} name="instructions"
                   placeholder="e.g. Be more formal, mention refund policy, shorten…" />
               </div>
               <s-button type="submit" variant="secondary" disabled={refining || regenerating}>
-                {refining ? "Refining…" : "Refine with AI"}
+                {refining ? t("inbox.refining") : t("inbox.refineWithAi")}
               </s-button>
             </s-stack>
           </refineFetcher.Form>
@@ -1692,14 +1701,14 @@ function DraftBlock({ email, threadSenderEmail }: {
             <input type="hidden" name="_action" value="redraft" />
             <input type="hidden" name="emailId" value={email.id} />
             <s-button type="submit" variant="secondary" size="slim" disabled={redrafting || regenerating || refining}>
-              {redrafting ? "Regenerating…" : "Regenerate draft"}
+              {redrafting ? t("inbox.regenerating") : t("inbox.regenerateDraft")}
             </s-button>
           </redraftFetcher.Form>
           <regenerateFetcher.Form method="post">
             <input type="hidden" name="_action" value="reanalyze" />
             <input type="hidden" name="emailId" value={email.id} />
             <s-button type="submit" variant="tertiary" size="slim" disabled={regenerating || redrafting || refining}>
-              {regenerating ? "Refreshing…" : "Refresh context"}
+              {regenerating ? t("inbox.refreshing") : t("inbox.refreshContext")}
             </s-button>
           </regenerateFetcher.Form>
         </div>
@@ -1726,7 +1735,7 @@ function DraftBlock({ email, threadSenderEmail }: {
                       saveMeta({ replyMode: mode });
                     }}
                   />
-                  {mode === "thread" ? "Répondre dans ce thread" : "Nouveau thread"}
+                  {mode === "thread" ? t("inbox.replyInThread") : t("inbox.newThread")}
                 </label>
               ))}
             </div>
@@ -1825,6 +1834,7 @@ function ThreadDetailPanel({
   confidence: "high" | "medium" | "low" | null;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   const { latest, emails } = thread;
   const noReplyNeeded = latest.analysisResult?.conversation?.noReplyNeeded === true;
   const reanalyzeFetcher = useFetcher();
@@ -1837,10 +1847,10 @@ function ThreadDetailPanel({
   const intent = analysisEmail?.analysisResult?.intent;
 
   const bucketPill =
-    bucket === "to_process" ? <span className="ui-pill ui-pill--warning">Waiting merchant</span>
-    : bucket === "waiting_merchant" ? <span className="ui-pill ui-pill--warning">Waiting merchant</span>
-    : bucket === "waiting_customer" ? <span className="ui-pill ui-pill--info">Waiting customer</span>
-    : bucket === "resolved" ? <span className="ui-pill ui-pill--success">Resolved</span>
+    bucket === "to_process" ? <span className="ui-pill ui-pill--warning">{t("inbox.stateWaitingMerchant")}</span>
+    : bucket === "waiting_merchant" ? <span className="ui-pill ui-pill--warning">{t("inbox.stateWaitingMerchant")}</span>
+    : bucket === "waiting_customer" ? <span className="ui-pill ui-pill--info">{t("inbox.stateWaitingCustomer")}</span>
+    : bucket === "resolved" ? <span className="ui-pill ui-pill--success">{t("inbox.stateResolved")}</span>
     : null;
 
   const confColor = confidence === "high" ? "#10b981" : confidence === "medium" ? "#3b82f6" : "#f59e0b";
@@ -1877,8 +1887,8 @@ function ThreadDetailPanel({
           )}
           {emails.length > 1 && <span className="ui-pill">{emails.length} msg</span>}
           {intent && (
-            <span className="ui-pill" style={{ textTransform: "capitalize" }}>
-              {intent.replace(/_/g, " ")}
+            <span className="ui-pill">
+              {t(`analysis.intent_${intent}`, { defaultValue: intent.replace(/_/g, " ") })}
             </span>
           )}
         </div>
@@ -1905,7 +1915,7 @@ function ThreadDetailPanel({
               display: "flex", alignItems: "center", gap: "4px", whiteSpace: "nowrap",
             }}
           >
-            ▲ Collapse
+            {t("inbox.collapse")}
           </button>
         </div>
 
@@ -1934,17 +1944,17 @@ function ThreadDetailPanel({
               <input type="hidden" name="_action" value="reanalyze" />
               <input type="hidden" name="emailId" value={latest.id} />
               <s-button type="submit" variant="primary" {...(isGenerating ? { loading: true } : {})}>
-                {latest.draftReply ? "Regenerate draft" : latest.processingStatus === "error" ? "Retry analysis" : "Generate draft"}
+                {latest.draftReply ? t("inbox.regenerateDraft") : latest.processingStatus === "error" ? t("inbox.retryAnalysis") : t("inbox.generateDraft")}
               </s-button>
             </reanalyzeFetcher.Form>
           )}
-          {isGenerating && <span style={{ fontSize: "0.8125rem", color: "var(--ui-slate-500)", alignSelf: "center" }}>Génération…</span>}
+          {isGenerating && <span style={{ fontSize: "0.8125rem", color: "var(--ui-slate-500)", alignSelf: "center" }}>{t("inbox.generating")}</span>}
         </div>
       </div>
 
       {/* ── Latest message ── */}
       <div style={{ padding: "16px 18px", borderBottom: "1px solid var(--ui-slate-100)" }}>
-        <div style={sectionLabel}>Latest message</div>
+        <div style={sectionLabel}>{t("inbox.sectionLatestMessage")}</div>
         <EmailMessageBlock
           email={latest}
           idx={emails.length - 1}
@@ -1961,14 +1971,14 @@ function ThreadDetailPanel({
       }}>
         {/* Left : order context */}
         <div style={{ padding: "16px 18px", borderRight: "1px solid var(--ui-slate-100)" }}>
-          <div style={sectionLabel}>Order context</div>
+          <div style={sectionLabel}>{t("inbox.sectionOrderContext")}</div>
           {order ? (
             <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
               {([
-                ["Customer", order.customerName ?? "—"],
-                ["Order",    order.name],
-                ["Items",    `${order.lineItems.length} item${order.lineItems.length !== 1 ? "s" : ""}`],
-                ["Status",   order.displayFulfillmentStatus ?? "—"],
+                [t("inbox.orderCustomer"), order.customerName ?? "—"],
+                [t("inbox.orderName"),    order.name],
+                [t("inbox.orderItems"),    `${order.lineItems.length} item${order.lineItems.length !== 1 ? "s" : ""}`],
+                [t("inbox.orderStatus"),   order.displayFulfillmentStatus ?? "—"],
               ] as [string, string][]).map(([label, value]) => (
                 <div key={label}>
                   <div style={kvLabel}>{label}</div>
@@ -1977,7 +1987,7 @@ function ThreadDetailPanel({
               ))}
               {confidence && (
                 <div>
-                  <div style={kvLabel}>Confidence</div>
+                  <div style={kvLabel}>{t("inbox.confidence")}</div>
                   <span style={{
                     display: "inline-block", marginTop: "3px",
                     padding: "2px 10px", borderRadius: "999px",
@@ -1992,7 +2002,7 @@ function ThreadDetailPanel({
             </div>
           ) : (
             <div style={{ fontSize: "0.8125rem", color: "var(--ui-slate-400)", fontStyle: "italic" }}>
-              No order found.
+              {t("inbox.noOrderFound")}
             </div>
           )}
         </div>
@@ -2000,16 +2010,16 @@ function ThreadDetailPanel({
         {/* Right : draft */}
         <div style={{ padding: "16px 18px", display: "flex", flexDirection: "column", gap: "16px" }}>
           <div>
-            <div style={sectionLabel}>Suggested AI draft</div>
+            <div style={sectionLabel}>{t("inbox.sectionSuggestedDraft")}</div>
             {draftEmail && !noReplyNeeded ? (
               <DraftBlock email={draftEmail} threadSenderEmail={latest.fromAddress} />
             ) : noReplyNeeded ? (
               <div style={{ fontSize: "0.8125rem", color: "var(--ui-slate-500)", fontStyle: "italic" }}>
-                No reply needed — the conversation appears closed.
+                {t("inbox.noReplyNeededMsg")}
               </div>
             ) : (
               <div style={{ fontSize: "0.8125rem", color: "var(--ui-slate-500)", fontStyle: "italic" }}>
-                No draft yet. Click "Generate draft" above.
+                {t("inbox.noDraftYet")}
               </div>
             )}
           </div>
@@ -2018,9 +2028,9 @@ function ThreadDetailPanel({
           {analysisEmail?.analysisResult && (
             <div>
               <div style={{ ...sectionLabel, display: "flex", gap: "8px", alignItems: "center", marginBottom: "14px" }}>
-                Analysis
+                {t("inbox.sectionAnalysis")}
                 {analysisEmail !== latest && (
-                  <span className="ui-pill ui-pill--warning" style={{ fontSize: "10px" }}>Based on previous message</span>
+                  <span className="ui-pill ui-pill--warning" style={{ fontSize: "10px" }}>{t("inbox.pillBasedOnPrevious")}</span>
                 )}
               </div>
               <AnalysisDisplay analysis={analysisEmail.analysisResult} />
@@ -2042,7 +2052,7 @@ function ThreadDetailPanel({
           }}
         >
           <span>{showThread ? "▲" : "▼"}</span>
-          Thread complet ({emails.length} message{emails.length !== 1 ? "s" : ""})
+          {t("inbox.sectionThread", { count: emails.length })}
         </button>
 
         {showThread && (
@@ -2087,6 +2097,7 @@ function ThreadDetailPanel({
 // ---------------------------------------------------------------------------
 
 export default function InboxPage() {
+  const { t } = useTranslation();
   const loaderData = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
@@ -2286,9 +2297,14 @@ export default function InboxPage() {
       {/* Sync report */}
       {report && (
         <div className="ui-inbox-section">
-          <s-banner tone="info">
-            Synced {report.total} emails: {report.supportClient} support, {report.uncertain} uncertain,{" "}
-            {report.filtered + report.nonClient} filtered, {report.errors > 0 ? `${report.errors} errors` : "no errors"}.
+          <s-banner tone="success">
+            {t("inbox.syncReport", {
+              total: report.total,
+              support: report.supportClient,
+              uncertain: report.uncertain,
+              filtered: report.filtered + report.nonClient,
+              errors: report.errors > 0 ? t("inbox.syncErrors", { n: report.errors }) : t("inbox.syncNoErrors"),
+            })}
           </s-banner>
         </div>
       )}
@@ -2306,11 +2322,11 @@ export default function InboxPage() {
               {/* Primary tabs */}
               <SegmentedTabs
                 tabs={[
-                  { key: "to_handle", label: "To handle", count: bucketCounts.to_handle },
-                  { key: "waiting_customer", label: "Waiting customer", count: bucketCounts.waiting_customer },
-                  { key: "resolved", label: "Resolved", count: bucketCounts.resolved },
-                  { key: "other", label: "Other", count: bucketCounts.other },
-                  { key: "all", label: "All", count: bucketCounts.all },
+                  { key: "to_handle", label: t("inbox.bucketToHandle"), count: bucketCounts.to_handle },
+                  { key: "waiting_customer", label: t("inbox.bucketWaitingCustomer"), count: bucketCounts.waiting_customer },
+                  { key: "resolved", label: t("inbox.bucketResolved"), count: bucketCounts.resolved },
+                  { key: "other", label: t("inbox.bucketOther"), count: bucketCounts.other },
+                  { key: "all", label: t("inbox.bucketAll"), count: bucketCounts.all },
                 ]}
                 active={activeBucket}
                 onChange={(k) => setActiveBucket(k)}
@@ -2343,7 +2359,7 @@ export default function InboxPage() {
                 <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
                   {filteredThreadMeta.length === 0 && (
                     <s-box padding="large-500" background="subdued" borderRadius="base">
-                      <s-paragraph>No emails match the current filters.</s-paragraph>
+                      <s-paragraph>{t("inbox.noEmailsMatch")}</s-paragraph>
                     </s-box>
                   )}
                   {filteredThreadMeta.map(({ thread, state, previousContact }) => (

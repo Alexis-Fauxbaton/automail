@@ -1,6 +1,7 @@
 ﻿import { useEffect, useState, Suspense, lazy } from "react";
 import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData, useSearchParams } from "react-router";
+import { useTranslation } from "react-i18next";
 import { authenticate } from "../shopify.server";
 import {
   getPeriodBounds,
@@ -72,14 +73,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function variation(current: number, prev: number): { label: string; up: boolean } | null {
+function variationPct(current: number, prev: number): { pct: number; up: boolean } | null {
   if (prev === 0) return null;
   const diff = ((current - prev) / prev) * 100;
-  const up = diff >= 0;
-  return {
-    label: (up ? "↑ +" : "↓ ") + Math.abs(diff).toFixed(0) + "% vs. période précédente",
-    up,
-  };
+  return { pct: diff, up: diff >= 0 };
 }
 
 // ---------------------------------------------------------------------------
@@ -88,64 +85,28 @@ function variation(current: number, prev: number): { label: string; up: boolean 
 
 const RechartsChart = lazy(() =>
   import("recharts").then((mod) => ({
-    default: function RechartsChartInner({ data }: { data: DailyPoint[] }) {
-      const {
-        ComposedChart,
-        Bar,
-        Line,
-        XAxis,
-        YAxis,
-        Tooltip,
-        ResponsiveContainer,
-        Legend,
-        CartesianGrid,
-      } = mod;
+    default: function RechartsChartInner({
+      data,
+      labels,
+    }: {
+      data: DailyPoint[];
+      labels: { allMails: string; support: string };
+    }) {
+      const { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid } = mod;
       return (
         <ResponsiveContainer width="100%" height={260}>
           <ComposedChart data={data} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-            <XAxis
-              dataKey="date"
-              tick={{ fontSize: 11, fill: "#64748b" }}
-              tickFormatter={(v: string) => v.slice(5)}
-              axisLine={false}
-              tickLine={false}
-            />
-            <YAxis
-              tick={{ fontSize: 11, fill: "#64748b" }}
-              allowDecimals={false}
-              axisLine={false}
-              tickLine={false}
-            />
+            <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#64748b" }} tickFormatter={(v: string) => v.slice(5)} axisLine={false} tickLine={false} />
+            <YAxis tick={{ fontSize: 11, fill: "#64748b" }} allowDecimals={false} axisLine={false} tickLine={false} />
             <Tooltip
-              formatter={(value: number, name: string) => [
-                value,
-                name === "total" ? "Tous mails" : "Support client",
-              ]}
+              formatter={(value: number, name: string) => [value, name === "total" ? labels.allMails : labels.support]}
               labelFormatter={(label: string) => label}
-              contentStyle={{
-                fontSize: 12,
-                borderRadius: 12,
-                border: "1px solid #e2e8f0",
-                boxShadow: "0 8px 24px rgba(15,23,42,0.08)",
-              }}
+              contentStyle={{ fontSize: 12, borderRadius: 12, border: "1px solid #e2e8f0", boxShadow: "0 8px 24px rgba(15,23,42,0.08)" }}
             />
-            <Legend
-              verticalAlign="top"
-              align="right"
-              iconSize={10}
-              wrapperStyle={{ fontSize: 12, paddingBottom: 12 }}
-              formatter={(v: string) => (v === "total" ? "Tous mails" : "Support client")}
-            />
+            <Legend verticalAlign="top" align="right" iconSize={10} wrapperStyle={{ fontSize: 12, paddingBottom: 12 }} formatter={(v: string) => v === "total" ? labels.allMails : labels.support} />
             <Bar dataKey="total" fill="#c7d2fe" radius={[6, 6, 0, 0]} maxBarSize={32} />
-            <Line
-              type="monotone"
-              dataKey="support"
-              stroke="#4f46e5"
-              strokeWidth={2.5}
-              dot={false}
-              activeDot={{ r: 4 }}
-            />
+            <Line type="monotone" dataKey="support" stroke="#4f46e5" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
           </ComposedChart>
         </ResponsiveContainer>
       );
@@ -153,14 +114,13 @@ const RechartsChart = lazy(() =>
   })),
 );
 
-function BarChartClient({ data }: { data: DailyPoint[] }) {
+function BarChartClient({ data, labels }: { data: DailyPoint[]; labels: { allMails: string; support: string } }) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   if (!mounted) return <div style={{ height: 260 }} />;
-
   return (
     <Suspense fallback={<div style={{ height: 260 }} />}>
-      <RechartsChart data={data} />
+      <RechartsChart data={data} labels={labels} />
     </Suspense>
   );
 }
@@ -171,71 +131,28 @@ function BarChartClient({ data }: { data: DailyPoint[] }) {
 
 const RechartsActivityChart = lazy(() =>
   import("recharts").then((mod) => ({
-    default: function ActivityChartInner({ data }: { data: DailyActivityPoint[] }) {
-      const {
-        ComposedChart,
-        Line,
-        XAxis,
-        YAxis,
-        Tooltip,
-        ResponsiveContainer,
-        Legend,
-        CartesianGrid,
-      } = mod;
+    default: function ActivityChartInner({
+      data,
+      labels,
+    }: {
+      data: DailyActivityPoint[];
+      labels: { drafts: string; sent: string };
+    }) {
+      const { ComposedChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid } = mod;
       return (
         <ResponsiveContainer width="100%" height={260}>
           <ComposedChart data={data} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-            <XAxis
-              dataKey="date"
-              tick={{ fontSize: 11, fill: "#64748b" }}
-              tickFormatter={(v: string) => v.slice(5)}
-              axisLine={false}
-              tickLine={false}
-            />
-            <YAxis
-              tick={{ fontSize: 11, fill: "#64748b" }}
-              allowDecimals={false}
-              axisLine={false}
-              tickLine={false}
-            />
+            <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#64748b" }} tickFormatter={(v: string) => v.slice(5)} axisLine={false} tickLine={false} />
+            <YAxis tick={{ fontSize: 11, fill: "#64748b" }} allowDecimals={false} axisLine={false} tickLine={false} />
             <Tooltip
-              formatter={(value: number, name: string) => [
-                value,
-                name === "drafts" ? "Brouillons générés" : "Mails envoyés",
-              ]}
+              formatter={(value: number, name: string) => [value, name === "drafts" ? labels.drafts : labels.sent]}
               labelFormatter={(label: string) => label}
-              contentStyle={{
-                fontSize: 12,
-                borderRadius: 12,
-                border: "1px solid #e2e8f0",
-                boxShadow: "0 8px 24px rgba(15,23,42,0.08)",
-              }}
+              contentStyle={{ fontSize: 12, borderRadius: 12, border: "1px solid #e2e8f0", boxShadow: "0 8px 24px rgba(15,23,42,0.08)" }}
             />
-            <Legend
-              verticalAlign="top"
-              align="right"
-              iconSize={10}
-              wrapperStyle={{ fontSize: 12, paddingBottom: 12 }}
-              formatter={(v: string) => (v === "drafts" ? "Brouillons générés" : "Mails envoyés")}
-            />
-            <Line
-              type="monotone"
-              dataKey="drafts"
-              stroke="#4f46e5"
-              strokeWidth={2.5}
-              dot={false}
-              activeDot={{ r: 4 }}
-            />
-            <Line
-              type="monotone"
-              dataKey="sent"
-              stroke="#10b981"
-              strokeWidth={2.5}
-              dot={false}
-              activeDot={{ r: 4 }}
-              strokeDasharray="4 3"
-            />
+            <Legend verticalAlign="top" align="right" iconSize={10} wrapperStyle={{ fontSize: 12, paddingBottom: 12 }} formatter={(v: string) => v === "drafts" ? labels.drafts : labels.sent} />
+            <Line type="monotone" dataKey="drafts" stroke="#4f46e5" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
+            <Line type="monotone" dataKey="sent" stroke="#10b981" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} strokeDasharray="4 3" />
           </ComposedChart>
         </ResponsiveContainer>
       );
@@ -243,53 +160,16 @@ const RechartsActivityChart = lazy(() =>
   })),
 );
 
-function ActivityChartClient({ data }: { data: DailyActivityPoint[] }) {
+function ActivityChartClient({ data, labels }: { data: DailyActivityPoint[]; labels: { drafts: string; sent: string } }) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   if (!mounted) return <div style={{ height: 260 }} />;
-
   return (
     <Suspense fallback={<div style={{ height: 260 }} />}>
-      <RechartsActivityChart data={data} />
+      <RechartsActivityChart data={data} labels={labels} />
     </Suspense>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const STATE_LABELS: Record<string, string> = {
-  open: "Ouvert",
-  waiting_customer: "Attente client",
-  waiting_merchant: "Attente nous",
-  resolved: "Résolu",
-  no_reply_needed: "Sans réponse requise",
-};
-
-const STATE_COLORS: Record<string, string> = {
-  open: "#ef4444",
-  waiting_customer: "#f59e0b",
-  waiting_merchant: "#3b82f6",
-  resolved: "#22c55e",
-  no_reply_needed: "#94a3b8",
-};
-
-const INTENT_LABELS: Record<string, string> = {
-  where_is_my_order: "Où est ma commande",
-  delivery_delay: "Retard de livraison",
-  marked_delivered_not_received: "Livré non reçu",
-  package_stuck: "Colis bloqué",
-  refund_request: "Remboursement",
-  unknown: "Autre",
-};
-
-const PRESETS = [
-  { key: "24h", label: "24h" },
-  { key: "7d", label: "7 jours" },
-  { key: "30d", label: "30 jours" },
-  { key: "90d", label: "90 jours" },
-] as const;
 
 // ---------------------------------------------------------------------------
 // Dashboard page
@@ -299,151 +179,124 @@ export default function Dashboard() {
   const { range, kpis, daily, dailyActivity, threadStates, conversationStats, intents, today } =
     useLoaderData<typeof loader>();
   const [, setSearchParams] = useSearchParams();
+  const { t } = useTranslation();
 
-  const totalVar = variation(kpis.totalEmails, kpis.prevTotalEmails);
-  const supportVar = variation(kpis.supportEmails, kpis.prevSupportEmails);
-  const draftsVar = variation(kpis.draftsCreated, kpis.prevDraftsCreated);
+  const totalVar = variationPct(kpis.totalEmails, kpis.prevTotalEmails);
+  const supportVar = variationPct(kpis.supportEmails, kpis.prevSupportEmails);
+  const draftsVar = variationPct(kpis.draftsCreated, kpis.prevDraftsCreated);
+
+  function varLabel(v: { pct: number; up: boolean } | null): string {
+    if (!v) return "—";
+    return (v.up ? "↑ +" : "↓ ") + Math.abs(v.pct).toFixed(0) + t("dashboard.vsPrev");
+  }
+
+  const stateLabels: Record<string, string> = {
+    open: t("dashboard.stateOpen"),
+    waiting_customer: t("dashboard.stateWaitingCustomer"),
+    waiting_merchant: t("dashboard.stateWaitingMerchant"),
+    resolved: t("dashboard.stateResolved"),
+    no_reply_needed: t("dashboard.stateNoReplyNeeded"),
+  };
+
+  const stateColors: Record<string, string> = {
+    open: "#ef4444",
+    waiting_customer: "#f59e0b",
+    waiting_merchant: "#3b82f6",
+    resolved: "#22c55e",
+    no_reply_needed: "#94a3b8",
+  };
+
+  const intentLabels: Record<string, string> = {
+    where_is_my_order: t("analysis.intent_where_is_my_order"),
+    delivery_delay: t("analysis.intent_delivery_delay"),
+    marked_delivered_not_received: t("analysis.intent_marked_delivered_not_received"),
+    package_stuck: t("analysis.intent_package_stuck"),
+    refund_request: t("analysis.intent_refund_request"),
+    unknown: t("analysis.intent_unknown"),
+  };
+
+  const presets = [
+    { key: "24h", label: t("dashboard.preset24h") },
+    { key: "7d", label: t("dashboard.preset7d") },
+    { key: "30d", label: t("dashboard.preset30d") },
+    { key: "90d", label: t("dashboard.preset90d") },
+  ] as const;
+
+  const barLabels = { allMails: t("dashboard.chartAllMails"), support: t("dashboard.chartSupport") };
+  const activityLabels = { drafts: t("dashboard.chartDrafts"), sent: t("dashboard.chartSent") };
 
   return (
-    <s-page heading="Dashboard">
+    <s-page heading={t("dashboard.pageHeading")}>
       <div className="ui-page">
-        {/* Hero / period switcher --------------------------------------- */}
         <div className="ui-hero">
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 24,
-              alignItems: "flex-end",
-              justifyContent: "space-between",
-            }}
-          >
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 24, alignItems: "flex-end", justifyContent: "space-between" }}>
             <div style={{ minWidth: 280 }}>
               <span className="ui-hero__eyebrow">
                 <TrendUpIcon size={14} />
-                Vue d'ensemble
+                {t("dashboard.eyebrow")}
               </span>
-              <h2 className="ui-hero__title">Performance de votre support client</h2>
-              <p className="ui-hero__lead">
-                Suivez les emails reçus, les conversations qualifiées en support, l'adoption des
-                brouillons IA et l'état actuel de votre boîte mail — au {today}.
-              </p>
+              <h2 className="ui-hero__title">{t("dashboard.heroTitle")}</h2>
+              <p className="ui-hero__lead">{t("dashboard.heroLead", { date: today })}</p>
             </div>
             <SegmentedTabs
-              tabs={PRESETS}
-              active={range as (typeof PRESETS)[number]["key"]}
+              tabs={presets}
+              active={range as (typeof presets)[number]["key"]}
               onChange={(k) => setSearchParams({ range: k })}
             />
           </div>
         </div>
 
-        {/* KPI grid ------------------------------------------------------ */}
         <div className="ui-grid-4">
-          <MetricCard
-            label="Mails reçus"
-            value={kpis.totalEmails.toLocaleString("fr-FR")}
-            helper={totalVar?.label ?? "—"}
-            helperTone={totalVar ? (totalVar.up ? "up" : "down") : "neutral"}
-            icon={<MailIcon size={20} />}
-            iconTone="info"
-          />
-          <MetricCard
-            label="Support client"
-            value={kpis.supportEmails.toLocaleString("fr-FR")}
-            helper={supportVar?.label ?? "—"}
-            helperTone={supportVar ? (supportVar.up ? "up" : "down") : "neutral"}
-            icon={<SparklesIcon size={20} />}
-            iconTone="primary"
-          />
-          <MetricCard
-            label="Brouillons créés"
-            value={kpis.draftsCreated.toLocaleString("fr-FR")}
-            helper={draftsVar?.label ?? "—"}
-            helperTone={draftsVar ? (draftsVar.up ? "up" : "down") : "neutral"}
-            icon={<CheckCircleIcon size={20} />}
-            iconTone="success"
-          />
-          <MetricCard
-            label="Mails envoyés"
-            value="—"
-            icon={<SendIcon size={20} />}
-            iconTone="warning"
-            badge={<Pill tone="info">Bientôt disponible</Pill>}
-          />
+          <MetricCard label={t("dashboard.kpiTotalEmails")} value={kpis.totalEmails.toLocaleString("fr-FR")} helper={varLabel(totalVar)} helperTone={totalVar ? (totalVar.up ? "up" : "down") : "neutral"} icon={<MailIcon size={20} />} iconTone="info" />
+          <MetricCard label={t("dashboard.kpiSupportEmails")} value={kpis.supportEmails.toLocaleString("fr-FR")} helper={varLabel(supportVar)} helperTone={supportVar ? (supportVar.up ? "up" : "down") : "neutral"} icon={<SparklesIcon size={20} />} iconTone="primary" />
+          <MetricCard label={t("dashboard.kpiDraftsCreated")} value={kpis.draftsCreated.toLocaleString("fr-FR")} helper={varLabel(draftsVar)} helperTone={draftsVar ? (draftsVar.up ? "up" : "down") : "neutral"} icon={<CheckCircleIcon size={20} />} iconTone="success" />
+          <MetricCard label={t("dashboard.kpiEmailsSent")} value="—" icon={<SendIcon size={20} />} iconTone="warning" badge={<Pill tone="info">{t("dashboard.comingSoon")}</Pill>} />
         </div>
 
-        {/* Full-width charts -------------------------------------------- */}
-        <Card title="Tendances sur la période" subtitle="Emails reçus · Brouillons générés et envoyés">
+        <Card title={t("dashboard.chartTitle")} subtitle={t("dashboard.chartSubtitle")}>
           <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--ui-slate-400)", marginBottom: 8 }}>
-                Mails reçus par jour
+                {t("dashboard.mailsPerDay")}
               </div>
               <div data-testid="chart-daily-breakdown">
-              <BarChartClient data={daily} />
+                <BarChartClient data={daily} labels={barLabels} />
               </div>
             </div>
             <div style={{ borderTop: "1px solid var(--ui-slate-100)", paddingTop: 20, marginTop: 8 }}>
               <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--ui-slate-400)", marginBottom: 8 }}>
-                Activité IA par jour
+                {t("dashboard.aiActivityPerDay")}
               </div>
-              <ActivityChartClient data={dailyActivity} />
+              <ActivityChartClient data={dailyActivity} labels={activityLabels} />
             </div>
           </div>
         </Card>
 
-        {/* Stats grid --------------------------------------------------- */}
         <div className="ui-grid-2" style={{ alignItems: "start" }}>
-          <Card
-            title={`État actuel · ${today}`}
-            subtitle="Statut opérationnel de toutes les conversations"
-          >
+          <Card title={t("dashboard.stateCardTitle", { date: today })} subtitle={t("dashboard.stateCardSubtitle")}>
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              {(Object.keys(STATE_LABELS) as Array<keyof ThreadStateCounts>).map((state) => (
-                <StatRow
-                  key={state}
-                  label={STATE_LABELS[state]}
-                  value={(threadStates[state] ?? 0).toLocaleString("fr-FR")}
-                  dotColor={STATE_COLORS[state]}
-                />
+              {(Object.keys(stateLabels) as Array<keyof ThreadStateCounts>).map((state) => (
+                <StatRow key={state} label={stateLabels[state]} value={(threadStates[state] ?? 0).toLocaleString("fr-FR")} dotColor={stateColors[state]} />
               ))}
             </div>
           </Card>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <Card
-              title="Conversations (période)"
-              right={<ChartIcon size={18} style={{ color: "var(--ui-slate-400)" }} />}
-            >
+            <Card title={t("dashboard.conversationsTitle")} right={<ChartIcon size={18} style={{ color: "var(--ui-slate-400)" }} />}>
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <StatRow
-                  label="Nouvelles"
-                  value={conversationStats.newConversations.toLocaleString("fr-FR")}
-                />
-                <StatRow
-                  label="Résolues"
-                  value={conversationStats.resolvedConversations.toLocaleString("fr-FR")}
-                />
-                <StatRow
-                  label="Rouvertes"
-                  value={conversationStats.reopenedConversations.toLocaleString("fr-FR")}
-                />
+                <StatRow label={t("dashboard.conversationsNew")} value={conversationStats.newConversations.toLocaleString("fr-FR")} />
+                <StatRow label={t("dashboard.conversationsResolved")} value={conversationStats.resolvedConversations.toLocaleString("fr-FR")} />
+                <StatRow label={t("dashboard.conversationsReopened")} value={conversationStats.reopenedConversations.toLocaleString("fr-FR")} />
               </div>
             </Card>
 
-            <Card title="Top intentions" subtitle="Intentions détectées les plus fréquentes">
+            <Card title={t("dashboard.topIntents")} subtitle={t("dashboard.topIntentsSubtitle")}>
               {intents.length === 0 ? (
-                <p style={{ fontSize: 13, color: "var(--ui-slate-500)", margin: 0 }}>
-                  Aucune donnée sur la période.
-                </p>
+                <p style={{ fontSize: 13, color: "var(--ui-slate-500)", margin: 0 }}>{t("dashboard.noData")}</p>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                   {intents.map(({ intent, count }: IntentCount) => (
-                    <StatRow
-                      key={intent}
-                      label={INTENT_LABELS[intent] ?? intent}
-                      value={count.toLocaleString("fr-FR")}
-                    />
+                    <StatRow key={intent} label={intentLabels[intent] ?? intent} value={count.toLocaleString("fr-FR")} />
                   ))}
                 </div>
               )}

@@ -2,13 +2,12 @@ import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useLoaderData } from "react-router";
+import { useTranslation } from "react-i18next";
 
 import { login } from "../../shopify.server";
 import { loginErrorMessage } from "./error.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  // Inject `host` if missing so the SDK doesn't bail out to the login page
-  // after OAuth callbacks that omit the host param.
   const url = new URL(request.url);
   const shop = url.searchParams.get("shop");
   if (shop && !url.searchParams.get("host")) {
@@ -20,16 +19,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     return { errors };
   }
   const errors = loginErrorMessage(await login(request));
-
   return { errors };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const errors = loginErrorMessage(await login(request));
-
-  return {
-    errors,
-  };
+  return { errors };
 };
 
 export default function Auth() {
@@ -37,23 +32,24 @@ export default function Auth() {
   const actionData = useActionData<typeof action>();
   const [shop, setShop] = useState("");
   const { errors } = actionData || loaderData;
+  const { t } = useTranslation();
 
   return (
     <AppProvider embedded={false}>
       <s-page>
         <Form method="post">
-        <s-section heading="Log in">
-          <s-text-field
-            name="shop"
-            label="Shop domain"
-            details="example.myshopify.com"
-            value={shop}
-            onChange={(e) => setShop(e.currentTarget.value)}
-            autocomplete="on"
-            error={errors.shop}
-          ></s-text-field>
-          <s-button type="submit">Log in</s-button>
-        </s-section>
+          <s-section heading={t("login.heading")}>
+            <s-text-field
+              name="shop"
+              label={t("login.shopDomain")}
+              details={t("login.shopDomainDetails")}
+              value={shop}
+              onChange={(e) => setShop(e.currentTarget.value)}
+              autocomplete="on"
+              error={errors.shop}
+            ></s-text-field>
+            <s-button type="submit">{t("login.loginButton")}</s-button>
+          </s-section>
         </Form>
       </s-page>
     </AppProvider>
