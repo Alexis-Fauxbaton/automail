@@ -152,6 +152,13 @@
   color: var(--ui-red-700);
   border-color: var(--ui-red-200);
 }
+.ui-pill--clickable {
+  cursor: pointer;
+  transition: filter 0.1s ease;
+}
+.ui-pill--clickable:hover {
+  filter: brightness(0.94);
+}
 
 /* ---------------- Metric card ---------------- */
 .ui-metric {

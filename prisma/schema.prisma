@@ -285,6 +285,19 @@ model ThreadStateHistory {
   @@index([threadId, changedAt])
 }
 
+// Per-user preference (UI language, etc.). Keyed by Shopify userId + shop
+// so that agents on the same shop can have independent preferences.
+model UserPreference {
+  id         String   @id @default(cuid())
+  userId     String
+  shop       String
+  uiLanguage String   @default("en")
+  updatedAt  DateTime @updatedAt
+
+  @@unique([userId, shop])
+  @@index([shop])
+}
+
 // Durable background job for anything the auto-sync worker should
 // pick up off the hot request path (sync, manual backfill, resync).
 // Web actions enqueue rows; the in-process auto-sync tick claims and

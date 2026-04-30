@@ -115,7 +115,12 @@
     "refundPolicy": "Politique de remboursement",
     "refundPolicyPlaceholder": "ex. Nous acceptons les retours sous 30 jours pour les articles non utilisés dans leur emballage d'origine. Les remboursements sont traités sous 5 jours ouvrables après réception du retour. Les articles soldés sont non échangeables.",
     "saveSettings": "Enregistrer les paramètres",
-    "settingsSaved": "Paramètres enregistrés."
+    "settingsSaved": "Paramètres enregistrés.",
+    "uiLanguageSection": "Interface",
+    "uiLanguageLabel": "Langue de l'interface",
+    "uiLanguageDetails": "Change la langue de l'application immédiatement. Enregistré par utilisateur.",
+    "uiLanguageFr": "Français",
+    "uiLanguageEn": "Anglais"
   },
   "dashboard": {
     "pageHeading": "Dashboard",
@@ -222,15 +227,13 @@
     "generateDraft": "Générer le brouillon",
     "regenerateDraft": "Regénérer le brouillon",
     "regenerating": "Regénération…",
-    "refreshContext": "Actualiser le contexte",
+    "updateTracking": "Mettre à jour le tracking",
     "refreshing": "Actualisation…",
     "editableDraft": "Brouillon modifiable",
     "draftVersion": "Version {{n}} (lecture seule)",
-    "refinementInstructions": "Instructions de raffinage",
+    "adjustDraft": "Personnaliser le brouillon",
     "refineWithAi": "Affiner avec l'IA",
     "refining": "Raffinage…",
-    "replyInThread": "Répondre dans ce thread",
-    "newThread": "Nouveau thread",
     "filesKept": "Les fichiers ajoutés sont conservés 7 jours",
     "uploadFailed": "Échec de l'envoi",
     "noDraftYet": "Pas encore de brouillon. Cliquez sur « Générer le brouillon » ci-dessus.",
@@ -270,7 +273,11 @@
     "sectionThread_one": "Thread complet ({{count}} message)",
     "sectionThread_other": "Thread complet ({{count}} messages)",
     "generating": "Génération…",
-    "confidence": "Confiance"
+    "intentLabel": "Intention",
+    "signalRepliedElsewhere": "Répondu dans un autre fil",
+    "signalPriorContactBoth": "Contact récurrent (adresse + commande)",
+    "signalPriorContactOrder": "Contact récurrent (même commande)",
+    "signalPriorContactAddress": "Contact récurrent (même adresse)"
   },
   "login": {
     "heading": "Connexion",

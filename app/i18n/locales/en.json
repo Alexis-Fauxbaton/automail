@@ -115,7 +115,12 @@
     "refundPolicy": "Refund policy",
     "refundPolicyPlaceholder": "e.g. We offer a 30-day return window for unused items in original packaging. Refunds are processed within 5 business days of receiving the return. Items on sale are final sale.",
     "saveSettings": "Save settings",
-    "settingsSaved": "Settings saved."
+    "settingsSaved": "Settings saved.",
+    "uiLanguageSection": "Interface",
+    "uiLanguageLabel": "Interface language",
+    "uiLanguageDetails": "Changes the language of the app immediately. Saved per user.",
+    "uiLanguageFr": "Français",
+    "uiLanguageEn": "English"
   },
   "dashboard": {
     "pageHeading": "Dashboard",
@@ -222,15 +227,13 @@
     "generateDraft": "Generate draft",
     "regenerateDraft": "Regenerate draft",
     "regenerating": "Regenerating…",
-    "refreshContext": "Refresh context",
+    "updateTracking": "Update tracking",
     "refreshing": "Refreshing…",
     "editableDraft": "Editable draft",
     "draftVersion": "Version {{n}} (read-only)",
-    "refinementInstructions": "Refinement instructions",
+    "adjustDraft": "Adjust draft",
     "refineWithAi": "Refine with AI",
     "refining": "Refining…",
-    "replyInThread": "Reply in thread",
-    "newThread": "New thread",
     "filesKept": "Added files are kept for 7 days",
     "uploadFailed": "Upload failed",
     "noDraftYet": "No draft yet. Click \"Generate draft\" above.",
@@ -270,7 +273,11 @@
     "sectionThread_one": "Full thread ({{count}} message)",
     "sectionThread_other": "Full thread ({{count}} messages)",
     "generating": "Generating…",
-    "confidence": "Confidence"
+    "intentLabel": "Intent",
+    "signalRepliedElsewhere": "Replied in another thread",
+    "signalPriorContactBoth": "Prior contact (address + order)",
+    "signalPriorContactOrder": "Prior contact (same order)",
+    "signalPriorContactAddress": "Prior contact (same address)"
   },
   "login": {
     "heading": "Log in",

@@ -216,17 +216,12 @@ export function AnalysisDisplay({ analysis }: { analysis: SupportAnalysisExtende
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
 
-      <div style={{ display: "inline-flex", flexWrap: "wrap", alignItems: "center", gap: "8px", padding: "7px 14px", background: "#f6f6f7", border: "1px solid #e1e3e5", borderRadius: "20px", alignSelf: "flex-start", fontSize: "13px" }}>
-        <span style={{ color: "#6d7175" }}>{t("analysis.intentLabel")}</span>
-        <span style={{ fontWeight: 600 }}>{t(intentKey, { defaultValue: analysis.intent })}</span>
-        <span style={{ color: "#c9cccf" }}>·</span>
-        <span style={{ color: "#6d7175" }}>{t("analysis.confidenceLabel")}</span>
-        <ConfidenceBadge confidence={analysis.confidence} />
-        <span style={{ color: "#c9cccf" }}>·</span>
-        <span style={{ color: "#6d7175" }}>
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px" }}>
+        <s-badge>{t(intentKey, { defaultValue: analysis.intent })}</s-badge>
+        {conversation.noReplyNeeded && <s-badge tone="success">{t("analysis.noReplyNeeded")}</s-badge>}
+        <span style={{ color: "#6d7175", fontSize: "12px" }}>
           {directionLabel} · {totalMessages} {totalMessages > 1 ? t("analysis.msgPlural") : t("analysis.msgSingular")}
         </span>
-        {conversation.noReplyNeeded && <s-badge tone="success">{t("analysis.noReplyNeeded")}</s-badge>}
       </div>
 
       {conversation.noReplyNeeded && conversation.noReplyReason && (

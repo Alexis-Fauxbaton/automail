@@ -696,12 +696,6 @@ function getOpsBucket(
   return "other";
 }
 
-function getThreadConfidence(thread: EmailThread): "high" | "medium" | "low" | null {
-  const c = thread.latest.analysisResult?.confidence;
-  if (c === "high" || c === "medium" || c === "low") return c;
-  return null;
-}
-
 function hasLinkedOrder(state: SerializedThreadState | null): boolean {
   return !!state?.resolvedOrderNumber;
 }
@@ -925,26 +919,28 @@ function ConnectionCard({
 // Inbox-level filters applied on top of the primary operational tab.
 interface InboxFilters {
   search: string;
-  confidence: "all" | "high" | "medium" | "low";
   orderLinked: "any" | "yes" | "no";
   nature: NatureFilter;
+  intent: string;
 }
 
 function FiltersBar({
   filters,
   onChange,
   onReset,
+  intentOptions,
 }: {
   filters: InboxFilters;
   onChange: (next: InboxFilters) => void;
   onReset: () => void;
+  intentOptions: string[];
 }) {
   const { t } = useTranslation();
   const isDefault =
     filters.search === "" &&
-    filters.confidence === "all" &&
     filters.orderLinked === "any" &&
-    filters.nature === "all";
+    filters.nature === "all" &&
+    filters.intent === "";
 
   // Plain HTML controls on purpose: Shopify web components use their own
   // event shape that doesn't line up with controlled React inputs. The
@@ -991,24 +987,6 @@ function FiltersBar({
         />
       </label>
       <label style={labelStyle}>
-        {t("inbox.confidenceLabel")}
-        <select
-          value={filters.confidence}
-          onChange={(e) =>
-            onChange({
-              ...filters,
-              confidence: e.target.value as InboxFilters["confidence"],
-            })
-          }
-          style={selectStyle}
-        >
-          <option value="all">{t("inbox.filterAll")}</option>
-          <option value="high">{t("inbox.filterHigh")}</option>
-          <option value="medium">{t("inbox.filterMedium")}</option>
-          <option value="low">{t("inbox.filterLow")}</option>
-        </select>
-      </label>
-      <label style={labelStyle}>
         {t("inbox.orderLinkedLabel")}
         <select
           value={filters.orderLinked}
@@ -1041,6 +1019,23 @@ function FiltersBar({
           <option value="filtered">{t("inbox.filterFiltered")}</option>
         </select>
       </label>
+      {intentOptions.length > 0 && (
+        <label style={labelStyle}>
+          {t("inbox.intentLabel")}
+          <select
+            value={filters.intent}
+            onChange={(e) => onChange({ ...filters, intent: e.target.value })}
+            style={selectStyle}
+          >
+            <option value="">{t("inbox.filterAll")}</option>
+            {intentOptions.map((intent) => (
+              <option key={intent} value={intent}>
+                {t(`analysis.intent_${intent}`, { defaultValue: intent })}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       {!isDefault && (
         <s-button variant="plain" onClick={onReset}>
           {t("inbox.resetFilters")}
@@ -1223,7 +1218,7 @@ function EmailMessageBlock({
   const body = normalizeEmailBody(email.bodyText);
   const PREVIEW_LENGTH = 300;
   const needsToggle = body.length > PREVIEW_LENGTH;
-  const [expanded, setExpanded] = useState(isLatest); // latest expanded by default
+  const [expanded, setExpanded] = useState(false);
 
   return (
     <s-box padding="base" background="subdued" borderRadius="base">
@@ -1277,6 +1272,8 @@ function ThreadCard({
   previousContact,
   onSelect,
   onOrderClick,
+  onFilterClick,
+  onBucketClick,
 }: {
   thread: EmailThread;
   threadState: SerializedThreadState | null;
@@ -1286,6 +1283,8 @@ function ThreadCard({
   previousContact: { byAddress: boolean; byOrder: boolean; recentReply: boolean; matchedAddress: string | null };
   onSelect: () => void;
   onOrderClick: (orderNumber: string) => void;
+  onFilterClick: (patch: Partial<InboxFilters>) => void;
+  onBucketClick: (bucket: OpsBucket | "to_handle") => void;
 }) {
   const { t } = useTranslation();
   const { latest, emails } = thread;
@@ -1298,6 +1297,10 @@ function ThreadCard({
   const bucket = getOpsBucket(thread, threadState, connectedEmail);
   const reanalyzeFetcher = useFetcher();
   const isGenerating = reanalyzeFetcher.state !== "idle";
+  const [showSignals, setShowSignals] = useState(false);
+  const hasSignals =
+    (bucket === "to_process" || bucket === "waiting_merchant" || bucket === "waiting_customer") &&
+    (previousContact.recentReply || previousContact.byAddress || previousContact.byOrder);
 
   // The "latest" email may be a new unanalyzed follow-up (e.g. waiting_merchant
   // after a customer reply). Find the most recent email that actually has
@@ -1318,18 +1321,18 @@ function ThreadCard({
     >
       {/* Row 1 : badges */}
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px", marginBottom: "10px" }}>
-        {cls === "uncertain" && <span className="ui-pill ui-pill--warning">{t("inbox.pillUncertain")}</span>}
-        {cls === "filtered" && <span className="ui-pill">{t("inbox.filterFiltered")}</span>}
-        {cls === "non_support" && <span className="ui-pill">{t("inbox.pillNonSupport")}</span>}
+        {cls === "uncertain" && <span className="ui-pill ui-pill--warning ui-pill--clickable" onClick={(e) => { e.stopPropagation(); onFilterClick({ nature: "uncertain" }); }}>{t("inbox.pillUncertain")}</span>}
+        {cls === "filtered" && <span className="ui-pill ui-pill--clickable" onClick={(e) => { e.stopPropagation(); onFilterClick({ nature: "filtered" }); }}>{t("inbox.filterFiltered")}</span>}
+        {cls === "non_support" && <span className="ui-pill ui-pill--clickable" onClick={(e) => { e.stopPropagation(); onFilterClick({ nature: "non_support" }); }}>{t("inbox.pillNonSupport")}</span>}
 
         {bucket === "to_process" ? (
-          <span className="ui-pill ui-pill--warning">{t("inbox.stateWaitingMerchant")}</span>
+          <span className="ui-pill ui-pill--warning ui-pill--clickable" onClick={(e) => { e.stopPropagation(); onBucketClick("to_handle"); }}>{t("inbox.stateWaitingMerchant")}</span>
         ) : bucket === "waiting_merchant" ? (
-          <span className="ui-pill ui-pill--warning">{t("inbox.stateWaitingMerchant")}</span>
+          <span className="ui-pill ui-pill--warning ui-pill--clickable" onClick={(e) => { e.stopPropagation(); onBucketClick("to_handle"); }}>{t("inbox.stateWaitingMerchant")}</span>
         ) : bucket === "waiting_customer" ? (
-          <span className="ui-pill ui-pill--info">{t("inbox.stateWaitingCustomer")}</span>
+          <span className="ui-pill ui-pill--info ui-pill--clickable" onClick={(e) => { e.stopPropagation(); onBucketClick("waiting_customer"); }}>{t("inbox.stateWaitingCustomer")}</span>
         ) : bucket === "resolved" ? (
-          <span className="ui-pill ui-pill--success">{t("inbox.stateResolved")}</span>
+          <span className="ui-pill ui-pill--success ui-pill--clickable" onClick={(e) => { e.stopPropagation(); onBucketClick("resolved"); }}>{t("inbox.stateResolved")}</span>
         ) : noReplyNeeded ? (
           <span className="ui-pill ui-pill--success">{t("inbox.stateNoReplyNeeded")}</span>
         ) : null}
@@ -1340,25 +1343,51 @@ function ThreadCard({
             onClick={(e) => { e.stopPropagation(); onOrderClick(threadState.resolvedOrderNumber!); }}
             style={{ background: "none", border: "none", padding: 0, margin: 0, cursor: "pointer" }}
           >
-            <span className="ui-pill ui-pill--info">#{threadState.resolvedOrderNumber}</span>
+            <span className="ui-pill ui-pill--info ui-pill--clickable">#{threadState.resolvedOrderNumber}</span>
           </button>
         )}
 
-        {messageCount > 1 && <span className="ui-pill">{messageCount} msg</span>}
+        {(() => {
+          const intent = analysisEmail?.analysisResult?.intent;
+          if (!intent) return null;
+          const key = `analysis.intent_${intent}` as const;
+          return (
+            <span
+              className="ui-pill ui-pill--clickable"
+              onClick={(e) => { e.stopPropagation(); onFilterClick({ intent }); }}
+            >
+              {t(key, { defaultValue: intent })}
+            </span>
+          );
+        })()}
         {threadState?.historyStatus === "partial" && <span className="ui-pill ui-pill--warning">{t("inbox.pillPartialHistory")}</span>}
         {latest.processingStatus === "error" && <span className="ui-pill ui-pill--danger">{t("inbox.pillError")}</span>}
 
-        {(bucket === "to_process" || bucket === "waiting_merchant" || bucket === "waiting_customer") && (previousContact.byAddress || previousContact.byOrder) && (
-          <span className="ui-pill ui-pill--warning">
-            {previousContact.byOrder && previousContact.byAddress
-              ? t("inbox.priorContactBoth")
-              : previousContact.byOrder
-              ? t("inbox.priorContactOrder")
-              : t("inbox.priorContactAddress")}
+        {hasSignals && (
+          <span
+            style={{ position: "relative", display: "inline-flex", alignItems: "center" }}
+            onMouseEnter={(e) => { e.stopPropagation(); setShowSignals(true); }}
+            onMouseLeave={() => setShowSignals(false)}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <span style={{ color: "var(--ui-amber-700)", fontSize: "14px", cursor: "help" }}>⚠</span>
+            {showSignals && (
+              <div style={{
+                position: "absolute", bottom: "calc(100% + 6px)", right: 0,
+                background: "#fff", border: "1px solid var(--ui-slate-200)",
+                borderRadius: "8px", padding: "8px 12px",
+                boxShadow: "0 4px 16px rgba(0,0,0,0.10)",
+                zIndex: 10, minWidth: "210px",
+                display: "flex", flexDirection: "column", gap: "4px",
+                fontSize: "12px", color: "var(--ui-slate-700)", fontWeight: 400,
+              }}>
+                {previousContact.recentReply && <span>↩ {t("inbox.signalRepliedElsewhere")}</span>}
+                {previousContact.byAddress && previousContact.byOrder && <span>◎ {t("inbox.signalPriorContactBoth")}</span>}
+                {previousContact.byOrder && !previousContact.byAddress && <span>◎ {t("inbox.signalPriorContactOrder")}</span>}
+                {previousContact.byAddress && !previousContact.byOrder && <span>◎ {t("inbox.signalPriorContactAddress")}</span>}
+              </div>
+            )}
           </span>
-        )}
-        {(bucket === "to_process" || bucket === "waiting_merchant" || bucket === "waiting_customer") && previousContact.recentReply && (
-          <span className="ui-pill ui-pill--warning">{t("inbox.pillRepliedElsewhere")}</span>
         )}
       </div>
 
@@ -1375,6 +1404,7 @@ function ThreadCard({
           )}
         </div>
         <span style={{ flexShrink: 0, fontSize: "0.8125rem", color: "var(--ui-slate-500)" }}>
+          {messageCount > 1 && `${messageCount} msg · `}
           {latestDirection === "incoming" ? "↓" : latestDirection === "outgoing" ? "↑" : "·"}{" "}
           {relativeTime(latest.receivedAt, t)}
         </span>
@@ -1418,7 +1448,7 @@ function ThreadCard({
             previousOperationalState={threadState?.previousOperationalState ?? null}
           />
         )}
-        {bucket === "waiting_merchant" &&
+        {(bucket === "to_process" || bucket === "waiting_merchant") &&
           !latest.draftReply &&
           !noReplyNeeded &&
           !latest.tier1Result?.startsWith("filtered:") &&
@@ -1483,8 +1513,6 @@ function DraftBlock({ email, threadSenderEmail }: {
   const [cc, setCC] = useState(email.draftCC ?? "");
   const [bcc, setBCC] = useState(email.draftBCC ?? "");
   const [showBCC, setShowBCC] = useState(!!email.draftBCC);
-  const [replyMode, setReplyMode] = useState(email.draftReplyMode ?? "thread");
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const [attachments, setAttachments] = useState(email.draftAttachments);
   const [attachError, setAttachError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1686,7 +1714,7 @@ function DraftBlock({ email, threadSenderEmail }: {
             <input type="hidden" name="currentDraft" value={bodyText} />
             <s-stack direction="inline" gap="small-300" blockAlign="end">
               <div style={{ flex: 1 }}>
-                <s-text-field label={t("inbox.refinementInstructions")} name="instructions"
+                <s-text-field label={t("inbox.adjustDraft")} name="instructions"
                   placeholder="e.g. Be more formal, mention refund policy, shorten…" />
               </div>
               <s-button type="submit" variant="secondary" disabled={refining || regenerating}>
@@ -1708,38 +1736,9 @@ function DraftBlock({ email, threadSenderEmail }: {
             <input type="hidden" name="_action" value="reanalyze" />
             <input type="hidden" name="emailId" value={email.id} />
             <s-button type="submit" variant="tertiary" size="slim" disabled={regenerating || redrafting || refining}>
-              {regenerating ? t("inbox.refreshing") : t("inbox.refreshContext")}
+              {regenerating ? t("inbox.refreshing") : t("inbox.updateTracking")}
             </s-button>
           </regenerateFetcher.Form>
-        </div>
-
-        {/* Advanced options */}
-        <div>
-          <button
-            onClick={() => setShowAdvanced(!showAdvanced)}
-            style={{ fontSize: "12px", color: "var(--p-color-text-subdued)", background: "none", border: "none", cursor: "pointer" }}
-          >
-            {showAdvanced ? "▾" : "▸"} Options avancées
-          </button>
-          {showAdvanced && (
-            <div style={{ marginTop: "8px", display: "flex", flexDirection: "column", gap: "6px" }}>
-              {(["thread", "new_thread"] as const).map((mode) => (
-                <label key={mode} style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", cursor: "pointer" }}>
-                  <input
-                    type="radio"
-                    name={`replyMode-${email.id}`}
-                    value={mode}
-                    checked={replyMode === mode}
-                    onChange={() => {
-                      setReplyMode(mode);
-                      saveMeta({ replyMode: mode });
-                    }}
-                  />
-                  {mode === "thread" ? t("inbox.replyInThread") : t("inbox.newThread")}
-                </label>
-              ))}
-            </div>
-          )}
         </div>
 
       </s-stack>
@@ -1824,14 +1823,14 @@ function ThreadDetailPanel({
   threadState,
   connectedEmail,
   bucket,
-  confidence,
+  previousContact,
   onClose,
 }: {
   thread: EmailThread;
   threadState: SerializedThreadState | null;
   connectedEmail: string | null;
   bucket: OpsBucket | "all";
-  confidence: "high" | "medium" | "low" | null;
+  previousContact: { byAddress: boolean; byOrder: boolean; recentReply: boolean };
   onClose: () => void;
 }) {
   const { t } = useTranslation();
@@ -1840,6 +1839,10 @@ function ThreadDetailPanel({
   const reanalyzeFetcher = useFetcher();
   const isGenerating = reanalyzeFetcher.state !== "idle";
   const [showThread, setShowThread] = useState(false);
+  const [showSignals, setShowSignals] = useState(false);
+  const hasSignals =
+    (bucket === "to_process" || bucket === "waiting_merchant" || bucket === "waiting_customer") &&
+    (previousContact.recentReply || previousContact.byAddress || previousContact.byOrder);
 
   const analysisEmail = [...emails].reverse().find((e) => e.analysisResult) ?? null;
   const draftEmail = latest.draftReply ? latest : (analysisEmail?.draftReply ? analysisEmail : null);
@@ -1852,9 +1855,6 @@ function ThreadDetailPanel({
     : bucket === "waiting_customer" ? <span className="ui-pill ui-pill--info">{t("inbox.stateWaitingCustomer")}</span>
     : bucket === "resolved" ? <span className="ui-pill ui-pill--success">{t("inbox.stateResolved")}</span>
     : null;
-
-  const confColor = confidence === "high" ? "#10b981" : confidence === "medium" ? "#3b82f6" : "#f59e0b";
-  const confBg   = confidence === "high" ? "#d1fae5" : confidence === "medium" ? "#dbeafe" : "#fef3c7";
 
   const sectionLabel: React.CSSProperties = {
     fontSize: "10px", fontWeight: 700, textTransform: "uppercase",
@@ -1885,10 +1885,34 @@ function ThreadDetailPanel({
           {threadState?.resolvedOrderNumber && (
             <span className="ui-pill ui-pill--info">#{threadState.resolvedOrderNumber}</span>
           )}
-          {emails.length > 1 && <span className="ui-pill">{emails.length} msg</span>}
           {intent && (
             <span className="ui-pill">
               {t(`analysis.intent_${intent}`, { defaultValue: intent.replace(/_/g, " ") })}
+            </span>
+          )}
+          {hasSignals && (
+            <span
+              style={{ position: "relative", display: "inline-flex", alignItems: "center", marginLeft: "auto" }}
+              onMouseEnter={() => setShowSignals(true)}
+              onMouseLeave={() => setShowSignals(false)}
+            >
+              <span style={{ color: "var(--ui-amber-700)", fontSize: "14px", cursor: "help" }}>⚠</span>
+              {showSignals && (
+                <div style={{
+                  position: "absolute", bottom: "calc(100% + 6px)", right: 0,
+                  background: "#fff", border: "1px solid var(--ui-slate-200)",
+                  borderRadius: "8px", padding: "8px 12px",
+                  boxShadow: "0 4px 16px rgba(0,0,0,0.10)",
+                  zIndex: 10, minWidth: "210px",
+                  display: "flex", flexDirection: "column", gap: "4px",
+                  fontSize: "12px", color: "var(--ui-slate-700)", fontWeight: 400,
+                }}>
+                  {previousContact.recentReply && <span>↩ {t("inbox.signalRepliedElsewhere")}</span>}
+                  {previousContact.byAddress && previousContact.byOrder && <span>◎ {t("inbox.signalPriorContactBoth")}</span>}
+                  {previousContact.byOrder && !previousContact.byAddress && <span>◎ {t("inbox.signalPriorContactOrder")}</span>}
+                  {previousContact.byAddress && !previousContact.byOrder && <span>◎ {t("inbox.signalPriorContactAddress")}</span>}
+                </div>
+              )}
             </span>
           )}
         </div>
@@ -1985,20 +2009,6 @@ function ThreadDetailPanel({
                   <div style={kvValue}>{value}</div>
                 </div>
               ))}
-              {confidence && (
-                <div>
-                  <div style={kvLabel}>{t("inbox.confidence")}</div>
-                  <span style={{
-                    display: "inline-block", marginTop: "3px",
-                    padding: "2px 10px", borderRadius: "999px",
-                    fontSize: "0.75rem", fontWeight: 700,
-                    background: confBg, color: confColor,
-                    textTransform: "uppercase", letterSpacing: "0.04em",
-                  }}>
-                    {confidence}
-                  </span>
-                </div>
-              )}
             </div>
           ) : (
             <div style={{ fontSize: "0.8125rem", color: "var(--ui-slate-400)", fontStyle: "italic" }}>
@@ -2130,9 +2140,9 @@ export default function InboxPage() {
   const [activeBucket, setActiveBucket] = useState<OpsBucket | "all" | "to_handle">("to_handle");
   const [filters, setFilters] = useState<InboxFilters>({
     search: "",
-    confidence: "all",
     orderLinked: "any",
     nature: "all",
+    intent: "",
   });
   const [expandedThreadId, setExpandedThreadId] = useState<string | null>(null);
 
@@ -2172,7 +2182,6 @@ export default function InboxPage() {
       state,
       bucket: getOpsBucket(t, state, loaderData.connectedEmail),
       nature: getThreadClassification(t),
-      confidence: getThreadConfidence(t),
       linkedOrder: hasLinkedOrder(state),
       previousContact: {
         byAddress: pc?.byAddress ?? false,
@@ -2200,7 +2209,10 @@ export default function InboxPage() {
     : null;
 
   const matchesFilters = (m: (typeof threadMeta)[number]): boolean => {
-    if (filters.confidence !== "all" && m.confidence !== filters.confidence) return false;
+    if (filters.intent !== "") {
+      const threadIntent = [...m.thread.emails].reverse().find(e => e.analysisResult)?.analysisResult?.intent;
+      if (threadIntent !== filters.intent) return false;
+    }
     if (filters.orderLinked === "yes" && !m.linkedOrder) return false;
     if (filters.orderLinked === "no" && m.linkedOrder) return false;
     if (filters.nature !== "all" && m.nature !== filters.nature) return false;
@@ -2213,6 +2225,13 @@ export default function InboxPage() {
     }
     return true;
   };
+
+  const availableIntents = [...new Set(
+    threadMeta.flatMap((m) => {
+      const intent = [...m.thread.emails].reverse().find(e => e.analysisResult)?.analysisResult?.intent;
+      return intent ? [intent] : [];
+    })
+  )].sort();
 
   const filteredThreadMeta = threadMeta
     .filter((m) =>
@@ -2336,12 +2355,13 @@ export default function InboxPage() {
               <FiltersBar
                 filters={filters}
                 onChange={setFilters}
+                intentOptions={availableIntents}
                 onReset={() =>
                   setFilters({
                     search: "",
-                    confidence: "all",
                     orderLinked: "any",
                     nature: "all",
+                    intent: "",
                   })
                 }
               />
@@ -2378,6 +2398,10 @@ export default function InboxPage() {
                       onOrderClick={(orderNumber) =>
                         setFilters((prev) => ({ ...prev, search: orderNumber }))
                       }
+                      onFilterClick={(patch) =>
+                        setFilters((prev) => ({ ...prev, ...patch }))
+                      }
+                      onBucketClick={(bucket) => setActiveBucket(bucket)}
                     />
                   ))}
                 </div>
@@ -2390,7 +2414,7 @@ export default function InboxPage() {
                       threadState={selectedThreadMeta.state}
                       connectedEmail={loaderData.connectedEmail}
                       bucket={selectedThreadMeta.bucket}
-                      confidence={selectedThreadMeta.confidence}
+                      previousContact={selectedThreadMeta.previousContact}
                       onClose={() => setExpandedThreadId(null)}
                     />
                   </div>
