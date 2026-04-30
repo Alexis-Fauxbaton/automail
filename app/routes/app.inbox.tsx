@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { authenticate } from "../shopify.server";
 import { getAuthUrl as getGmailAuthUrl, getConnection, deleteConnection } from "../lib/gmail/auth";
 import { getZohoAuthUrl } from "../lib/zoho/auth";
-import { reanalyzeEmail, redraftEmail, processNewEmails, type ProcessingReport } from "../lib/gmail/pipeline";
+import { reanalyzeEmail, redraftEmail, processNewEmails, getMailClient, persistEmailAttachments, type ProcessingReport } from "../lib/gmail/pipeline";
 import { refineDraft } from "../lib/gmail/refine-draft";
 import { runDiagnosis, type DiagnosisReport } from "../lib/gmail/diagnose";
 import { enqueueJob } from "../lib/mail/job-queue";
@@ -364,6 +364,37 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const emailId = String(formData.get("emailId") ?? "");
     await redraftEmail(emailId, session.shop);
     return { reanalyzed: null, report: null, disconnected: false, refined: null };
+  }
+
+  if (intent === "refresh_email_html") {
+    const emailId = String(formData.get("emailId") ?? "");
+    const record = await prisma.incomingEmail.findUnique({
+      where: { id: emailId },
+      select: { shop: true, externalMessageId: true },
+    });
+    if (!record || record.shop !== session.shop) {
+      return { report: null, disconnected: false, reanalyzed: null, refined: null };
+    }
+    const conn = await prisma.mailConnection.findUnique({ where: { shop: session.shop } });
+    if (!conn) return { report: null, disconnected: false, reanalyzed: null, refined: null };
+    try {
+      const client = await getMailClient(session.shop, conn.provider);
+      const msg = await client.getMessage(record.externalMessageId);
+      const msgAttachments = msg.attachments ?? [];
+      await prisma.incomingEmail.update({
+        where: { id: emailId },
+        data: {
+          ...(msg.bodyHtml !== undefined ? { bodyHtml: msg.bodyHtml } : {}),
+          hasAttachments: msgAttachments.length > 0,
+        },
+      });
+      if (msgAttachments.length > 0) {
+        await persistEmailAttachments(emailId, session.shop, conn.provider, record.externalMessageId, msgAttachments);
+      }
+    } catch (err) {
+      console.error("[refresh_email_html] failed:", err);
+    }
+    return { report: null, disconnected: false, reanalyzed: null, refined: null };
   }
 
   if (intent === "refine") {
@@ -1280,6 +1311,19 @@ function EmailMessageBlock({
 
   const needsToggle = hasHtmlBody || body.length > PREVIEW_LENGTH;
   const [expanded, setExpanded] = useState(false);
+
+  // Auto-refresh HTML body and attachments for emails synced before this feature.
+  const refreshFetcher = useFetcher();
+  const [refreshTriggered, setRefreshTriggered] = useState(false);
+  useEffect(() => {
+    if (expanded && !email.bodyHtml && !refreshTriggered && refreshFetcher.state === "idle") {
+      setRefreshTriggered(true);
+      refreshFetcher.submit(
+        { _action: "refresh_email_html", emailId: email.id },
+        { method: "post" },
+      );
+    }
+  }, [expanded, email.bodyHtml, email.id, refreshTriggered, refreshFetcher]);
 
   const fileAttachments = email.incomingAttachments.filter((a) => a.disposition === "attachment");
 

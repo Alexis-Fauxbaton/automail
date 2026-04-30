@@ -38,7 +38,7 @@ export interface ProcessingReport {
   cancelled: boolean;
 }
 
-async function getMailClient(shop: string, provider: string): Promise<MailClient> {
+export async function getMailClient(shop: string, provider: string): Promise<MailClient> {
   if (provider === "zoho") return createZohoClient(shop);
   return createGmailClient(shop);
 }
@@ -227,7 +227,7 @@ async function _processNewEmails(
  * Persist attachments for an incoming email. Idempotent: skips records that
  * already exist (identified by emailId + fileName + sizeBytes).
  */
-async function persistEmailAttachments(
+export async function persistEmailAttachments(
   emailId: string,
   shop: string,
   provider: string,
