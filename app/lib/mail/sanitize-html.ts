@@ -41,18 +41,18 @@ export function sanitizeEmailHtml(
     // Replace javascript: hrefs
     .replace(/href\s*=\s*"javascript:[^"]*"/gi, 'href="#"')
     .replace(/href\s*=\s*'javascript:[^']*'/gi, "href='#'")
-    // Rewrite cid: src attributes to data: URIs
+    // Rewrite cid: src attributes — prefer data: URI (Gmail), fall back to proxy URL (Zoho)
     .replace(/src\s*=\s*"cid:([^"]+)"/gi, (_, cid) => {
       const att = cidMap.get(cid.trim());
-      return att?.inlineData
-        ? `src="data:${att.mimeType};base64,${att.inlineData}"`
-        : 'src=""';
+      if (!att) return 'src=""';
+      if (att.inlineData) return `src="data:${att.mimeType};base64,${att.inlineData}"`;
+      return `src="/api/incoming-attachment?id=${att.id}"`;
     })
     .replace(/src\s*=\s*'cid:([^']+)'/gi, (_, cid) => {
       const att = cidMap.get(cid.trim());
-      return att?.inlineData
-        ? `src='data:${att.mimeType};base64,${att.inlineData}'`
-        : "src=''";
+      if (!att) return "src=''";
+      if (att.inlineData) return `src='data:${att.mimeType};base64,${att.inlineData}'`;
+      return `src='/api/incoming-attachment?id=${att.id}'`;
     })
     // Strip relative src attributes — they'd resolve to our app's routes and cause 404s.
     // Absolute https:// and data: are kept; cid: was already handled above.

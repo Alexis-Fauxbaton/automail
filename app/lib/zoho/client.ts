@@ -385,7 +385,9 @@ async function fetchZohoAttachmentsMeta(
       isInline?: boolean;
     }>;
   };
-  return (data.data ?? []).map((att) => ({
+  const items = data.data ?? [];
+  console.log(`[zoho/attachments] message=${messageId} count=${items.length}`, items.map(a => `${a.fileName}(inline=${a.isInline},id=${a.attachmentId})`).join(", "));
+  return items.map((att) => ({
     fileName: att.fileName ?? "attachment",
     mimeType: att.mimeType ?? "application/octet-stream",
     sizeBytes: att.size ?? 0,

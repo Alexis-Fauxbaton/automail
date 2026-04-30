@@ -1286,7 +1286,7 @@ function EmailHtmlBody({ html }: { html: string }) {
     <iframe
       ref={iframeRef}
       srcDoc={html}
-      sandbox="allow-popups"
+      sandbox="allow-popups allow-same-origin"
       onLoad={handleLoad}
       title="Email body"
       style={{ border: "none", width: "100%", minHeight: "60px", display: "block" }}

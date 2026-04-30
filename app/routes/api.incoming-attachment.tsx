@@ -88,8 +88,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
       const conn = await prisma.mailConnection.findUnique({ where: { shop } });
       if (!conn?.zohoAccountId) return new Response("No Zoho connection", { status: 404 });
       const token = await getZohoAccessToken(shop);
-      // Zoho attachment download endpoint
-      const downloadUrl = `https://mail.zoho.com/api/accounts/${conn.zohoAccountId}/messages/${attachment.providerMsgId}/attachments/${attachment.providerAttachId}`;
+      // Zoho attachment download endpoint (domain from env, default mail.zoho.com)
+      const zohoDomain = process.env.ZOHO_API_DOMAIN || "mail.zoho.com";
+      const downloadUrl = `https://${zohoDomain}/api/accounts/${conn.zohoAccountId}/messages/${attachment.providerMsgId}/attachments/${attachment.providerAttachId}`;
       const proxyRes = await fetch(downloadUrl, {
         headers: { Authorization: `Zoho-oauthtoken ${token}` },
       });
