@@ -1318,12 +1318,14 @@ function EmailMessageBlock({
   const needsToggle = hasHtmlBody || body.length > PREVIEW_LENGTH;
   const [expanded, setExpanded] = useState(false);
 
-  // Auto-refresh HTML body and attachments for emails synced before this feature.
-  // Fires on mount; module-level Set prevents re-fetching the same email twice per session.
+  // Auto-refresh HTML body and attachments for emails synced before this feature,
+  // or emails that have bodyHtml but missing incomingAttachments (Zoho case).
+  // Fires once per email per session (module-level Set prevents re-fetching).
   const refreshFetcher = useFetcher();
   const refreshPending = refreshFetcher.state !== "idle";
   useEffect(() => {
-    if (!email.bodyHtml && !_refreshedEmailIds.has(email.id) && refreshFetcher.state === "idle") {
+    const needsRefresh = !email.bodyHtml || email.incomingAttachments.length === 0;
+    if (needsRefresh && !_refreshedEmailIds.has(email.id) && refreshFetcher.state === "idle") {
       _refreshedEmailIds.add(email.id);
       refreshFetcher.submit(
         { _action: "refresh_email_html", emailId: email.id },
