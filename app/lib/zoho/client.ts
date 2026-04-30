@@ -369,13 +369,22 @@ export async function createZohoClient(shop: string): Promise<MailClient> {
 async function fetchZohoAttachmentsMeta(
   accessToken: string,
   accountId: string,
-  folderId: string,
+  _folderId: string,
   messageId: string,
 ): Promise<MailAttachment[]> {
-  const data = (await zohoFetch(
-    accessToken,
-    `/api/accounts/${accountId}/folders/${folderId}/messages/${messageId}/attachments`,
-  )) as {
+  // Zoho attachment list endpoint does NOT require folderId (unlike message detail).
+  // The download endpoint also uses /messages/{id}/attachments without folderId.
+  let data: unknown;
+  try {
+    data = await zohoFetch(
+      accessToken,
+      `/api/accounts/${accountId}/messages/${messageId}/attachments`,
+    );
+  } catch (err) {
+    console.error(`[zoho/attachments] API error for message=${messageId}:`, err);
+    throw err;
+  }
+  const typed = data as {
     data?: Array<{
       attachmentId?: string;
       fileName?: string;
@@ -385,7 +394,7 @@ async function fetchZohoAttachmentsMeta(
       isInline?: boolean;
     }>;
   };
-  const items = data.data ?? [];
+  const items = typed.data ?? [];
   console.log(`[zoho/attachments] message=${messageId} count=${items.length}`, items.map(a => `${a.fileName}(inline=${a.isInline},id=${a.attachmentId})`).join(", "));
   return items.map((att) => ({
     fileName: att.fileName ?? "attachment",
