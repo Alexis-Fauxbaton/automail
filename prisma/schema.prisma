@@ -186,6 +186,9 @@ model IncomingEmail {
   detectedIntent      String?  // SupportIntent enum value
   analysisConfidence  String?  // "high" | "medium" | "low"
   errorMessage     String?
+  // HTML body of the email (sanitized at ingestion time, may be empty)
+  bodyHtml         String   @default("")
+  hasAttachments   Boolean  @default(false)
   // Aggregated LLM cost tracking (sum of all LLM calls on this email)
   llmTokensTotal   Int      @default(0)
   llmCostUsd       Float    @default(0)
@@ -194,6 +197,7 @@ model IncomingEmail {
 
   thread Thread? @relation(fields: [canonicalThreadId], references: [id], onDelete: SetNull)
   replyDraft   ReplyDraft?
+  incomingAttachments IncomingEmailAttachment[]
 
   @@unique([shop, externalMessageId])
   @@index([shop, processingStatus])
@@ -202,6 +206,29 @@ model IncomingEmail {
   @@index([shop, rfcMessageId])
   @@index([shop, detectedIntent])
   @@index([shop, analysisConfidence])
+}
+
+// Attachments and inline images extracted from incoming emails.
+// Small inline images (< 200KB) are stored as base64 in inlineData;
+// larger files must be fetched on-demand via the provider API.
+model IncomingEmailAttachment {
+  id               String        @id @default(cuid())
+  shop             String
+  emailId          String
+  email            IncomingEmail @relation(fields: [emailId], references: [id], onDelete: Cascade)
+  fileName         String
+  mimeType         String
+  sizeBytes        Int
+  contentId        String?       // CID for inline images (without angle brackets)
+  disposition      String        // "attachment" | "inline"
+  inlineData       String?       // base64-encoded for small files
+  provider         String        // "gmail" | "zoho"
+  providerMsgId    String        // Gmail/Zoho message ID
+  providerAttachId String?       // Gmail attachmentId (null for small inline data)
+  createdAt        DateTime      @default(now())
+
+  @@index([shop])
+  @@index([emailId])
 }
 
 model ReplyDraft {

@@ -14,6 +14,7 @@ import { AnalysisDisplay } from "../components/SupportAnalysisDisplay";
 import type { SupportAnalysisExtended } from "../lib/support/orchestrator";
 import type { MailProvider } from "../lib/mail/types";
 import { decodeHtmlEntities } from "../lib/gmail/client";
+import { sanitizeEmailHtml, buildCidMap } from "../lib/mail/sanitize-html";
 import { buildReplySubject } from "../lib/support/draft-subject";
 import prisma from "../db.server";
 import { recordStateTransition } from "../lib/support/thread-state-history";
@@ -46,6 +47,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       take: 500,
       include: {
         replyDraft: { include: { attachments: true } },
+        incomingAttachments: {
+          select: { id: true, fileName: true, mimeType: true, sizeBytes: true, disposition: true, contentId: true, inlineData: true },
+        },
       },
     });
 
@@ -75,6 +79,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         distinct: ["canonicalThreadId"],
         include: {
           replyDraft: { include: { attachments: true } },
+          incomingAttachments: {
+            select: { id: true, fileName: true, mimeType: true, sizeBytes: true, disposition: true, contentId: true, inlineData: true },
+          },
         },
       });
       extraRows = analyzedPerThread.filter((r) => !existingIds.has(r.id));
@@ -511,6 +518,16 @@ function serializeThreadState(t: {
   };
 }
 
+interface IncomingAttachment {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  disposition: string;
+  contentId: string | null;
+  inlineData: string | null;
+}
+
 interface SerializedEmail {
   id: string;
   externalMessageId: string;
@@ -521,6 +538,8 @@ interface SerializedEmail {
   subject: string;
   snippet: string;
   bodyText: string;
+  bodyHtml: string;
+  incomingAttachments: IncomingAttachment[];
   receivedAt: string;
   tier1Result: string | null;
   tier2Result: string | null;
@@ -556,6 +575,7 @@ function serializeEmail(row: {
   subject: string;
   snippet: string;
   bodyText: string;
+  bodyHtml: string;
   receivedAt: Date;
   tier1Result: string | null;
   tier2Result: string | null;
@@ -563,6 +583,15 @@ function serializeEmail(row: {
   processingStatus: string;
   analysisResult: string | null;
   errorMessage: string | null;
+  incomingAttachments: Array<{
+    id: string;
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+    disposition: string;
+    contentId: string | null;
+    inlineData: string | null;
+  }>;
   replyDraft?: {
     id: string;
     body: string | null;
@@ -598,6 +627,8 @@ function serializeEmail(row: {
     subject: decodeHtmlEntities(row.subject),
     snippet: decodeHtmlEntities(row.snippet),
     bodyText: decodeHtmlEntities(row.bodyText),
+    bodyHtml: row.bodyHtml,
+    incomingAttachments: row.incomingAttachments,
     receivedAt: row.receivedAt.toISOString(),
     tier1Result: row.tier1Result,
     tier2Result: row.tier2Result,
@@ -1201,6 +1232,31 @@ function normalizeEmailBody(raw: string): string {
     .trimEnd();
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function EmailHtmlBody({ html }: { html: string }) {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const handleLoad = () => {
+    const iframe = iframeRef.current;
+    if (!iframe?.contentDocument?.body) return;
+    iframe.style.height = iframe.contentDocument.body.scrollHeight + 4 + "px";
+  };
+  return (
+    <iframe
+      ref={iframeRef}
+      srcDoc={html}
+      sandbox="allow-same-origin"
+      onLoad={handleLoad}
+      title="Email body"
+      style={{ border: "none", width: "100%", minHeight: "60px", display: "block" }}
+    />
+  );
+}
+
 function EmailMessageBlock({
   email,
   idx,
@@ -1217,8 +1273,15 @@ function EmailMessageBlock({
   const direction = getMessageDirection(email, connectedEmail);
   const body = normalizeEmailBody(email.bodyText);
   const PREVIEW_LENGTH = 300;
-  const needsToggle = body.length > PREVIEW_LENGTH;
+
+  const cidMap = buildCidMap(email.incomingAttachments);
+  const sanitizedHtml = email.bodyHtml ? sanitizeEmailHtml(email.bodyHtml, cidMap) : null;
+  const hasHtmlBody = !!sanitizedHtml;
+
+  const needsToggle = hasHtmlBody || body.length > PREVIEW_LENGTH;
   const [expanded, setExpanded] = useState(false);
+
+  const fileAttachments = email.incomingAttachments.filter((a) => a.disposition === "attachment");
 
   return (
     <s-box padding="base" background="subdued" borderRadius="base">
@@ -1254,11 +1317,51 @@ function EmailMessageBlock({
           </div>
         </button>
 
-        <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: "0.875rem", lineHeight: "1.6", fontFamily: "-apple-system, BlinkMacSystemFont, 'San Francisco', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" }}>
-          {expanded
-            ? body
-            : body.slice(0, PREVIEW_LENGTH) + (needsToggle ? "…" : "")}
-        </div>
+        {expanded ? (
+          hasHtmlBody ? (
+            <EmailHtmlBody html={sanitizedHtml!} />
+          ) : (
+            <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: "0.875rem", lineHeight: "1.6" }}>
+              {body}
+            </div>
+          )
+        ) : (
+          <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: "0.875rem", lineHeight: "1.6" }}>
+            {body.slice(0, PREVIEW_LENGTH) + (needsToggle ? "…" : "")}
+          </div>
+        )}
+
+        {fileAttachments.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "4px" }}>
+            {fileAttachments.map((att) => (
+              <a
+                key={att.id}
+                href={`/api/incoming-attachment?id=${att.id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  padding: "4px 10px",
+                  fontSize: "12px",
+                  fontWeight: 500,
+                  borderRadius: "9999px",
+                  border: "1px solid var(--ui-slate-200)",
+                  background: "var(--ui-slate-100)",
+                  color: "var(--ui-slate-700)",
+                  textDecoration: "none",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                📎 {att.fileName}
+                <span style={{ color: "var(--ui-slate-400)", fontSize: "11px" }}>
+                  {formatBytes(att.sizeBytes)}
+                </span>
+              </a>
+            ))}
+          </div>
+        )}
       </s-stack>
     </s-box>
   );

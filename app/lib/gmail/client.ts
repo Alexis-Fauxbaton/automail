@@ -1,6 +1,9 @@
 import { google, type gmail_v1 } from "googleapis";
 import { getAuthenticatedClient } from "./auth";
-import type { MailMessage } from "../mail/types";
+import type { MailAttachment, MailMessage } from "../mail/types";
+
+/** Files smaller than this are embedded as base64 in the DB (inlineData). */
+const INLINE_EMBED_LIMIT = 200 * 1024; // 200 KB
 
 export type GmailMessage = MailMessage;
 
@@ -81,6 +84,8 @@ function parseGmailMessage(data: gmail_v1.Schema$Message): GmailMessage {
   const subject = headers["subject"] ?? "(no subject)";
 
   const bodyText = extractPlainBody(data.payload);
+  const bodyHtml = data.payload ? (findHtmlBody(data.payload) ?? undefined) : undefined;
+  const attachments = extractAttachments(data.payload);
 
   return {
     id: data.id!,
@@ -89,11 +94,64 @@ function parseGmailMessage(data: gmail_v1.Schema$Message): GmailMessage {
     fromName,
     subject,
     bodyText,
+    bodyHtml,
     snippet: data.snippet ?? "",
     receivedAt: new Date(parseInt(data.internalDate ?? "0", 10)),
     labelIds: data.labelIds ?? [],
     headers,
+    attachments,
   };
+}
+
+/** Walk the MIME tree and collect all attachments and inline images. */
+function extractAttachments(payload: gmail_v1.Schema$MessagePart | undefined): MailAttachment[] {
+  if (!payload) return [];
+  const results: MailAttachment[] = [];
+  walkPartsForAttachments(payload, results);
+  return results;
+}
+
+function walkPartsForAttachments(
+  part: gmail_v1.Schema$MessagePart,
+  results: MailAttachment[],
+): void {
+  const mimeType = part.mimeType ?? "";
+
+  // Skip multipart containers and plain text/html body parts (they're the body, not attachments)
+  if (mimeType.startsWith("multipart/")) {
+    for (const child of part.parts ?? []) {
+      walkPartsForAttachments(child, results);
+    }
+    return;
+  }
+
+  // Resolve disposition and Content-ID from part headers
+  const partHeaders: Record<string, string> = {};
+  for (const h of part.headers ?? []) {
+    if (h.name && h.value) partHeaders[h.name.toLowerCase()] = h.value;
+  }
+  const rawDisposition = partHeaders["content-disposition"] ?? "";
+  const isInlineDisposition = rawDisposition.toLowerCase().startsWith("inline");
+  const rawContentId = partHeaders["content-id"] ?? "";
+  const contentId = rawContentId.replace(/^<|>$/g, "").trim() || undefined;
+
+  // A part is an attachment candidate if it:
+  // - has a filename, OR
+  // - has a Content-ID (inline image), OR
+  // - has an explicit "attachment" disposition
+  const hasBody = !!(part.body?.attachmentId || (part.body?.data && (part.body.size ?? 0) > 0));
+  const isBodyPart = (mimeType === "text/plain" || mimeType === "text/html") && !part.filename && !contentId;
+  if (!hasBody || isBodyPart) return;
+
+  const fileName = part.filename || contentId?.split("@")[0] || `attachment-${results.length + 1}`;
+  const sizeBytes = part.body?.size ?? 0;
+  const inlineData = (part.body?.data && sizeBytes <= INLINE_EMBED_LIMIT)
+    ? part.body.data
+    : undefined;
+  const providerAttachId = part.body?.attachmentId ?? undefined;
+  const disposition: MailAttachment["disposition"] = isInlineDisposition ? "inline" : "attachment";
+
+  results.push({ fileName, mimeType, sizeBytes, contentId, disposition, inlineData, providerAttachId });
 }
 
 /**

@@ -1,6 +1,6 @@
 import prisma from "../../db.server";
 import { getZohoAccessToken } from "./auth";
-import type { MailMessage, MailClient } from "../mail/types";
+import type { MailAttachment, MailMessage, MailClient } from "../mail/types";
 
 // Reuse cleanHtml and decodeHtmlEntities from gmail client
 import { cleanHtml, decodeHtmlEntities } from "../gmail/client";
@@ -249,6 +249,11 @@ export async function createZohoClient(shop: string): Promise<MailClient> {
       const fromAddress = extractEmail(detail.fromAddress);
       const fromName = decodeHtmlEntities(extractName(detail.fromAddress) || detail.sender || "");
 
+      // Best-effort: fetch attachment metadata for this message
+      const zohoAttachments = await fetchZohoAttachmentsMeta(
+        token, accountId, folderId, String(detail.messageId),
+      ).catch(() => []);
+
       return {
         id: String(detail.messageId),
         threadId: String(detail.threadId ?? detail.messageId),
@@ -256,12 +261,14 @@ export async function createZohoClient(shop: string): Promise<MailClient> {
         fromName,
         subject: decodeHtmlEntities(detail.subject || "(no subject)"),
         bodyText,
+        bodyHtml: htmlBody || undefined,
         snippet: detail.summary ? decodeHtmlEntities(detail.summary) : bodyText.slice(0, 200),
         receivedAt: new Date(parseInt(detail.receivedTime, 10)),
         // Use a virtual "SENT" label when the message lives in the Sent folder
         // so the pipeline can reliably detect outgoing messages on Zoho too.
         labelIds: (folders.sent && folderId === folders.sent) ? ["SENT"] : [],
         headers: {},
+        attachments: zohoAttachments,
       } satisfies MailMessage;
     },
 
@@ -357,6 +364,37 @@ export async function createZohoClient(shop: string): Promise<MailClient> {
 }
 
 // --- Helpers ---
+
+/** Fetch attachment metadata for a Zoho message (best-effort, returns [] on error). */
+async function fetchZohoAttachmentsMeta(
+  accessToken: string,
+  accountId: string,
+  folderId: string,
+  messageId: string,
+): Promise<MailAttachment[]> {
+  const data = (await zohoFetch(
+    accessToken,
+    `/api/accounts/${accountId}/folders/${folderId}/messages/${messageId}/attachments`,
+  )) as {
+    data?: Array<{
+      attachmentId?: string;
+      fileName?: string;
+      mimeType?: string;
+      size?: number;
+      contentId?: string;
+      isInline?: boolean;
+    }>;
+  };
+  return (data.data ?? []).map((att) => ({
+    fileName: att.fileName ?? "attachment",
+    mimeType: att.mimeType ?? "application/octet-stream",
+    sizeBytes: att.size ?? 0,
+    contentId: att.contentId ? att.contentId.replace(/^<|>$/g, "") : undefined,
+    disposition: att.isInline ? ("inline" as const) : ("attachment" as const),
+    inlineData: undefined,
+    providerAttachId: att.attachmentId,
+  }));
+}
 
 function extractEmail(addr: string): string {
   const match = addr.match(/<([^>]+)>/);

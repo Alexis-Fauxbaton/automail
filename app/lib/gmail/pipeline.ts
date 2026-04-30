@@ -1,7 +1,7 @@
 import prisma from "../../db.server";
 import type { AdminGraphqlClient } from "../support/shopify/order-search";
 import { analyzeSupportEmail } from "../support/orchestrator";
-import type { MailClient, MailMessage } from "../mail/types";
+import type { MailAttachment, MailClient, MailMessage } from "../mail/types";
 import type { ConversationMessage } from "../support/types";
 import { createGmailClient } from "./mail-client";
 import { createZohoClient } from "../zoho/client";
@@ -223,6 +223,41 @@ async function _processNewEmails(
   return report;
 }
 
+/**
+ * Persist attachments for an incoming email. Idempotent: skips records that
+ * already exist (identified by emailId + fileName + sizeBytes).
+ */
+async function persistEmailAttachments(
+  emailId: string,
+  shop: string,
+  provider: string,
+  providerMsgId: string,
+  attachments: MailAttachment[],
+): Promise<void> {
+  const existing = await prisma.incomingEmailAttachment.findMany({
+    where: { emailId },
+    select: { id: true },
+  });
+  if (existing.length > 0) return; // already persisted
+
+  await prisma.incomingEmailAttachment.createMany({
+    data: attachments.map((att) => ({
+      shop,
+      emailId,
+      fileName: att.fileName,
+      mimeType: att.mimeType,
+      sizeBytes: att.sizeBytes,
+      contentId: att.contentId ?? null,
+      disposition: att.disposition,
+      inlineData: att.inlineData ?? null,
+      provider,
+      providerMsgId,
+      providerAttachId: att.providerAttachId ?? null,
+    })),
+    skipDuplicates: true,
+  });
+}
+
 async function isCancelled(shop: string, syncStartedAt: Date): Promise<boolean> {
   const fresh = await prisma.mailConnection.findUnique({
     where: { shop },
@@ -271,8 +306,11 @@ async function ingestAndPrefilter(
     rfcReferences,
   });
 
+  const msgAttachments = msg.attachments ?? [];
+  const hasAttachments = msgAttachments.length > 0;
+
   // Upsert the base record
-  await prisma.incomingEmail.upsert({
+  const upserted = await prisma.incomingEmail.upsert({
     where: { shop_externalMessageId: { shop, externalMessageId: msgId } },
     create: {
       shop,
@@ -287,6 +325,8 @@ async function ingestAndPrefilter(
       subject: msg.subject,
       snippet: msg.snippet,
       bodyText: msg.bodyText,
+      bodyHtml: msg.bodyHtml ?? "",
+      hasAttachments,
       receivedAt: msg.receivedAt,
       isKnownCustomer: isKnown,
       processingStatus: isOutgoing ? "outgoing" : "ingested",
@@ -299,8 +339,17 @@ async function ingestAndPrefilter(
       ...(rfcMessageId ? { rfcMessageId } : {}),
       ...(inReplyTo ? { inReplyTo } : {}),
       ...(rfcReferences ? { rfcReferences } : {}),
+      // Always refresh HTML body and attachments when re-encountering a message.
+      ...(msg.bodyHtml !== undefined ? { bodyHtml: msg.bodyHtml } : {}),
+      ...(hasAttachments ? { hasAttachments } : {}),
     },
+    select: { id: true },
   });
+
+  // Persist attachments (idempotent: only insert if none exist yet)
+  if (msgAttachments.length > 0) {
+    await persistEmailAttachments(upserted.id, shop, provider, msg.id, msgAttachments);
+  }
 
   // Refresh cached thread stats (lastMessageAt, lastMessageId, count).
   await refreshThreadStats(canonicalThreadId);
