@@ -385,6 +385,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const client = await getMailClient(session.shop, conn.provider);
       const msg = await client.getMessage(record.externalMessageId);
       const msgAttachments = msg.attachments ?? [];
+      console.log(`[refresh_email_html] email=${emailId} hasHtml=${!!msg.bodyHtml} attachments=${msgAttachments.length}`);
       await prisma.incomingEmail.update({
         where: { id: emailId },
         data: {
@@ -395,6 +396,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       if (msgAttachments.length > 0) {
         await persistEmailAttachments(emailId, session.shop, conn.provider, record.externalMessageId, msgAttachments);
       }
+      console.log(`[refresh_email_html] done email=${emailId}`);
     } catch (err) {
       console.error("[refresh_email_html] failed:", err);
     }
@@ -1319,6 +1321,7 @@ function EmailMessageBlock({
   // Auto-refresh HTML body and attachments for emails synced before this feature.
   // Fires on mount; module-level Set prevents re-fetching the same email twice per session.
   const refreshFetcher = useFetcher();
+  const refreshPending = refreshFetcher.state !== "idle";
   useEffect(() => {
     if (!email.bodyHtml && !_refreshedEmailIds.has(email.id) && refreshFetcher.state === "idle") {
       _refreshedEmailIds.add(email.id);
@@ -1329,6 +1332,15 @@ function EmailMessageBlock({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Auto-expand when bodyHtml loads for the first time (transitions from empty to populated).
+  const prevBodyHtmlRef = useRef(email.bodyHtml);
+  useEffect(() => {
+    if (email.bodyHtml && !prevBodyHtmlRef.current) {
+      setExpanded(true);
+    }
+    prevBodyHtmlRef.current = email.bodyHtml;
+  }, [email.bodyHtml]);
 
   const fileAttachments = email.incomingAttachments.filter((a) => a.disposition === "attachment");
 
@@ -1358,7 +1370,10 @@ function EmailMessageBlock({
               </s-badge>
             </span>
             {isLatest && total > 1 && <s-badge tone="info">{t("inbox.pillLatest")}</s-badge>}
-            {needsToggle && (
+            {refreshPending && (
+              <span style={{ marginLeft: "auto", fontSize: "0.8125rem", color: "#6b7280" }}>⟳</span>
+            )}
+            {!refreshPending && needsToggle && (
               <span style={{ marginLeft: "auto", fontSize: "0.8125rem", color: "#6b7280" }}>
                 {expanded ? t("inbox.collapse") : t("inbox.expand")}
               </span>
