@@ -28,6 +28,10 @@ import {
   MailIcon,
 } from "../components/ui";
 
+// Tracks email IDs for which an HTML body refresh was already submitted
+// this browser session, so we don't re-fetch on every remount.
+const _refreshedEmailIds = new Set<string>();
+
 // ---------------------------------------------------------------------------
 // Loader
 // ---------------------------------------------------------------------------
@@ -1280,7 +1284,7 @@ function EmailHtmlBody({ html }: { html: string }) {
     <iframe
       ref={iframeRef}
       srcDoc={html}
-      sandbox="allow-same-origin"
+      sandbox="allow-popups"
       onLoad={handleLoad}
       title="Email body"
       style={{ border: "none", width: "100%", minHeight: "60px", display: "block" }}
@@ -1313,17 +1317,18 @@ function EmailMessageBlock({
   const [expanded, setExpanded] = useState(false);
 
   // Auto-refresh HTML body and attachments for emails synced before this feature.
+  // Fires on mount; module-level Set prevents re-fetching the same email twice per session.
   const refreshFetcher = useFetcher();
-  const [refreshTriggered, setRefreshTriggered] = useState(false);
   useEffect(() => {
-    if (expanded && !email.bodyHtml && !refreshTriggered && refreshFetcher.state === "idle") {
-      setRefreshTriggered(true);
+    if (!email.bodyHtml && !_refreshedEmailIds.has(email.id) && refreshFetcher.state === "idle") {
+      _refreshedEmailIds.add(email.id);
       refreshFetcher.submit(
         { _action: "refresh_email_html", emailId: email.id },
         { method: "post" },
       );
     }
-  }, [expanded, email.bodyHtml, email.id, refreshTriggered, refreshFetcher]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const fileAttachments = email.incomingAttachments.filter((a) => a.disposition === "attachment");
 

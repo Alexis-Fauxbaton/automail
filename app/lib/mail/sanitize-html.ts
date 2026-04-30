@@ -54,6 +54,13 @@ export function sanitizeEmailHtml(
         ? `src='data:${att.mimeType};base64,${att.inlineData}'`
         : "src=''";
     })
+    // Strip relative src attributes — they'd resolve to our app's routes and cause 404s.
+    // Absolute https:// and data: are kept; cid: was already handled above.
+    .replace(/src\s*=\s*"(?!https?:\/\/|data:)([^"]*)"/gi, 'src=""')
+    .replace(/src\s*=\s*'(?!https?:\/\/|data:)([^']*)'/gi, "src=''")
+    // Strip relative href attributes (keep https://, mailto:, #, javascript already handled)
+    .replace(/href\s*=\s*"(?!https?:\/\/|mailto:|#)([^"]*)"/gi, 'href="#"')
+    .replace(/href\s*=\s*'(?!https?:\/\/|mailto:|#)([^']*)'/gi, "href='#'")
     // Make all links open in a new tab safely
     .replace(/<a(\s[^>]*)?>/gi, (match) => {
       if (/target=/i.test(match)) return match;
