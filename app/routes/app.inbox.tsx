@@ -18,6 +18,8 @@ import { sanitizeEmailHtml, buildCidMap } from "../lib/mail/sanitize-html";
 import { buildReplySubject } from "../lib/support/draft-subject";
 import prisma from "../db.server";
 import { recordStateTransition } from "../lib/support/thread-state-history";
+import { isAnalysisStale, ANALYSIS_FRESHNESS_MS } from "../lib/support/refresh-stale-analyses";
+import type { AdminGraphqlClient } from "../lib/support/shopify/order-search";
 import {
   MetricCard,
   SegmentedTabs,
@@ -284,6 +286,33 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 // Action
 // ---------------------------------------------------------------------------
 
+/**
+ * Reanalyze the email if its last analysis is older than 1h (or never ran).
+ * Used right before draft regeneration / refinement so the draft is built
+ * from fresh tracking + Shopify data without forcing the merchant to click.
+ * Failures are logged but never block the originating action.
+ */
+async function maybeRefreshAnalysis(
+  emailId: string,
+  admin: AdminGraphqlClient,
+  shop: string,
+): Promise<void> {
+  if (!emailId) return;
+  const record = await prisma.incomingEmail.findUnique({
+    where: { id: emailId },
+    select: { shop: true, lastAnalyzedAt: true, processingStatus: true },
+  });
+  if (!record || record.shop !== shop) return;
+  // Only refresh emails that have already been analyzed at least once.
+  if (record.processingStatus !== "analyzed") return;
+  if (!isAnalysisStale(record.lastAnalyzedAt, ANALYSIS_FRESHNESS_MS.draftTrigger)) return;
+  try {
+    await reanalyzeEmail(emailId, admin, shop);
+  } catch (err) {
+    console.error(`[inbox] auto-reanalyze before draft failed for email=${emailId}:`, err);
+  }
+}
+
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
   const formData = await request.formData();
@@ -366,6 +395,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent === "redraft") {
     const emailId = String(formData.get("emailId") ?? "");
+    await maybeRefreshAnalysis(emailId, admin, session.shop);
     await redraftEmail(emailId, session.shop);
     return { reanalyzed: null, report: null, disconnected: false, refined: null };
   }
@@ -411,6 +441,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (!record || record.shop !== session.shop || !currentDraft || !instructions) {
       return { report: null, disconnected: false, reanalyzed: null, refined: null };
     }
+    await maybeRefreshAnalysis(emailId, admin, session.shop);
     const newDraft = await refineDraft(currentDraft, instructions, {
       subject: record.subject,
       body: record.bodyText,
@@ -583,6 +614,7 @@ interface SerializedEmail {
   isKnownCustomer: boolean;
   processingStatus: string;
   analysisResult: SupportAnalysisExtended | null;
+  lastAnalyzedAt: string | null;
   draftReply: string | null;
   draftHistory: string[];
   draftCC: string | null;
@@ -619,6 +651,7 @@ function serializeEmail(row: {
   isKnownCustomer: boolean;
   processingStatus: string;
   analysisResult: string | null;
+  lastAnalyzedAt: Date | null;
   errorMessage: string | null;
   incomingAttachments: Array<{
     id: string;
@@ -672,6 +705,7 @@ function serializeEmail(row: {
     isKnownCustomer: row.isKnownCustomer,
     processingStatus: row.processingStatus,
     analysisResult: parsed,
+    lastAnalyzedAt: row.lastAnalyzedAt ? row.lastAnalyzedAt.toISOString() : null,
     draftReply: rd?.body ?? null,
     draftHistory: history,
     draftCC: rd?.cc ?? null,
@@ -1730,10 +1764,8 @@ function DraftBlock({ email, threadSenderEmail }: {
   }, [allVersions.length]);
 
   const refineFetcher = useFetcher();
-  const regenerateFetcher = useFetcher();
   const redraftFetcher = useFetcher();
   const refining = refineFetcher.state !== "idle";
-  const regenerating = regenerateFetcher.state !== "idle";
   const redrafting = redraftFetcher.state !== "idle";
 
   async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
@@ -1886,28 +1918,21 @@ function DraftBlock({ email, threadSenderEmail }: {
                 <s-text-field label={t("inbox.adjustDraft")} name="instructions"
                   placeholder="e.g. Be more formal, mention refund policy, shorten…" />
               </div>
-              <s-button type="submit" variant="secondary" disabled={refining || regenerating}>
+              <s-button type="submit" variant="secondary" disabled={refining || redrafting}>
                 {refining ? t("inbox.refining") : t("inbox.refineWithAi")}
               </s-button>
             </s-stack>
           </refineFetcher.Form>
         )}
 
-        <div style={{ display: "flex", gap: "8px", borderTop: "1px solid var(--p-color-border)", paddingTop: "8px" }}>
+        <div style={{ display: "flex", gap: "8px", alignItems: "center", borderTop: "1px solid var(--p-color-border)", paddingTop: "8px" }}>
           <redraftFetcher.Form method="post">
             <input type="hidden" name="_action" value="redraft" />
             <input type="hidden" name="emailId" value={email.id} />
-            <s-button type="submit" variant="secondary" size="slim" disabled={redrafting || regenerating || refining}>
+            <s-button type="submit" variant="secondary" size="slim" disabled={redrafting || refining}>
               {redrafting ? t("inbox.regenerating") : t("inbox.regenerateDraft")}
             </s-button>
           </redraftFetcher.Form>
-          <regenerateFetcher.Form method="post">
-            <input type="hidden" name="_action" value="reanalyze" />
-            <input type="hidden" name="emailId" value={email.id} />
-            <s-button type="submit" variant="tertiary" size="slim" disabled={regenerating || redrafting || refining}>
-              {regenerating ? t("inbox.refreshing") : t("inbox.updateTracking")}
-            </s-button>
-          </regenerateFetcher.Form>
         </div>
 
       </s-stack>
@@ -2212,7 +2237,7 @@ function ThreadDetailPanel({
                   <span className="ui-pill ui-pill--warning" style={{ fontSize: "10px" }}>{t("inbox.pillBasedOnPrevious")}</span>
                 )}
               </div>
-              <AnalysisDisplay analysis={analysisEmail.analysisResult} />
+              <AnalysisDisplay analysis={analysisEmail.analysisResult} lastAnalyzedAt={analysisEmail.lastAnalyzedAt} />
             </div>
           )}
         </div>

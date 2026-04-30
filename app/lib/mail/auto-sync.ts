@@ -22,6 +22,7 @@ import { processNewEmails } from "../gmail/pipeline";
 import { unauthenticated } from "../../shopify.server";
 import { runManualBackfill, runOnboardingBackfill } from "./backfill";
 import { recomputeAllOpenThreads, recomputeAllThreadsForShop } from "../support/thread-state";
+import { refreshStaleAnalysesForShop } from "../support/refresh-stale-analyses";
 import {
   claimNextJob,
   enqueueJob,
@@ -271,6 +272,20 @@ async function runSyncForShop(
   console.log(
     `[auto-sync] shop=${shop} fetched=${report.total} support=${report.supportClient} errors=${report.errors}`,
   );
+
+  // Best-effort daily refresh of "to handle" thread analyses so tracking
+  // and Shopify data stay at most ~24h stale even if the merchant doesn't
+  // click anything. Failures are isolated per email and never abort sync.
+  try {
+    const res = await refreshStaleAnalysesForShop(shop, admin);
+    if (res.refreshed > 0 || res.errors > 0) {
+      console.log(
+        `[auto-sync] shop=${shop} stale-refresh: refreshed=${res.refreshed} errors=${res.errors}`,
+      );
+    }
+  } catch (err) {
+    console.error(`[auto-sync] shop=${shop} stale-refresh failed:`, err);
+  }
 }
 
 

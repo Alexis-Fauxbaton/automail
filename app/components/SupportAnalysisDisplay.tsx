@@ -22,11 +22,12 @@ export function ConfidenceBadge({ confidence }: { confidence: SupportAnalysisExt
   return <s-badge tone={tone}>{confidence.toUpperCase()}</s-badge>;
 }
 
-function Card({ title, children, footer }: { title: string; children: ReactNode; footer?: ReactNode }) {
+function Card({ title, children, footer, right }: { title: string; children: ReactNode; footer?: ReactNode; right?: ReactNode }) {
   return (
     <div style={{ border: "1px solid #e1e3e5", borderRadius: "10px", overflow: "hidden", background: "#fff" }}>
-      <div style={{ padding: "7px 14px", background: "#f6f6f7", borderBottom: "1px solid #e1e3e5", fontSize: "11px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "#6d7175" }}>
-        {title}
+      <div style={{ padding: "7px 14px", background: "#f6f6f7", borderBottom: "1px solid #e1e3e5", fontSize: "11px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "#6d7175", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
+        <span>{title}</span>
+        {right && <span style={{ textTransform: "none", fontWeight: 400, letterSpacing: "normal" }}>{right}</span>}
       </div>
       <div style={{ padding: "14px 16px" }}>{children}</div>
       {footer && (
@@ -189,8 +190,27 @@ export function WarningsBlock({ warnings }: { warnings: SupportAnalysisExtended[
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export function AnalysisDisplay({ analysis }: { analysis: SupportAnalysisExtended }) {
+export function AnalysisDisplay({
+  analysis,
+  lastAnalyzedAt,
+}: {
+  analysis: SupportAnalysisExtended;
+  /** ISO timestamp of the last full analysis (Shopify + tracking). */
+  lastAnalyzedAt?: string | null;
+}) {
   const { t } = useTranslation();
+
+  function relativeTime(iso: string): string {
+    const diffMs = Date.now() - new Date(iso).getTime();
+    const mins = Math.floor(diffMs / 60_000);
+    if (mins < 1) return t("inbox.justNow");
+    if (mins < 60) return t("inbox.timeAgoMinutes", { n: mins });
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return t("inbox.timeAgoHours", { n: hours });
+    const days = Math.floor(hours / 24);
+    if (days < 7) return t("inbox.timeAgoDays", { n: days });
+    return new Date(iso).toLocaleDateString();
+  }
 
   const conversation = analysis.conversation ?? {
     messageCount: 1,
@@ -246,6 +266,13 @@ export function AnalysisDisplay({ analysis }: { analysis: SupportAnalysisExtende
 
       <Card
         title={t("analysis.trackingNumber")}
+        right={
+          <span style={{ fontSize: "12px", color: "#6d7175" }}>
+            {lastAnalyzedAt
+              ? t("inbox.lastUpdated", { when: relativeTime(lastAnalyzedAt) })
+              : t("inbox.lastUpdatedNever")}
+          </span>
+        }
         footer={crawledContexts.length > 0
           ? <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
               {crawledContexts.map((ctx, i) => (

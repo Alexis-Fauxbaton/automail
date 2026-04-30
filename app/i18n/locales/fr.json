@@ -229,6 +229,8 @@
     "regenerating": "Regénération…",
     "updateTracking": "Mettre à jour le tracking",
     "refreshing": "Actualisation…",
+    "lastUpdated": "Mis à jour {{when}}",
+    "lastUpdatedNever": "Pas encore mis à jour",
     "editableDraft": "Brouillon modifiable",
     "draftVersion": "Version {{n}} (lecture seule)",
     "adjustDraft": "Personnaliser le brouillon",

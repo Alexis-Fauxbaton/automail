@@ -185,6 +185,13 @@ model IncomingEmail {
   // the JSON blob — written at the same time in the pipeline.
   detectedIntent      String?  // SupportIntent enum value
   analysisConfidence  String?  // "high" | "medium" | "low"
+  // Timestamp of the last full analysis (Shopify + tracking refresh).
+  // Used to:
+  //   - drive the daily auto-refresh of "to handle" threads,
+  //   - trigger an automatic refresh when the user generates / refines
+  //     a draft and the last analysis is older than 1h,
+  //   - show the merchant when the data was last refreshed.
+  lastAnalyzedAt      DateTime?
   errorMessage     String?
   // HTML body of the email (sanitized at ingestion time, may be empty)
   bodyHtml         String   @default("")
@@ -206,6 +213,7 @@ model IncomingEmail {
   @@index([shop, rfcMessageId])
   @@index([shop, detectedIntent])
   @@index([shop, analysisConfidence])
+  @@index([shop, lastAnalyzedAt])
 }
 
 // Attachments and inline images extracted from incoming emails.

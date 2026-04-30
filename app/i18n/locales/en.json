@@ -229,6 +229,8 @@
     "regenerating": "Regenerating…",
     "updateTracking": "Update tracking",
     "refreshing": "Refreshing…",
+    "lastUpdated": "Updated {{when}}",
+    "lastUpdatedNever": "Not yet updated",
     "editableDraft": "Editable draft",
     "draftVersion": "Version {{n}} (read-only)",
     "adjustDraft": "Adjust draft",

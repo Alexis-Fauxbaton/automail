@@ -666,6 +666,7 @@ async function classifyAndDraft(
         // dashboards / rules don't have to parse JSON.
         detectedIntent: analysis.intent,
         analysisConfidence: analysis.confidence,
+        lastAnalyzedAt: new Date(),
       },
     });
     if (record.canonicalThreadId) {
@@ -931,6 +932,7 @@ export async function reanalyzeEmail(
       analysisResult: JSON.stringify(analysis),
       detectedIntent: analysis.intent,
       analysisConfidence: analysis.confidence,
+      lastAnalyzedAt: new Date(),
     },
   });
   if (analysis.draftReply) {
