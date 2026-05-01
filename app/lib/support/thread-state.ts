@@ -288,44 +288,29 @@ export async function recomputeThreadState(
     thread.previousOperationalState !== null &&
     thread.operationalStateUpdatedAt !== null;
   if (wasManuallyResolved) {
-    const resolvedAt = thread.operationalStateUpdatedAt!.getTime();
+    // wasManuallyResolved guarantees operationalStateUpdatedAt is non-null.
+    const resolvedAt = (thread.operationalStateUpdatedAt as Date).getTime();
     const hasNewIncoming =
       lastCustomerAt !== null && lastCustomerAt.getTime() > resolvedAt;
     if (!hasNewIncoming) {
       // No new customer message since the manual resolve — honour it.
       // Still update supportNature and structuredState.
-      const structured: StructuredThreadState = {
-        messageCount: messages.length,
-        incomingCount,
-        outgoingCount,
-        orderResolved: !!thread.resolvedOrderNumber,
-        trackingResolved: !!thread.resolvedTrackingNumber,
-        resolvedOrderNumber: thread.resolvedOrderNumber,
-        resolvedTrackingNumber: thread.resolvedTrackingNumber,
-        resolutionConfidence:
-          (thread.resolutionConfidence as StructuredThreadState["resolutionConfidence"]) ?? "none",
-        lastCustomerMessageAt: lastCustomerAt?.toISOString() ?? null,
-        lastAgentMessageAt: lastAgentAt?.toISOString() ?? null,
-        lastDirection,
+      const resolvedStructured: StructuredThreadState = {
+        ...structured,
         awaitingCustomer: false,
         awaitingMerchant: false,
         replyNeeded: false,
-        hasDraft,
-        supportNature: finalNature,
-        operationalState: "resolved",
-        trueLatestMessageId: trueLatest?.id ?? null,
-        targetMessageId,
-        historyStatus: (thread.historyStatus as StructuredThreadState["historyStatus"]) ?? "unknown",
+        operationalState: "resolved" as const,
       };
       await prisma.thread.update({
         where: { id: canonicalThreadId },
         data: {
           supportNature: finalNature,
           supportNatureUpdatedAt: finalNature !== thread.supportNature ? now : undefined,
-          structuredState: JSON.stringify(structured),
+          structuredState: JSON.stringify(resolvedStructured),
         },
       });
-      return structured;
+      return resolvedStructured;
     }
     // New incoming after manual resolve — fall through to normal recompute
     // (thread is reopened automatically).

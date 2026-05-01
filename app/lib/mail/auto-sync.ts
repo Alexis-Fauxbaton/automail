@@ -29,6 +29,7 @@ import {
   markJobDone,
   markJobFailed,
   reclaimZombieJobs,
+  type SyncJobKind,
 } from "./job-queue";
 
 const TICK_MS = 60_000;              // check every minute
@@ -126,6 +127,10 @@ async function drainJobQueue(): Promise<void> {
   while (inFlight < MAX_CONCURRENT) {
     const job = await claimNextJob([...runningShops]);
     if (!job) break;
+    // Increment synchronously before firing — prevents the while loop from
+    // over-claiming slots or the same shop within the same tick.
+    inFlight++;
+    runningShops.add(job.shop);
     // Fire-and-forget: each slot runs in parallel. Bookkeeping happens
     // inside runJob's finally block.
     void runJob(job);
@@ -156,11 +161,10 @@ async function enqueueRecomputeIfNeeded(): Promise<void> {
 async function runJob(job: {
   id: string;
   shop: string;
-  kind: "sync" | "backfill" | "resync" | "recompute";
+  kind: SyncJobKind;
   params: Record<string, unknown>;
 }): Promise<void> {
-  runningShops.add(job.shop);
-  inFlight++;
+  // bookkeeping moved to drainJobQueue
   const startedAt = Date.now();
   try {
     switch (job.kind) {
@@ -218,6 +222,8 @@ async function runJob(job: {
         );
         break;
       }
+      default:
+        throw new Error(`[auto-sync] unknown job kind: ${job.kind}`);
     }
     await markJobDone(job.id);
     console.log(
