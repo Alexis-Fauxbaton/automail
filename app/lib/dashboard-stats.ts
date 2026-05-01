@@ -178,30 +178,32 @@ export async function getKpiStats(
 export async function getDailyBreakdown(
   shop: string,
   start: Date,
-  end: Date
+  end: Date,
 ): Promise<DailyPoint[]> {
-  const emails = await prisma.incomingEmail.findMany({
-    where: { shop, receivedAt: { gte: start, lt: end }, processingStatus: { not: "outgoing" } },
-    select: {
-      receivedAt: true,
-      tier2Result: true,
-      thread: { select: { supportNature: true } },
-    },
-  });
+  type Row = { day: Date; total: bigint; support: bigint };
+  const rows = await prisma.$queryRaw<Row[]>`
+    SELECT
+      DATE_TRUNC('day', e."receivedAt" AT TIME ZONE 'Europe/Paris')::date AS day,
+      COUNT(*)::bigint                                                      AS total,
+      COUNT(*) FILTER (
+        WHERE e."tier2Result" = 'support_client'
+        OR t."supportNature" IN ('confirmed_support', 'probable_support')
+      )::bigint                                                             AS support
+    FROM "IncomingEmail" e
+    LEFT JOIN "Thread" t ON t.id = e."canonicalThreadId"
+    WHERE e.shop = ${shop}
+      AND e."receivedAt" >= ${start}
+      AND e."receivedAt" < ${end}
+      AND e."processingStatus" != 'outgoing'
+    GROUP BY 1
+    ORDER BY 1
+  `;
 
+  // Index results by local-day string for fast lookup
   const byDay = new Map<string, { total: number; support: number }>();
-
-  const SUPPORT_NATURES = new Set(["confirmed_support", "probable_support"]);
-
-  for (const email of emails) {
-    const day = toLocalDay(email.receivedAt);
-    const existing = byDay.get(day) ?? { total: 0, support: 0 };
-    existing.total += 1;
-    const isSupport =
-      email.tier2Result === "support_client" ||
-      SUPPORT_NATURES.has(email.thread?.supportNature ?? "");
-    if (isSupport) existing.support += 1;
-    byDay.set(day, existing);
+  for (const row of rows) {
+    const day = toLocalDay(row.day);
+    byDay.set(day, { total: Number(row.total), support: Number(row.support) });
   }
 
   // Fill days with no emails for a continuous series
@@ -209,14 +211,12 @@ export async function getDailyBreakdown(
   const cursor = new Date(start);
   cursor.setUTCHours(0, 0, 0, 0);
   const endDay = toLocalDay(end);
-
   while (toLocalDay(cursor) <= endDay) {
     const day = toLocalDay(cursor);
     const data = byDay.get(day) ?? { total: 0, support: 0 };
     points.push({ date: day, ...data });
     cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
-
   return points;
 }
 
@@ -313,31 +313,45 @@ export async function getIntentBreakdown(
 export async function getDailyActivityBreakdown(
   shop: string,
   start: Date,
-  end: Date
+  end: Date,
 ): Promise<DailyActivityPoint[]> {
-  const [drafts, sent] = await Promise.all([
-    prisma.replyDraft.findMany({
-      where: { shop, createdAt: { gte: start, lt: end } },
-      select: { createdAt: true },
-    }),
-    prisma.incomingEmail.findMany({
-      where: { shop, receivedAt: { gte: start, lt: end }, processingStatus: "outgoing" },
-      select: { receivedAt: true },
-    }),
+  type DraftRow = { day: Date; count: bigint };
+  type SentRow  = { day: Date; count: bigint };
+  const [draftRows, sentRows] = await Promise.all([
+    prisma.$queryRaw<DraftRow[]>`
+      SELECT
+        DATE_TRUNC('day', "createdAt" AT TIME ZONE 'Europe/Paris')::date AS day,
+        COUNT(*)::bigint AS count
+      FROM "ReplyDraft"
+      WHERE shop = ${shop}
+        AND "createdAt" >= ${start}
+        AND "createdAt" < ${end}
+      GROUP BY 1
+      ORDER BY 1
+    `,
+    prisma.$queryRaw<SentRow[]>`
+      SELECT
+        DATE_TRUNC('day', "receivedAt" AT TIME ZONE 'Europe/Paris')::date AS day,
+        COUNT(*)::bigint AS count
+      FROM "IncomingEmail"
+      WHERE shop = ${shop}
+        AND "receivedAt" >= ${start}
+        AND "receivedAt" < ${end}
+        AND "processingStatus" = 'outgoing'
+      GROUP BY 1
+      ORDER BY 1
+    `,
   ]);
 
   const byDay = new Map<string, { drafts: number; sent: number }>();
-
-  for (const d of drafts) {
-    const day = toLocalDay(d.createdAt);
-    const existing = byDay.get(day) ?? { drafts: 0, sent: 0 };
-    existing.drafts += 1;
-    byDay.set(day, existing);
+  for (const r of draftRows) {
+    const day = toLocalDay(r.day);
+    byDay.set(day, { drafts: Number(r.count), sent: 0 });
   }
-  for (const s of sent) {
-    const day = toLocalDay(s.receivedAt);
+  for (const r of sentRows) {
+    const day = toLocalDay(r.day);
     const existing = byDay.get(day) ?? { drafts: 0, sent: 0 };
-    existing.sent += 1;
+    existing.sent = Number(r.count);
     byDay.set(day, existing);
   }
 
@@ -345,7 +359,6 @@ export async function getDailyActivityBreakdown(
   const cursor = new Date(start);
   cursor.setUTCHours(0, 0, 0, 0);
   const endDay = toLocalDay(end);
-
   while (toLocalDay(cursor) <= endDay) {
     const day = toLocalDay(cursor);
     const data = byDay.get(day) ?? { drafts: 0, sent: 0 };

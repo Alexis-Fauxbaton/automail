@@ -388,25 +388,41 @@ export async function recomputeAllOpenThreads(
   // Only process threads that have never been through recomputeThreadState
   // (operationalStateUpdatedAt IS NULL). Threads already computed but stuck
   // in "open" (e.g. outgoing-only) must not be re-enqueued every tick.
-  const threads = await prisma.thread.findMany({
-    where: { shop, operationalState: "open", operationalStateUpdatedAt: null },
-    select: { id: true },
-  });
-
+  let cursor: string | undefined;
   let processed = 0;
   let errors = 0;
-  for (const thread of threads) {
-    try {
-      await recomputeThreadState(thread.id, opts);
-      processed++;
-    } catch (err) {
-      errors++;
-      console.error(`[recompute] shop=${shop} thread=${thread.id} failed:`, err);
+  const BATCH_SIZE = 5;
+  const PAGE_SIZE = 100;
+
+  for (;;) {
+    const page = await prisma.thread.findMany({
+      where: { shop, operationalState: "open", operationalStateUpdatedAt: null },
+      select: { id: true },
+      take: PAGE_SIZE,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      orderBy: { id: "asc" },
+    });
+    if (page.length === 0) break;
+    cursor = page[page.length - 1].id;
+
+    // Process the page in concurrent batches of BATCH_SIZE
+    for (let i = 0; i < page.length; i += BATCH_SIZE) {
+      const batch = page.slice(i, i + BATCH_SIZE);
+      const results = await Promise.allSettled(
+        batch.map((t) => recomputeThreadState(t.id, opts)),
+      );
+      for (const r of results) {
+        if (r.status === "fulfilled") {
+          processed++;
+        } else {
+          errors++;
+          console.error(`[recompute] shop=${shop} batch item failed:`, r.reason);
+        }
+      }
     }
   }
-  console.log(
-    `[recompute] shop=${shop} done: processed=${processed} errors=${errors}`,
-  );
+
+  console.log(`[recompute] shop=${shop} done: processed=${processed} errors=${errors}`);
   return { processed, errors };
 }
 
