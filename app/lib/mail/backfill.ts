@@ -13,6 +13,21 @@
 //   - unknown:  not enough info (yet)
 
 import prisma from "../../db.server";
+
+async function runInBatches<T>(
+  items: T[],
+  batchSize: number,
+  delayMs: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  for (let i = 0; i < items.length; i += batchSize) {
+    const batch = items.slice(i, i + batchSize);
+    await Promise.allSettled(batch.map(fn));
+    if (i + batchSize < items.length && delayMs > 0) {
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+}
 import type { MailClient } from "./types";
 import { createGmailClient } from "../gmail/mail-client";
 import { createZohoClient } from "../zoho/client";
@@ -61,14 +76,14 @@ export async function runOnboardingBackfill(
   const fresh = messageIds.filter((id) => !existingSet.has(id));
 
   let ingested = 0;
-  for (const msgId of fresh) {
+  await runInBatches(fresh, 10, 50, async (msgId) => {
     try {
       await ingestHistoricalMessage(shop, conn.provider, client, msgId, conn.email);
       ingested++;
     } catch (err) {
       console.error("[backfill/onboarding] failed for", msgId, err);
     }
-  }
+  });
 
   await prisma.mailConnection.update({
     where: { shop },
@@ -100,14 +115,14 @@ export async function runManualBackfill(
   const fresh = messageIds.filter((id) => !existingSet.has(id));
 
   let ingested = 0;
-  for (const msgId of fresh) {
+  await runInBatches(fresh, 10, 50, async (msgId) => {
     try {
       await ingestHistoricalMessage(shop, conn.provider, client, msgId, conn.email);
       ingested++;
     } catch (err) {
       console.error("[backfill/manual] failed for", msgId, err);
     }
-  }
+  });
   return { ingested, skipped: existing.length };
 }
 

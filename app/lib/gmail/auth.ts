@@ -78,9 +78,14 @@ export async function saveConnection(
 }
 
 export async function deleteConnection(shop: string) {
-  await prisma.mailConnection.delete({ where: { shop } }).catch(() => {});
-  // Also clean up related emails
-  await prisma.incomingEmail.deleteMany({ where: { shop } });
+  await prisma.$transaction(async (tx) => {
+    try {
+      await tx.mailConnection.delete({ where: { shop } });
+    } catch {
+      // Ignore "record not found" — treat as already deleted
+    }
+    await tx.incomingEmail.deleteMany({ where: { shop } });
+  });
 }
 
 export async function getConnection(shop: string) {
