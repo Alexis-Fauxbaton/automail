@@ -68,16 +68,20 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
     const buffer = Buffer.from(await res.arrayBuffer());
     const rawContentType = res.headers.get("Content-Type") || "image/jpeg";
-    const { contentType } = safeMimeType(rawContentType);
+    const { contentType, forceDownload } = safeMimeType(rawContentType);
 
-    return new Response(buffer, {
-      headers: {
-        "Content-Type": contentType,
-        "Content-Length": String(buffer.byteLength),
-        "Cache-Control": "private, max-age=3600",
-        "X-Content-Type-Options": "nosniff",
-      },
-    });
+    const headers: Record<string, string> = {
+      "Content-Type": contentType,
+      "Content-Length": String(buffer.byteLength),
+      "Cache-Control": "private, max-age=3600",
+      "X-Content-Type-Options": "nosniff",
+    };
+
+    if (forceDownload) {
+      headers["Content-Disposition"] = "attachment";
+    }
+
+    return new Response(buffer, { headers });
   } catch (err) {
     console.error("[api.zoho-inline] error:", err);
     return new Response("Failed to fetch image", { status: 502 });
