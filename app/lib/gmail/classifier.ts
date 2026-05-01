@@ -11,18 +11,20 @@ const SYSTEM_PROMPT = `You classify incoming emails for an e-commerce customer s
 Classify the email as ONE of:
 - support_client: a real customer writing to ask about their order, delivery, product, return, refund, complaint, or any support question. The email is FROM a customer TO the store.
 - probable_non_client: anything else, including:
-  - B2B inquiries, supplier emails, marketing pitches, partnership/collaboration requests, recruitment
-  - automated notifications and system emails (order placed, shipping confirmation, payment received, etc.)
+  - B2B inquiries, supplier emails, marketing pitches, cold outreach, growth consulting, sales pitches, partnership/collaboration requests, recruitment
+  - automated notifications and system emails (order placed, shipping confirmation, payment received, account alerts, login notifications, etc.)
   - internal emails or notifications FROM the store's own system TO the store owner
   - emails ABOUT orders that are clearly notifications, not requests (e.g. "Order #123 placed by John" is a notification, not a customer asking for help)
-- incertain: cannot determine with confidence
+  - motivational or vague messages without a specific order/product question (e.g. "grow your business", "consistency is key", "we help brands scale")
+- incertain: cannot determine with confidence — use this ONLY when the email could plausibly be a real customer with a support need
 
-Key distinction: a CUSTOMER writes "where is my order #123?" = support_client. The STORE's system sends "Order #123 has been placed" = probable_non_client.
+Key distinction: a CUSTOMER writes "where is my order #123?" = support_client. A growth consultant writes "we help e-commerce brands scale" = probable_non_client. The STORE's system sends "Order #123 has been placed" = probable_non_client.
 
 If a THREAD STATE block is provided, use it as a strong prior:
   - a thread already confirmed_support stays support unless the new message is clearly off-topic spam;
+  - a thread already non_support: classify as probable_non_client unless there is a very clear customer support request (e.g. mentions an order, a delivery problem, a refund);
   - a thread with only outgoing messages (merchant replies) and no new customer signal is not a new support request by itself.
-Stay conservative — when unsure, answer incertain.
+When the content is vague but doesn't mention orders, products, or a specific customer problem, prefer probable_non_client over incertain.
 
 Reply with JSON only: {"classification":"..."}`;
 
@@ -63,7 +65,14 @@ export async function classifyEmail(
     const truncatedBody = truncate(body, 600);
 
     const parts: string[] = [];
-    if (ctx.threadState && ctx.threadState.messageCount > 1) {
+    // Include thread state for multi-message threads, AND for single-message
+    // threads when there is a meaningful prior nature to use (e.g. non_support
+    // from a previous sync cycle — this prevents resync from erasing it).
+    const hasUsefulPrior =
+      ctx.threadState &&
+      ctx.threadState.supportNature !== "unknown" &&
+      ctx.threadState.supportNature !== "needs_review";
+    if (ctx.threadState && (ctx.threadState.messageCount > 1 || hasUsefulPrior)) {
       parts.push("--- THREAD STATE (compact) ---");
       parts.push(renderThreadStateCompact(ctx.threadState));
       if (ctx.agentHasReplied) parts.push("agent_has_replied=true");

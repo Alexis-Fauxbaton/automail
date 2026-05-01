@@ -243,7 +243,9 @@ export async function createZohoClient(shop: string): Promise<MailClient> {
         { includeBlockContent: "true" },
       )) as { data?: { content: string } };
       const rawHtml = contentData.data?.content ?? "";
-      const htmlBody = rawHtml ? await embedZohoInlineImages(rawHtml, token, getApiDomain()) : rawHtml;
+      const htmlBody = rawHtml
+        ? await embedZohoInlineImages(rawHtml, token, getApiDomain(), accountId, folderId, String(detail.messageId))
+        : rawHtml;
       const bodyText = cleanHtml(htmlBody);
 
       // Parse sender
@@ -370,100 +372,163 @@ const IMAGE_DISPLAY_RE = /src\s*=\s*"(\/mail\/ImageDisplay\?[^"]+)"/gi;
 const MAX_INLINE_IMAGE_BYTES = 512 * 1024;
 
 /**
- * Replaces Zoho /mail/ImageDisplay?... src attributes with data: URIs by
- * fetching each image server-side using the Zoho OAuth token.
+ * Embeds Zoho inline images as data: URIs using the correct Zoho Mail API:
+ *   1. GET attachmentinfo?includeInline=true  → list inline images with cid + fileName
+ *   2. GET /inline?contentId={cid}&fileName={name} → binary image download
+ *   3. Match each /mail/ImageDisplay?...&cid=X URL and replace with data: URI
  */
 async function embedZohoInlineImages(
   html: string,
   accessToken: string,
   domain: string,
+  accountId: string,
+  folderId: string,
+  messageId: string,
 ): Promise<string> {
-  const matches: Array<{ placeholder: string; relUrl: string }> = [];
-  let m: RegExpExecArray | null;
+  // Check if there are any ImageDisplay URLs to replace
   IMAGE_DISPLAY_RE.lastIndex = 0;
-  while ((m = IMAGE_DISPLAY_RE.exec(html)) !== null) {
-    matches.push({ placeholder: m[0], relUrl: m[1] });
+  if (!IMAGE_DISPLAY_RE.test(html)) return html;
+  IMAGE_DISPLAY_RE.lastIndex = 0;
+
+  // Log the first ImageDisplay URL for debugging CID matching
+  const firstMatch = html.match(/src\s*=\s*"(\/mail\/ImageDisplay\?[^"]+)"/i);
+  console.log(`[zoho/embedImages] first ImageDisplay URL: ${firstMatch?.[1]?.slice(0, 120) ?? "(none found)"}`);
+
+  // Step 1: fetch inline image info
+  let inlineItems: Array<{ cid: string; attachmentName: string; attachmentSize?: number }> = [];
+  try {
+    const infoUrl = `https://${domain}/api/accounts/${accountId}/folders/${folderId}/messages/${messageId}/attachmentinfo?includeInline=true`;
+    const r = await fetch(infoUrl, { headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } });
+    if (r.ok) {
+      const json = await r.json() as {
+        data?: {
+          attachments?: Array<{ cid?: string; attachmentName?: string; attachmentSize?: number }>;
+          inline?: Array<{ cid?: string; attachmentName?: string; attachmentSize?: number }>;
+        };
+      };
+      const inlineArr = json.data?.inline ?? [];
+      // Fallback: some Zoho responses put inline images in the attachments array (with a cid field)
+      const attachWithCid = (json.data?.attachments ?? []).filter((a) => !!a.cid);
+      const candidates = inlineArr.length > 0 ? inlineArr : attachWithCid;
+      inlineItems = candidates
+        .filter((a): a is { cid: string; attachmentName: string; attachmentSize?: number } =>
+          !!a.cid && !!a.attachmentName)
+        .map((a) => ({ cid: a.cid!, attachmentName: a.attachmentName!, attachmentSize: a.attachmentSize }));
+      console.log(`[zoho/embedImages] attachmentinfo: inline=${inlineArr.length} attachWithCid=${attachWithCid.length} usable=${inlineItems.length} items=${JSON.stringify(inlineItems.map(i => ({ cid: i.cid, name: i.attachmentName })))}`);
+    } else {
+      const body = await r.text();
+      console.warn(`[zoho/embedImages] attachmentinfo → ${r.status}: ${body.slice(0, 200)}`);
+    }
+  } catch (err) {
+    console.warn(`[zoho/embedImages] attachmentinfo error:`, String(err).slice(0, 100));
   }
-  console.log(`[zoho/embedImages] found ${matches.length} ImageDisplay URLs`);
-  if (matches.length === 0) return html;
 
-  const unique = [...new Map(matches.map((x) => [x.relUrl, x])).values()];
-  const replacements = new Map<string, string>();
+  if (inlineItems.length === 0) return html;
 
-  await Promise.all(
-    unique.map(async ({ placeholder, relUrl }) => {
-      try {
-        const imageUrl = `https://${domain}${relUrl.replace(/&amp;/g, "&")}`;
-        const res = await fetch(imageUrl, {
-          headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
-        });
-        const contentType = res.headers.get("Content-Type") ?? "";
-        console.log(`[zoho/embedImages] ${res.status} type=${contentType} url=${relUrl}`);
-        if (!res.ok) {
-          console.warn(`[zoho/embedImages] non-ok status ${res.status}`);
-          return;
-        }
-        if (!contentType.startsWith("image/")) {
-          console.warn(`[zoho/embedImages] non-image content-type: ${contentType} — skipping`);
-          return;
-        }
-        const buffer = Buffer.from(await res.arrayBuffer());
-        if (buffer.byteLength > MAX_INLINE_IMAGE_BYTES) {
-          console.warn(`[zoho/embedImages] too large (${buffer.byteLength}B), skipping`);
-          return;
-        }
-        const base64 = buffer.toString("base64");
-        replacements.set(placeholder, `src="data:${contentType};base64,${base64}"`);
-      } catch (err) {
-        console.warn(`[zoho/embedImages] fetch error for ${relUrl}:`, err);
+  // Step 2: download each inline image and build cid → data: URI map
+  const cidToDataUri = new Map<string, string>();
+  await Promise.all(inlineItems.map(async (img) => {
+    try {
+      const cid = img.cid.replace(/^<|>$/g, "");
+      // Zoho /inline endpoint uses the raw cid (with angle brackets stripped is fine)
+      const downloadUrl = `https://${domain}/api/accounts/${accountId}/folders/${folderId}/messages/${messageId}/inline?contentId=${encodeURIComponent(cid)}&fileName=${encodeURIComponent(img.attachmentName)}`;
+      console.log(`[zoho/embedImages] downloading cid=${cid} url=${downloadUrl.slice(downloadUrl.indexOf("/api/"))}`);
+      const r = await fetch(downloadUrl, { headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } });
+      const contentType = r.headers.get("Content-Type") ?? "";
+      console.log(`[zoho/embedImages] inline download → ${r.status} type=${contentType} cid=${cid}`);
+      if (!r.ok) {
+        const t = await r.text();
+        console.warn(`[zoho/embedImages] download body: ${t.slice(0, 200)}`);
+        return;
       }
-    }),
-  );
+      // Zoho returns application/octet-stream even for images — infer from filename
+      let mimeType = contentType.split(";")[0].trim();
+      if (!mimeType.startsWith("image/")) {
+        const ext = img.attachmentName.split(".").pop()?.toLowerCase() ?? "";
+        const EXT_MAP: Record<string, string> = {
+          jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png",
+          gif: "image/gif", webp: "image/webp", bmp: "image/bmp",
+        };
+        mimeType = EXT_MAP[ext] ?? "";
+        if (!mimeType) {
+          console.warn(`[zoho/embedImages] unknown image type for ${img.attachmentName}, skipping`);
+          return;
+        }
+        console.log(`[zoho/embedImages] inferred mimeType=${mimeType} from filename`);
+      }
+      const buf = Buffer.from(await r.arrayBuffer());
+      if (buf.byteLength === 0 || buf.byteLength > MAX_INLINE_IMAGE_BYTES) return;
+      cidToDataUri.set(cid, `data:${mimeType};base64,${buf.toString("base64")}`);
+    } catch (err) {
+      console.warn(`[zoho/embedImages] download error for cid=${img.cid}:`, String(err).slice(0, 100));
+    }
+  }));
 
-  if (replacements.size === 0) return html;
-  return html.replace(IMAGE_DISPLAY_RE, (match) => replacements.get(match) ?? match);
+  console.log(`[zoho/embedImages] cidToDataUri size=${cidToDataUri.size} keys=[${Array.from(cidToDataUri.keys()).join(",")}]`);
+  if (cidToDataUri.size === 0) return html;
+
+  // Step 3: replace /mail/ImageDisplay?...&cid=X with data: URI
+  let replacedCount = 0;
+  const result = html.replace(IMAGE_DISPLAY_RE, (match, relUrl) => {
+    try {
+      const decoded = relUrl.replace(/&amp;/g, "&");
+      const qs = decoded.includes("?") ? decoded.slice(decoded.indexOf("?") + 1) : decoded;
+      const cid = new URLSearchParams(qs).get("cid") ?? "";
+      console.log(`[zoho/embedImages] matching cid="${cid}" found=${cidToDataUri.has(cid)}`);
+      const dataUri = cidToDataUri.get(cid);
+      if (dataUri) { replacedCount++; return `src="${dataUri}"`; }
+    } catch { /* keep original */ }
+    return match;
+  });
+  console.log(`[zoho/embedImages] replaced ${replacedCount} ImageDisplay URLs`);
+  return result;
 }
 
-/** Fetch attachment metadata for a Zoho message (best-effort, returns [] on error). */
+/** Fetch attachment metadata for a Zoho message using attachmentinfo endpoint. */
 async function fetchZohoAttachmentsMeta(
   accessToken: string,
   accountId: string,
-  _folderId: string,
+  folderId: string,
   messageId: string,
 ): Promise<MailAttachment[]> {
-  // Zoho attachment list endpoint does NOT require folderId (unlike message detail).
-  // The download endpoint also uses /messages/{id}/attachments without folderId.
-  let data: unknown;
   try {
-    data = await zohoFetch(
-      accessToken,
-      `/api/accounts/${accountId}/messages/${messageId}/attachments`,
-    );
-  } catch (err) {
-    console.error(`[zoho/attachments] API error for message=${messageId}:`, err);
-    throw err;
+    const domain = getApiDomain();
+    const url = `https://${domain}/api/accounts/${accountId}/folders/${folderId}/messages/${messageId}/attachmentinfo?includeInline=true`;
+    const r = await fetch(url, { headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } });
+    if (!r.ok) return [];
+    const json = await r.json() as {
+      data?: {
+        attachments?: Array<{ attachmentId?: string; attachmentName?: string; mimeType?: string; attachmentSize?: number }>;
+        inline?: Array<{ attachmentId?: string; attachmentName?: string; mimeType?: string; attachmentSize?: number; cid?: string }>;
+      };
+    };
+    const attachments = json.data?.attachments ?? [];
+    const inline = json.data?.inline ?? [];
+    return [
+      ...attachments.map((a) => ({
+        fileName: a.attachmentName ?? "attachment",
+        mimeType: a.mimeType ?? "application/octet-stream",
+        sizeBytes: a.attachmentSize ?? 0,
+        contentId: undefined,
+        disposition: "attachment" as const,
+        inlineData: undefined,
+        providerAttachId: a.attachmentId,
+        providerFolderId: folderId,
+      })),
+      ...inline.map((a) => ({
+        fileName: a.attachmentName ?? "attachment",
+        mimeType: a.mimeType ?? "application/octet-stream",
+        sizeBytes: a.attachmentSize ?? 0,
+        contentId: a.cid ? a.cid.replace(/^<|>$/g, "") : undefined,
+        disposition: "inline" as const,
+        inlineData: undefined,
+        providerAttachId: a.attachmentId,
+        providerFolderId: folderId,
+      })),
+    ];
+  } catch {
+    return [];
   }
-  const typed = data as {
-    data?: Array<{
-      attachmentId?: string;
-      fileName?: string;
-      mimeType?: string;
-      size?: number;
-      contentId?: string;
-      isInline?: boolean;
-    }>;
-  };
-  const items = typed.data ?? [];
-  console.log(`[zoho/attachments] message=${messageId} count=${items.length}`, items.map(a => `${a.fileName}(inline=${a.isInline},id=${a.attachmentId})`).join(", "));
-  return items.map((att) => ({
-    fileName: att.fileName ?? "attachment",
-    mimeType: att.mimeType ?? "application/octet-stream",
-    sizeBytes: att.size ?? 0,
-    contentId: att.contentId ? att.contentId.replace(/^<|>$/g, "") : undefined,
-    disposition: att.isInline ? ("inline" as const) : ("attachment" as const),
-    inlineData: undefined,
-    providerAttachId: att.attachmentId,
-  }));
 }
 
 function extractEmail(addr: string): string {

@@ -232,7 +232,8 @@ model IncomingEmailAttachment {
   inlineData       String?       // base64-encoded for small files
   provider         String        // "gmail" | "zoho"
   providerMsgId    String        // Gmail/Zoho message ID
-  providerAttachId String?       // Gmail attachmentId (null for small inline data)
+  providerAttachId String?       // Gmail/Zoho attachmentId (null for small inline data)
+  providerFolderId String?       // Zoho: folderId (required for attachment download URL)
   createdAt        DateTime      @default(now())
 
   @@index([shop])

@@ -333,6 +333,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent === "resync") {
     await prisma.incomingEmail.deleteMany({ where: { shop: session.shop } });
+    // Reset needs_review threads to unknown so they are re-classified from
+    // scratch on the next sync. This fixes threads that were incorrectly
+    // upgraded from non_support to needs_review due to LLM inconsistency
+    // during a previous resync. non_support and confirmed_support threads
+    // keep their classification (protected by the mergeNature sticky rule).
+    await prisma.thread.updateMany({
+      where: { shop: session.shop, supportNature: "needs_review" },
+      data: { supportNature: "unknown" },
+    });
     await prisma.mailConnection.update({
       where: { shop: session.shop },
       // Reset cursor + backfill flag so onboarding backfill re-runs.
@@ -700,7 +709,7 @@ function serializeEmail(row: {
     fromAddress: row.fromAddress,
     fromName: decodeHtmlEntities(row.fromName),
     subject: decodeHtmlEntities(row.subject),
-    snippet: decodeHtmlEntities(row.snippet),
+    snippet: decodeHtmlEntities(row.snippet).replace(/<[^>]*>/g, " ").replace(/[<>]/g, " ").replace(/\s{2,}/g, " ").trim(),
     bodyText: decodeHtmlEntities(row.bodyText),
     bodyHtml: row.bodyHtml,
     incomingAttachments: row.incomingAttachments,
@@ -1314,6 +1323,80 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function AttachmentDownloadButton({ att }: { att: IncomingAttachment }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
+  const download = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (loading) return;
+    setLoading(true);
+    setError(false);
+    try {
+      // Shopify embedded app: attach the session token so authenticate.admin() accepts the fetch
+      const headers: Record<string, string> = {};
+      const shopify = typeof window !== "undefined" && (window as unknown as { shopify?: { idToken?: () => Promise<string> } }).shopify;
+      if (shopify?.idToken) {
+        headers["Authorization"] = `Bearer ${await shopify.idToken()}`;
+      }
+      const res = await fetch(`/api/incoming-attachment?id=${att.id}`, { headers });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = att.fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("[attachment download]", err);
+      setError(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={download}
+      disabled={loading}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "6px",
+        padding: "4px 10px",
+        fontSize: "12px",
+        fontWeight: 500,
+        borderRadius: "9999px",
+        border: "1px solid var(--ui-slate-200)",
+        background: loading ? "var(--ui-slate-200)" : "var(--ui-slate-100)",
+        color: "var(--ui-slate-700)",
+        cursor: loading ? "default" : "pointer",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {loading ? "⟳" : error ? "✕" : "📎"} {att.fileName}
+      <span style={{ color: error ? "#ef4444" : "var(--ui-slate-400)", fontSize: "11px" }}>
+        {error ? "erreur" : formatBytes(att.sizeBytes)}
+      </span>
+    </button>
+  );
+}
+
+const EMAIL_BASE_CSS = `
+<style>
+  html, body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; line-height: 1.6; color: #1a1a1a; background: transparent; word-wrap: break-word; overflow-wrap: break-word; }
+  img { max-width: 100% !important; height: auto !important; display: inline-block; }
+  table { max-width: 100% !important; border-collapse: collapse; }
+  td, th { padding: 4px 8px; }
+  a { color: #2563eb; }
+  p, div { max-width: 100%; }
+  pre, code { white-space: pre-wrap; word-break: break-all; }
+  * { box-sizing: border-box; }
+</style>
+`;
+
 function EmailHtmlBody({ html }: { html: string }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const handleLoad = () => {
@@ -1321,10 +1404,11 @@ function EmailHtmlBody({ html }: { html: string }) {
     if (!iframe?.contentDocument?.body) return;
     iframe.style.height = iframe.contentDocument.body.scrollHeight + 4 + "px";
   };
+  const srcDoc = html.includes("<html") ? html.replace(/<head[^>]*>/i, (m) => m + EMAIL_BASE_CSS) : EMAIL_BASE_CSS + html;
   return (
     <iframe
       ref={iframeRef}
-      srcDoc={html}
+      srcDoc={srcDoc}
       sandbox="allow-popups allow-same-origin"
       onLoad={handleLoad}
       title="Email body"
@@ -1353,26 +1437,17 @@ function EmailMessageBlock({
   const cidMap = buildCidMap(email.incomingAttachments);
   const sanitizedHtml = email.bodyHtml ? sanitizeEmailHtml(email.bodyHtml, cidMap) : null;
   const hasHtmlBody = !!sanitizedHtml;
-  // True when bodyHtml still has raw ImageDisplay URLs, OR when a previous embed
-  // attempt stored a non-image data: URI (Zoho returned an HTML error page).
-  const hasUnresolvedZohoImages = !!email.bodyHtml?.includes("/mail/ImageDisplay?")
-    || !!email.bodyHtml?.includes('src="data:text/html')
-    || !!email.bodyHtml?.includes("src='data:text/html");
+  const hasUnresolvedZohoImages = !!email.bodyHtml?.includes("/mail/ImageDisplay?");
 
   const needsToggle = hasHtmlBody || body.length > PREVIEW_LENGTH;
   const [expanded, setExpanded] = useState(false);
 
-  // Auto-refresh HTML body when:
-  // - bodyHtml is missing (email synced before this feature), OR
-  // - bodyHtml still contains raw Zoho ImageDisplay URLs (images not yet embedded as data: URIs)
-  // Fires once per email per session (module-level Set prevents re-fetching).
+  // Auto-refresh when bodyHtml is missing or still has unembedded Zoho inline images.
   const refreshFetcher = useFetcher();
   const refreshPending = refreshFetcher.state !== "idle";
   useEffect(() => {
     const needsRefresh = !email.bodyHtml || hasUnresolvedZohoImages;
-    const alreadyRefreshed = _refreshedEmailIds.has(email.id);
-    console.log(`[inbox/refresh] email=${email.id} hasHtml=${!!email.bodyHtml} hasImageDisplay=${hasUnresolvedZohoImages} needsRefresh=${needsRefresh} alreadyRefreshed=${alreadyRefreshed}`);
-    if (needsRefresh && !alreadyRefreshed && refreshFetcher.state === "idle") {
+    if (needsRefresh && !_refreshedEmailIds.has(email.id) && refreshFetcher.state === "idle") {
       _refreshedEmailIds.add(email.id);
       refreshFetcher.submit(
         { _action: "refresh_email_html", emailId: email.id },
@@ -1432,24 +1507,6 @@ function EmailMessageBlock({
 
         {expanded ? (
           <>
-            {hasUnresolvedZohoImages && (
-              <refreshFetcher.Form method="post">
-                <input type="hidden" name="_action" value="refresh_email_html" />
-                <input type="hidden" name="emailId" value={email.id} />
-                <button
-                  type="submit"
-                  disabled={refreshPending}
-                  style={{
-                    display: "inline-flex", alignItems: "center", gap: "6px",
-                    padding: "6px 12px", borderRadius: "6px", border: "1px solid #d1d5db",
-                    background: "#f9fafb", fontSize: "0.8125rem", cursor: refreshPending ? "wait" : "pointer",
-                    color: "#374151",
-                  }}
-                >
-                  {refreshPending ? "⟳ Chargement…" : "⟳ Charger les images"}
-                </button>
-              </refreshFetcher.Form>
-            )}
             {hasHtmlBody ? (
               <EmailHtmlBody html={sanitizedHtml!} />
             ) : (
@@ -1467,31 +1524,7 @@ function EmailMessageBlock({
         {fileAttachments.length > 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "4px" }}>
             {fileAttachments.map((att) => (
-              <a
-                key={att.id}
-                href={`/api/incoming-attachment?id=${att.id}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "6px",
-                  padding: "4px 10px",
-                  fontSize: "12px",
-                  fontWeight: 500,
-                  borderRadius: "9999px",
-                  border: "1px solid var(--ui-slate-200)",
-                  background: "var(--ui-slate-100)",
-                  color: "var(--ui-slate-700)",
-                  textDecoration: "none",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                📎 {att.fileName}
-                <span style={{ color: "var(--ui-slate-400)", fontSize: "11px" }}>
-                  {formatBytes(att.sizeBytes)}
-                </span>
-              </a>
+              <AttachmentDownloadButton key={att.id} att={att} />
             ))}
           </div>
         )}
@@ -1558,8 +1591,13 @@ function ThreadCard({
       {/* Row 1 : badges */}
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px", marginBottom: "10px" }}>
         {cls === "uncertain" && <span className="ui-pill ui-pill--warning ui-pill--clickable" onClick={(e) => { e.stopPropagation(); onFilterClick({ nature: "uncertain" }); }}>{t("inbox.pillUncertain")}</span>}
-        {cls === "filtered" && <span className="ui-pill ui-pill--clickable" onClick={(e) => { e.stopPropagation(); onFilterClick({ nature: "filtered" }); }}>{t("inbox.filterFiltered")}</span>}
-        {cls === "non_support" && <span className="ui-pill ui-pill--clickable" onClick={(e) => { e.stopPropagation(); onFilterClick({ nature: "non_support" }); }}>{t("inbox.pillNonSupport")}</span>}
+        {/* Show "Non-support" badge for any thread in the "other" bucket:
+            explicitly classified non_support (tier 1 or tier 2) AND outgoing-only
+            threads (store's own emails, marketing copies, etc.) that have no
+            incoming customer message and require no support action. */}
+        {bucket === "other" && (
+          <span className="ui-pill ui-pill--clickable" onClick={(e) => { e.stopPropagation(); onFilterClick({ nature: "non_support" }); }}>{t("inbox.pillNonSupport")}</span>
+        )}
 
         {bucket === "to_process" ? (
           <span className="ui-pill ui-pill--warning ui-pill--clickable" onClick={(e) => { e.stopPropagation(); onBucketClick("to_handle"); }}>{t("inbox.stateWaitingMerchant")}</span>

@@ -32,6 +32,8 @@ export interface ConversationMessage {
   subject: string;
   body: string;
   isLatest: boolean;
+  /** File names of non-inline attachments sent with this message. */
+  attachmentFileNames?: string[];
 }
 
 export interface ConversationMeta {

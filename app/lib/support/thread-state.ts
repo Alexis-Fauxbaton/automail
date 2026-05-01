@@ -80,6 +80,12 @@ export function mergeNature(
   if (incoming === "mixed") return "mixed";
   // Sticky rule: once confirmed_support, don't downgrade.
   if (current === "confirmed_support") return "confirmed_support";
+  // non_support is protected from uncertain signals: an "incertain" LLM
+  // result (→ needs_review) must not erase an established non-support
+  // classification. Only strong positive evidence (probable_support,
+  // confirmed_support, mixed) can override non_support. This prevents
+  // resync from corrupting classifications when the LLM wavers.
+  if (current === "non_support" && incoming === "needs_review") return "non_support";
   // Mixed conversations: customer support + marketing noise etc. Keep
   // the strongest signal overall.
   if (NATURE_RANK[incoming] >= NATURE_RANK[current]) return incoming;

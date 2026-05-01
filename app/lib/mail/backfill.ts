@@ -22,6 +22,7 @@ import {
 } from "./thread-resolver";
 import { extractAndCache, mergeThreadIdentifiers } from "../support/thread-identifiers";
 import { recomputeThreadState } from "../support/thread-state";
+import { prefilterEmail } from "../gmail/prefilter";
 
 async function getMailClient(shop: string, provider: string): Promise<MailClient> {
   if (provider === "zoho") return createZohoClient(shop);
@@ -208,6 +209,16 @@ async function ingestHistoricalMessage(
     rfcReferences,
   });
 
+  // Run the free regex prefilter on historical messages so they get proper
+  // tier1Result and classification badges in the UI. We never run tier 2 on
+  // backfilled emails (too expensive, and historical context is stale), but
+  // tier 1 is free and gives the Thread a meaningful supportNature.
+  let tier1Result: string | null = null;
+  if (!isOutgoing) {
+    const pf = prefilterEmail(msg);
+    tier1Result = pf.passed ? "passed" : `filtered:${pf.reason}`;
+  }
+
   await prisma.incomingEmail.create({
     data: {
       shop,
@@ -224,9 +235,9 @@ async function ingestHistoricalMessage(
       bodyText: msg.bodyText,
       receivedAt: msg.receivedAt,
       // Historical messages are marked as "classified" directly so Pass 2
-      // doesn't reprocess them. Outgoing stays "outgoing".
+      // (LLM tier 2) never reprocesses them. Outgoing stays "outgoing".
       processingStatus: isOutgoing ? "outgoing" : "classified",
-      tier1Result: isOutgoing ? null : "passed",
+      tier1Result,
     },
   });
 
@@ -241,6 +252,13 @@ async function ingestHistoricalMessage(
       await mergeThreadIdentifiers(canonicalThreadId);
     } catch (err) {
       console.error("[backfill] identifier merge failed:", err);
+    }
+    // Recompute thread state so the Thread.supportNature reflects the
+    // tier1 classification (e.g. noreply → non_support) immediately.
+    try {
+      await recomputeThreadState(canonicalThreadId, { mailboxAddress });
+    } catch (err) {
+      console.error("[backfill] recomputeThreadState failed:", err);
     }
   }
 }

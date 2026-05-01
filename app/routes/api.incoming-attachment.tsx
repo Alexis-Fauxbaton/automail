@@ -3,6 +3,7 @@ import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { getGmailService } from "../lib/gmail/client";
 import { getZohoAccessToken } from "../lib/zoho/auth";
+import { listZohoFoldersRaw } from "../lib/zoho/client";
 
 /**
  * GET /api/incoming-attachment?id=<attachmentId>
@@ -33,6 +34,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       provider: true,
       providerMsgId: true,
       providerAttachId: true,
+      providerFolderId: true,
     },
   });
 
@@ -88,9 +90,26 @@ export async function loader({ request }: LoaderFunctionArgs) {
       const conn = await prisma.mailConnection.findUnique({ where: { shop } });
       if (!conn?.zohoAccountId) return new Response("No Zoho connection", { status: 404 });
       const token = await getZohoAccessToken(shop);
-      // Zoho attachment download endpoint (domain from env, default mail.zoho.com)
       const zohoDomain = process.env.ZOHO_API_DOMAIN || "mail.zoho.com";
-      const downloadUrl = `https://${zohoDomain}/api/accounts/${conn.zohoAccountId}/messages/${attachment.providerMsgId}/attachments/${attachment.providerAttachId}`;
+
+      // Resolve folderId — stored for new records; look it up for legacy ones.
+      let folderId = attachment.providerFolderId;
+      if (!folderId) {
+        const folders = await listZohoFoldersRaw(shop);
+        const inbox = folders.find((f) => f.folderType === "Inbox");
+        const sent = folders.find((f) => f.folderType === "Sent");
+        folderId = inbox?.folderId ?? sent?.folderId ?? null;
+        if (folderId) {
+          // Backfill so we don't pay this lookup cost again
+          await prisma.incomingEmailAttachment.update({
+            where: { id: attachment.id },
+            data: { providerFolderId: folderId },
+          }).catch(() => { /* non-critical */ });
+        }
+      }
+      if (!folderId) return new Response("Cannot resolve Zoho folder ID", { status: 502 });
+
+      const downloadUrl = `https://${zohoDomain}/api/accounts/${conn.zohoAccountId}/folders/${folderId}/messages/${attachment.providerMsgId}/attachments/${attachment.providerAttachId}`;
       const proxyRes = await fetch(downloadUrl, {
         headers: { Authorization: `Zoho-oauthtoken ${token}` },
       });

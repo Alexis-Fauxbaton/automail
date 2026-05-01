@@ -253,6 +253,7 @@ export async function persistEmailAttachments(
       provider,
       providerMsgId,
       providerAttachId: att.providerAttachId ?? null,
+      providerFolderId: att.providerFolderId ?? null,
     })),
     skipDuplicates: true,
   });
@@ -750,6 +751,9 @@ async function buildThreadContext(
           subject: m.subject,
           body: m.bodyText,
           isLatest: i === latestIdx,
+          attachmentFileNames: (m.attachments ?? [])
+            .filter((a) => a.disposition === "attachment")
+            .map((a) => a.fileName),
         }));
 
         const parts = messages.map((m) => {
@@ -777,7 +781,10 @@ async function buildThreadContext(
   if (!canonicalThreadId && !threadId) {
     const current = await prisma.incomingEmail.findUnique({
       where: { id: currentEmailId },
-      select: { bodyText: true, subject: true, fromAddress: true, receivedAt: true },
+      select: {
+        bodyText: true, subject: true, fromAddress: true, receivedAt: true,
+        incomingAttachments: { select: { fileName: true, disposition: true } },
+      },
     });
     if (!current) {
       return { body: "", messages: [] };
@@ -794,6 +801,9 @@ async function buildThreadContext(
           subject: current.subject,
           body: current.bodyText,
           isLatest: true,
+          attachmentFileNames: current.incomingAttachments
+            .filter((a) => a.disposition === "attachment")
+            .map((a) => a.fileName),
         },
       ],
     };
@@ -810,6 +820,7 @@ async function buildThreadContext(
       receivedAt: true,
       subject: true,
       bodyText: true,
+      incomingAttachments: { select: { fileName: true, disposition: true } },
     },
   });
 
@@ -833,6 +844,9 @@ async function buildThreadContext(
       subject: email.subject,
       body: email.bodyText,
       isLatest,
+      attachmentFileNames: email.incomingAttachments
+        .filter((a) => a.disposition === "attachment")
+        .map((a) => a.fileName),
     });
 
     parts.push(

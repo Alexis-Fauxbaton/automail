@@ -10,6 +10,8 @@ export interface MailAttachment {
   inlineData?: string;
   /** Provider-specific attachment ID (needed to fetch large files on demand). */
   providerAttachId?: string;
+  /** Zoho: folder ID the message lives in (required for attachment download). */
+  providerFolderId?: string;
 }
 
 /**

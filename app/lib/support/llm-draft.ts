@@ -121,11 +121,15 @@ function buildUserMessage(
           ? "[YOUR REPLY — outgoing]"
           : "[CUSTOMER — incoming]";
       const latestMarker = msg.isLatest ? " ← LATEST MESSAGE" : "";
+      const attachLine = msg.attachmentFileNames?.length
+        ? `Attachments: ${msg.attachmentFileNames.join(", ")}`
+        : null;
       sections.push(
         [
           `--- ${label}${latestMarker} ---`,
           `Date: ${msg.receivedAt}`,
           `From: ${msg.fromAddress}`,
+          ...(attachLine ? [attachLine] : []),
           `Body:\n${msg.body}`,
         ].join("\n"),
       );
@@ -138,6 +142,10 @@ function buildUserMessage(
     // Single email
     sections.push("## Customer email");
     sections.push(`Subject: ${parsed.subject}`);
+    const singleMsg = conversationMessages?.[0];
+    if (singleMsg?.attachmentFileNames?.length) {
+      sections.push(`Attachments: ${singleMsg.attachmentFileNames.join(", ")}`);
+    }
     sections.push(`Body:\n${parsed.body}`);
   }
 
