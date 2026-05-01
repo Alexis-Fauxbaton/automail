@@ -288,8 +288,9 @@ export async function recomputeThreadState(
     thread.previousOperationalState !== null &&
     thread.operationalStateUpdatedAt !== null;
   if (wasManuallyResolved) {
-    // wasManuallyResolved guarantees operationalStateUpdatedAt is non-null.
-    const resolvedAt = (thread.operationalStateUpdatedAt as Date).getTime();
+    const resolvedAtDate = thread.operationalStateUpdatedAt;
+    if (!resolvedAtDate) return structured; // unreachable: guard above ensures non-null
+    const resolvedAt = resolvedAtDate.getTime();
     const hasNewIncoming =
       lastCustomerAt !== null && lastCustomerAt.getTime() > resolvedAt;
     if (!hasNewIncoming) {
