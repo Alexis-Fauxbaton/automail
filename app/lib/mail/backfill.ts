@@ -13,6 +13,16 @@
 //   - unknown:  not enough info (yet)
 
 import prisma from "../../db.server";
+import type { MailClient } from "./types";
+import { createGmailClient } from "../gmail/mail-client";
+import { createZohoClient } from "../zoho/client";
+import {
+  resolveCanonicalThread,
+  refreshThreadStats,
+} from "./thread-resolver";
+import { extractAndCache, mergeThreadIdentifiers } from "../support/thread-identifiers";
+import { recomputeThreadState } from "../support/thread-state";
+import { prefilterEmail } from "../gmail/prefilter";
 
 async function runInBatches<T>(
   items: T[],
@@ -28,16 +38,6 @@ async function runInBatches<T>(
     }
   }
 }
-import type { MailClient } from "./types";
-import { createGmailClient } from "../gmail/mail-client";
-import { createZohoClient } from "../zoho/client";
-import {
-  resolveCanonicalThread,
-  refreshThreadStats,
-} from "./thread-resolver";
-import { extractAndCache, mergeThreadIdentifiers } from "../support/thread-identifiers";
-import { recomputeThreadState } from "../support/thread-state";
-import { prefilterEmail } from "../gmail/prefilter";
 
 async function getMailClient(shop: string, provider: string): Promise<MailClient> {
   if (provider === "zoho") return createZohoClient(shop);

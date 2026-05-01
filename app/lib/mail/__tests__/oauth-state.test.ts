@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { signOAuthState, verifyOAuthState } from "../oauth-state";
+import { createHmac } from "crypto";
 
 const TEST_SECRET = "test-secret-for-oauth-state";
 
@@ -58,7 +59,6 @@ describe("oauth-state", () => {
       .replace(/\+/g, "-")
       .replace(/\//g, "_")
       .replace(/=+$/, "");
-    const { createHmac } = require("crypto");
     const sig = createHmac("sha256", TEST_SECRET)
       .update(body)
       .digest("base64")
