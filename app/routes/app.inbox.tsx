@@ -1399,18 +1399,36 @@ const EMAIL_BASE_CSS = `
 
 function EmailHtmlBody({ html }: { html: string }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const handleLoad = () => {
-    const iframe = iframeRef.current;
-    if (!iframe?.contentDocument?.body) return;
-    iframe.style.height = iframe.contentDocument.body.scrollHeight + 4 + "px";
-  };
-  const srcDoc = html.includes("<html") ? html.replace(/<head[^>]*>/i, (m) => m + EMAIL_BASE_CSS) : EMAIL_BASE_CSS + html;
+
+  useEffect(() => {
+    const handler = (event: MessageEvent) => {
+      if (event.data?.type !== "email-height") return;
+      if (iframeRef.current) {
+        iframeRef.current.style.height = event.data.height + 4 + "px";
+      }
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, []);
+
+  // Inject a small script that posts the body height to the parent after load.
+  // Note: allow-scripts without allow-same-origin runs in a null origin — the
+  // iframe cannot access the parent's DOM or cookies, only postMessage.
+  const heightScript = `<script>window.addEventListener('load',function(){window.parent.postMessage({type:'email-height',height:document.body.scrollHeight},'*')});<\/script>`;
+
+  const withCss = html.includes("<html")
+    ? html.replace(/<head[^>]*>/i, (m) => m + EMAIL_BASE_CSS)
+    : EMAIL_BASE_CSS + html;
+
+  const srcDoc = withCss.includes("</body>")
+    ? withCss.replace("</body>", heightScript + "</body>")
+    : withCss + heightScript;
+
   return (
     <iframe
       ref={iframeRef}
       srcDoc={srcDoc}
-      sandbox="allow-popups allow-same-origin"
-      onLoad={handleLoad}
+      sandbox="allow-scripts allow-popups"
       title="Email body"
       style={{ border: "none", width: "100%", minHeight: "60px", display: "block" }}
     />
