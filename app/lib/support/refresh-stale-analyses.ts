@@ -1,9 +1,9 @@
 // Refresh "to handle" thread analyses that haven't been recomputed in a while.
 //
-// Used by the auto-sync loop to make sure tracking / Shopify data shown to
-// the merchant is at most ~24h stale, even when the merchant doesn't click
-// any button. Also called on-demand right before a draft regeneration /
-// refinement when the last analysis is older than 1h.
+// Used by mail sync to make sure tracking / Shopify data shown to the merchant
+// is refreshed when it is older than ~24h, even when the merchant doesn't click
+// anything. Also called on-demand right before a draft regeneration /
+// refinement with a stricter ~1h threshold.
 //
 // Multi-tenant: every query is scoped by `shop`. One shop's failures must
 // never stall another shop.
@@ -33,11 +33,9 @@ export const ANALYSIS_FRESHNESS_MS = {
 } as const;
 
 /**
- * Reanalyze every "to handle" email of the given shop whose last analysis
- * is older than `maxAgeMs`. "To handle" = threads with operationalState in
- * (`waiting_merchant`, `open`) and a confirmed/probable/mixed support
- * nature. We only refresh the thread anchor (latest analyzed incoming),
- * which is what the inbox UI displays.
+ * Reanalyze every active support email of the given shop whose last analysis
+ * is older than `maxAgeMs`. We only refresh the thread anchor (latest analyzed
+ * incoming), which is what the inbox UI displays.
  *
  * Errors on individual emails are logged and swallowed so a single bad
  * email never aborts the whole pass.

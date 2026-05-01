@@ -12,7 +12,7 @@ function getZohoAccountsDomain(): string {
   return "accounts.zoho.com";
 }
 
-const SCOPES = "ZohoMail.messages.READ,ZohoMail.accounts.READ,ZohoMail.folders.READ";
+const SCOPES = "ZohoMail.messages.ALL,ZohoMail.accounts.READ,ZohoMail.folders.READ";
 
 function getZohoApiDomain(): string {
   return process.env.ZOHO_API_DOMAIN || "mail.zoho.com";

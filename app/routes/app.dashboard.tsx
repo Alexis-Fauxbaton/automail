@@ -210,8 +210,11 @@ export default function Dashboard() {
     where_is_my_order: t("analysis.intent_where_is_my_order"),
     delivery_delay: t("analysis.intent_delivery_delay"),
     marked_delivered_not_received: t("analysis.intent_marked_delivered_not_received"),
-    package_stuck: t("analysis.intent_package_stuck"),
+    damaged_product: t("analysis.intent_damaged_product"),
+    order_error: t("analysis.intent_order_error"),
+    package_stuck: t("analysis.intent_delivery_delay"),
     refund_request: t("analysis.intent_refund_request"),
+    pre_purchase_question: t("analysis.intent_pre_purchase_question"),
     unknown: t("analysis.intent_unknown"),
   };
 

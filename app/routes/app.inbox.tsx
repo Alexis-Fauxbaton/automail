@@ -18,7 +18,7 @@ import { sanitizeEmailHtml, buildCidMap } from "../lib/mail/sanitize-html";
 import { buildReplySubject } from "../lib/support/draft-subject";
 import prisma from "../db.server";
 import { recordStateTransition } from "../lib/support/thread-state-history";
-import { isAnalysisStale, ANALYSIS_FRESHNESS_MS } from "../lib/support/refresh-stale-analyses";
+import { isAnalysisStale, ANALYSIS_FRESHNESS_MS, refreshStaleAnalysesForShop } from "../lib/support/refresh-stale-analyses";
 import type { AdminGraphqlClient } from "../lib/support/shopify/order-search";
 import {
   MetricCard,
@@ -352,9 +352,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent === "sync") {
     // Run inline — incremental sync with cursor is fast (seconds, not minutes).
-    // enqueueJob is reserved for heavy backfill/resync operations.
+    // enqueueJob is reserved for heavy backfill/resync operations. A manual
+    // sync should also refresh stale Shopify/tracking facts, otherwise the
+    // mailbox timestamp can update while the visible tracking stays stale.
     const report = await processNewEmails(session.shop, admin);
-    return { report, syncCompleted: true, disconnected: false, reanalyzed: null, refined: null, stopped: false };
+    const staleRefresh = await refreshStaleAnalysesForShop(session.shop, admin, {
+      maxAgeMs: ANALYSIS_FRESHNESS_MS.autoRefresh,
+    });
+    return { report, syncCompleted: true, disconnected: false, reanalyzed: null, refined: null, stopped: false, staleRefresh };
   }
 
   if (intent === "backfill") {
@@ -920,14 +925,14 @@ function ConnectionCard({
           </s-paragraph>
           <s-stack direction="inline" gap="base">
             {gmailAuthUrl && (
-              <s-link href={gmailAuthUrl}>
-                <s-button variant="primary">{t("inbox.connectGmail")}</s-button>
-              </s-link>
+              <s-button variant="primary" onClick={() => { window.top!.location.href = gmailAuthUrl; }}>
+                {t("inbox.connectGmail")}
+              </s-button>
             )}
             {zohoAuthUrl && (
-              <s-link href={zohoAuthUrl}>
-                <s-button variant="secondary">{t("inbox.connectZoho")}</s-button>
-              </s-link>
+              <s-button variant="secondary" onClick={() => { window.top!.location.href = zohoAuthUrl; }}>
+                {t("inbox.connectZoho")}
+              </s-button>
             )}
           </s-stack>
         </s-stack>
@@ -1348,18 +1353,26 @@ function EmailMessageBlock({
   const cidMap = buildCidMap(email.incomingAttachments);
   const sanitizedHtml = email.bodyHtml ? sanitizeEmailHtml(email.bodyHtml, cidMap) : null;
   const hasHtmlBody = !!sanitizedHtml;
+  // True when bodyHtml still has raw ImageDisplay URLs, OR when a previous embed
+  // attempt stored a non-image data: URI (Zoho returned an HTML error page).
+  const hasUnresolvedZohoImages = !!email.bodyHtml?.includes("/mail/ImageDisplay?")
+    || !!email.bodyHtml?.includes('src="data:text/html')
+    || !!email.bodyHtml?.includes("src='data:text/html");
 
   const needsToggle = hasHtmlBody || body.length > PREVIEW_LENGTH;
   const [expanded, setExpanded] = useState(false);
 
-  // Auto-refresh HTML body and attachments for emails synced before this feature,
-  // or emails that have bodyHtml but missing incomingAttachments (Zoho case).
+  // Auto-refresh HTML body when:
+  // - bodyHtml is missing (email synced before this feature), OR
+  // - bodyHtml still contains raw Zoho ImageDisplay URLs (images not yet embedded as data: URIs)
   // Fires once per email per session (module-level Set prevents re-fetching).
   const refreshFetcher = useFetcher();
   const refreshPending = refreshFetcher.state !== "idle";
   useEffect(() => {
-    const needsRefresh = !email.bodyHtml || email.incomingAttachments.length === 0;
-    if (needsRefresh && !_refreshedEmailIds.has(email.id) && refreshFetcher.state === "idle") {
+    const needsRefresh = !email.bodyHtml || hasUnresolvedZohoImages;
+    const alreadyRefreshed = _refreshedEmailIds.has(email.id);
+    console.log(`[inbox/refresh] email=${email.id} hasHtml=${!!email.bodyHtml} hasImageDisplay=${hasUnresolvedZohoImages} needsRefresh=${needsRefresh} alreadyRefreshed=${alreadyRefreshed}`);
+    if (needsRefresh && !alreadyRefreshed && refreshFetcher.state === "idle") {
       _refreshedEmailIds.add(email.id);
       refreshFetcher.submit(
         { _action: "refresh_email_html", emailId: email.id },
@@ -1418,13 +1431,33 @@ function EmailMessageBlock({
         </button>
 
         {expanded ? (
-          hasHtmlBody ? (
-            <EmailHtmlBody html={sanitizedHtml!} />
-          ) : (
-            <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: "0.875rem", lineHeight: "1.6" }}>
-              {body}
-            </div>
-          )
+          <>
+            {hasUnresolvedZohoImages && (
+              <refreshFetcher.Form method="post">
+                <input type="hidden" name="_action" value="refresh_email_html" />
+                <input type="hidden" name="emailId" value={email.id} />
+                <button
+                  type="submit"
+                  disabled={refreshPending}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: "6px",
+                    padding: "6px 12px", borderRadius: "6px", border: "1px solid #d1d5db",
+                    background: "#f9fafb", fontSize: "0.8125rem", cursor: refreshPending ? "wait" : "pointer",
+                    color: "#374151",
+                  }}
+                >
+                  {refreshPending ? "⟳ Chargement…" : "⟳ Charger les images"}
+                </button>
+              </refreshFetcher.Form>
+            )}
+            {hasHtmlBody ? (
+              <EmailHtmlBody html={sanitizedHtml!} />
+            ) : (
+              <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: "0.875rem", lineHeight: "1.6" }}>
+                {body}
+              </div>
+            )}
+          </>
         ) : (
           <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: "0.875rem", lineHeight: "1.6" }}>
             {body.slice(0, PREVIEW_LENGTH) + (needsToggle ? "…" : "")}
@@ -1551,16 +1584,22 @@ function ThreadCard({
         )}
 
         {(() => {
-          const intent = analysisEmail?.analysisResult?.intent;
-          if (!intent) return null;
-          const key = `analysis.intent_${intent}` as const;
+          const intents = analysisEmail?.analysisResult
+            ? (analysisEmail.analysisResult.intents?.length ? analysisEmail.analysisResult.intents : [analysisEmail.analysisResult.intent])
+            : [];
+          if (intents.length === 0) return null;
           return (
-            <span
-              className="ui-pill ui-pill--clickable"
-              onClick={(e) => { e.stopPropagation(); onFilterClick({ intent }); }}
-            >
-              {t(key, { defaultValue: intent })}
-            </span>
+            <>
+              {intents.map((intent) => (
+                <span
+                  key={intent}
+                  className="ui-pill ui-pill--clickable"
+                  onClick={(e) => { e.stopPropagation(); onFilterClick({ intent }); }}
+                >
+                  {t(`analysis.intent_${intent}`, { defaultValue: intent })}
+                </span>
+              ))}
+            </>
           );
         })()}
         {threadState?.historyStatus === "partial" && <span className="ui-pill ui-pill--warning">{t("inbox.pillPartialHistory")}</span>}
@@ -2041,7 +2080,9 @@ function ThreadDetailPanel({
   const analysisEmail = [...emails].reverse().find((e) => e.analysisResult) ?? null;
   const draftEmail = latest.draftReply ? latest : (analysisEmail?.draftReply ? analysisEmail : null);
   const order = analysisEmail?.analysisResult?.order;
-  const intent = analysisEmail?.analysisResult?.intent;
+  const intents = analysisEmail?.analysisResult
+    ? (analysisEmail.analysisResult.intents?.length ? analysisEmail.analysisResult.intents : [analysisEmail.analysisResult.intent])
+    : [];
 
   const bucketPill =
     bucket === "to_process" ? <span className="ui-pill ui-pill--warning">{t("inbox.stateWaitingMerchant")}</span>
@@ -2079,11 +2120,11 @@ function ThreadDetailPanel({
           {threadState?.resolvedOrderNumber && (
             <span className="ui-pill ui-pill--info">#{threadState.resolvedOrderNumber}</span>
           )}
-          {intent && (
-            <span className="ui-pill">
+          {intents.map((intent) => (
+            <span key={intent} className="ui-pill">
               {t(`analysis.intent_${intent}`, { defaultValue: intent.replace(/_/g, " ") })}
             </span>
-          )}
+          ))}
           {hasSignals && (
             <span
               style={{ position: "relative", display: "inline-flex", alignItems: "center", marginLeft: "auto" }}
@@ -2404,8 +2445,9 @@ export default function InboxPage() {
 
   const matchesFilters = (m: (typeof threadMeta)[number]): boolean => {
     if (filters.intent !== "") {
-      const threadIntent = [...m.thread.emails].reverse().find(e => e.analysisResult)?.analysisResult?.intent;
-      if (threadIntent !== filters.intent) return false;
+      const analysis = [...m.thread.emails].reverse().find(e => e.analysisResult)?.analysisResult;
+      const threadIntents = analysis ? (analysis.intents?.length ? analysis.intents : [analysis.intent]) : [];
+      if (!threadIntents.includes(filters.intent as SupportAnalysisExtended["intent"])) return false;
     }
     if (filters.orderLinked === "yes" && !m.linkedOrder) return false;
     if (filters.orderLinked === "no" && m.linkedOrder) return false;
@@ -2422,8 +2464,8 @@ export default function InboxPage() {
 
   const availableIntents = [...new Set(
     threadMeta.flatMap((m) => {
-      const intent = [...m.thread.emails].reverse().find(e => e.analysisResult)?.analysisResult?.intent;
-      return intent ? [intent] : [];
+      const analysis = [...m.thread.emails].reverse().find(e => e.analysisResult)?.analysisResult;
+      return analysis ? (analysis.intents?.length ? analysis.intents : [analysis.intent]) : [];
     })
   )].sort();
 

@@ -231,13 +231,15 @@ export function AnalysisDisplay({
     : t("analysis.directionUnknown");
 
   const totalMessages = conversation.incomingCount + conversation.outgoingCount;
-  const intentKey = `analysis.intent_${analysis.intent}` as const;
+  const intents = (analysis.intents && analysis.intents.length > 0) ? analysis.intents : [analysis.intent];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
 
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px" }}>
-        <s-badge>{t(intentKey, { defaultValue: analysis.intent })}</s-badge>
+        {intents.map((intent) => (
+          <s-badge key={intent}>{t(`analysis.intent_${intent}`, { defaultValue: intent })}</s-badge>
+        ))}
         {conversation.noReplyNeeded && <s-badge tone="success">{t("analysis.noReplyNeeded")}</s-badge>}
         <span style={{ color: "#6d7175", fontSize: "12px" }}>
           {directionLabel} · {totalMessages} {totalMessages > 1 ? t("analysis.msgPlural") : t("analysis.msgSingular")}

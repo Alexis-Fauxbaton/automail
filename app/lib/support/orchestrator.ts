@@ -86,7 +86,7 @@ export async function analyzeSupportEmail(
 
   // 1. Parse + LLM extraction (regex fallback built-in)
   const parsed = parseMessage(input.subject, input.body);
-  const { intent, identifiers: parserIdentifiers, usedLLM } = await llmParseEmail(parsed, tctx);
+  const { intent, intents, identifiers: parserIdentifiers, usedLLM } = await llmParseEmail(parsed, tctx);
 
   // Merge thread-level resolved identifiers on top when confidence is
   // strong. This implements spec §3C: prefer the thread's consolidated
@@ -199,6 +199,7 @@ export async function analyzeSupportEmail(
 
   return {
     intent,
+    intents,
     identifiers,
     order,
     orderCandidates: candidates,

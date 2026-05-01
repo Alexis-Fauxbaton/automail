@@ -24,7 +24,44 @@ const RULES: Rule[] = [
     ],
   },
   {
-    intent: "package_stuck",
+    intent: "damaged_product",
+    keywords: [
+      /damaged/i,
+      /broken/i,
+      /arrived (?:damaged|broken)/i,
+      /received (?:a )?(?:damaged|broken) (?:item|product)/i,
+      /produit ab[îi]m[ée]/i,
+      /article ab[îi]m[ée]/i,
+      /colis ab[îi]m[ée]/i,
+      /re[cç]u ab[îi]m[ée]/i,
+      /est arriv[ée] ab[îi]m[ée]/i,
+      /cass[ée]/i,
+      /endommag[ée]/i,
+    ],
+  },
+  {
+    intent: "order_error",
+    keywords: [
+      /wrong (?:item|product|order|size|color|colour)/i,
+      /missing (?:item|product)/i,
+      /(?:item|product) (?:is )?missing/i,
+      /not what i ordered/i,
+      /mistake (?:in|with) (?:my )?order/i,
+      /order (?:is|was) incorrect/i,
+      /incorrect (?:item|product|order|size|color|colour)/i,
+      /erreur de commande/i,
+      /article manquant/i,
+      /produit manquant/i,
+      /il manque (?:un |une |des )?(?:article|produit|articles|produits)/i,
+      /mauvais (?:article|produit|mod[èe]le|coloris|taille)/i,
+      /pas le bon (?:article|produit|mod[èe]le|coloris|taille)/i,
+      /commande incorrecte/i,
+      /je me suis tromp[ée] dans ma commande/i,
+      /vous vous [êe]tes tromp[ée]s?/i,
+    ],
+  },
+  {
+    intent: "delivery_delay",
     keywords: [
       /stuck/i,
       /not moving/i,
@@ -76,13 +113,39 @@ const RULES: Rule[] = [
       /avoir des nouvelles/i,
     ],
   },
+  {
+    intent: "pre_purchase_question",
+    keywords: [
+      /before (?:i )?(?:buy|order|purchase)/i,
+      /pre[- ]?purchase/i,
+      /question before buying/i,
+      /avant (?:d['’]?)?(?:acheter|commander|passer commande)/i,
+      /avant achat/i,
+      /question avant achat/i,
+      /quelle taille (?:dois-je|choisir|prendre)/i,
+      /quelle pointure (?:dois-je|choisir|prendre)/i,
+      /est-ce compatible/i,
+      /est il compatible/i,
+      /est elle compatible/i,
+      /is it compatible/i,
+      /which size should i choose/i,
+      /what size should i choose/i,
+    ],
+  },
 ];
 
 export function classifyIntent(parsed: ParsedEmail): SupportIntent {
+  return classifyIntents(parsed)[0] ?? "unknown";
+}
+
+export function classifyIntents(parsed: ParsedEmail): SupportIntent[] {
+  const intents: SupportIntent[] = [];
   for (const rule of RULES) {
     if (rule.keywords.some((re) => re.test(parsed.normalized))) {
-      return rule.intent;
+      if (!intents.includes(rule.intent)) {
+        intents.push(rule.intent);
+      }
     }
   }
-  return "unknown";
+  return intents.length > 0 ? intents : ["unknown"];
 }

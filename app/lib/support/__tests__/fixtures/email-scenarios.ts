@@ -74,23 +74,23 @@ export const EMAIL_SCENARIOS: EmailScenario[] = [
     mustExtract: { orderNumber: "5005" },
   },
 
-  // --- S6: Package stuck — FR — tracking number in email ---
+  // --- S6: Delivery delay — FR — tracking number in email ---
   {
     id: "S6",
-    description: "Package stuck – French – tracking number provided by customer",
+    description: "Delivery delay / stuck tracking – French – tracking number provided by customer",
     subject: "Colis bloqué depuis 5 jours",
     body: "Bonjour,\n\nMon colis est bloqué depuis plusieurs jours, il n'avance plus.\nLe numéro de suivi est le 6123456789012.\nCommande n°6006.\n\nMerci d'avance.",
-    expectedIntent: "package_stuck",
+    expectedIntent: "delivery_delay",
     mustExtract: { orderNumber: "6006", trackingNumber: "6123456789012" },
   },
 
-  // --- S7: Refund request — EN ---
+  // --- S7: Damaged product + refund request — EN ---
   {
     id: "S7",
-    description: "Refund request – English – explicit refund ask",
+    description: "Damaged product + refund request – English – damaged item is the primary cause",
     subject: "Refund request for order #7007",
     body: "Hello,\n\nI would like to request a full refund for order #7007.\nThe product arrived damaged and is not usable.\n\nPlease process this as soon as possible.\n\nBest,\nMike",
-    expectedIntent: "refund_request",
+    expectedIntent: "damaged_product",
     mustExtract: { orderNumber: "7007" },
   },
 

@@ -15,19 +15,54 @@ import { verifyOAuthState } from "../lib/mail/oauth-state";
  *   3. Provider-specific token exchange: the authorization code is
  *      single-use and verified by the provider against the redirect URI.
  */
+function adminInboxUrl(shop: string, params: Record<string, string>): string {
+  const storeName = shop.replace(".myshopify.com", "");
+  const apiKey = process.env.SHOPIFY_API_KEY || "";
+  const qs = new URLSearchParams(params).toString();
+  return `https://admin.shopify.com/store/${storeName}/apps/${apiKey}/app/inbox?${qs}`;
+}
+
+function errorPage(title: string, detail: string): Response {
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Auth error</title>
+<style>body{font-family:sans-serif;padding:40px;max-width:600px;margin:auto}
+h1{color:#b91c1c}pre{background:#f1f5f9;padding:12px;border-radius:6px;white-space:pre-wrap;word-break:break-all}</style>
+</head><body>
+<h1>${title}</h1>
+<pre>${detail}</pre>
+<p>Check the server logs for more details. You can close this tab and retry from the Shopify admin.</p>
+</body></html>`;
+  return new Response(html, { status: 400, headers: { "Content-Type": "text/html; charset=utf-8" } });
+}
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const rawState = url.searchParams.get("state") ?? "";
 
+  console.log(`[mail-auth] incoming code=${!!code} state_len=${rawState.length} state_preview=${rawState.slice(0, 40)}`);
+
   if (!code || !rawState) {
-    return redirect("/app/inbox?error=missing_params");
+    console.warn("[mail-auth] missing code or state");
+    return errorPage("Missing OAuth parameters", `code present: ${!!code}\nstate present: ${!!rawState}`);
   }
 
   const verified = verifyOAuthState(rawState);
   if (!verified) {
     console.warn("[mail-auth] rejected invalid OAuth state");
-    return redirect("/app/inbox?error=invalid_state");
+    // Try to decode payload for debugging (ignore signature)
+    let debugInfo = `state length: ${rawState.length}\nstate preview: ${rawState.slice(0, 60)}`;
+    try {
+      const dot = rawState.lastIndexOf(".");
+      if (dot > 0) {
+        const body = rawState.slice(0, dot);
+        const pad = body.length % 4 === 0 ? "" : "=".repeat(4 - (body.length % 4));
+        const decoded = Buffer.from(body.replace(/-/g, "+").replace(/_/g, "/") + pad, "base64").toString("utf8");
+        const payload = JSON.parse(decoded);
+        const age = Date.now() - payload.t;
+        debugInfo += `\ndecoded payload: ${decoded}\nage: ${Math.round(age / 1000)}s (TTL: 600s)`;
+      }
+    } catch { /* best-effort */ }
+    return errorPage("Invalid OAuth state", debugInfo);
   }
 
   const { provider, shop } = verified;
@@ -48,12 +83,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       await saveConnection(shop, tokens);
     }
 
-    const storeName = shop.replace(".myshopify.com", "");
-    const apiKey = process.env.SHOPIFY_API_KEY || "";
-    const adminUrl = `https://admin.shopify.com/store/${storeName}/apps/${apiKey}/app/inbox?connected=true`;
-    return redirect(adminUrl);
+    return redirect(adminInboxUrl(shop, { connected: "true" }));
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
     console.error(`[mail-auth] ${provider} token exchange failed:`, err);
-    return redirect("/app/inbox?error=auth_failed");
+    return errorPage(
+      `${provider} token exchange failed`,
+      msg,
+    );
   }
 };

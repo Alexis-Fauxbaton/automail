@@ -9,12 +9,14 @@ import type {
   Warning,
 } from "./types";
 
+type DraftIntent = SupportIntent | "package_stuck";
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
 export interface DraftInput {
-  intent: SupportIntent;
+  intent: DraftIntent;
   order: OrderFacts | null;
   /** Legacy single-tracking field consumed by the template generator. */
   tracking: TrackingFacts | null;
@@ -26,6 +28,7 @@ export interface DraftInput {
 }
 
 export function generateDraft(input: DraftInput): string {
+  const intent = normalizeDraftIntent(input.intent);
   const cfg = resolveSettings(input.settings);
   const lang = resolveLanguage(cfg.language, input.parsed ?? null);
   const t = T[lang];
@@ -35,11 +38,15 @@ export function generateDraft(input: DraftInput): string {
   const track = trackingBlock(input.tracking, lang);
   const sign = signoff(cfg, lang);
 
+  if (!input.order && intent === "pre_purchase_question") {
+    return joinLines([hi, "", t.prePurchaseIntro, t.prePurchaseClarify, "", sign]);
+  }
+
   if (!input.order) {
     return joinLines([hi, "", t.noOrderFound, t.askIdentifiers, "", sign]);
   }
 
-  switch (input.intent) {
+  switch (intent) {
     case "where_is_my_order":
       return joinLines([
         hi,
@@ -78,14 +85,26 @@ export function generateDraft(input: DraftInput): string {
         sign,
       ]);
 
-    case "package_stuck":
+    case "damaged_product":
       return joinLines([
         hi,
         "",
-        t.stuckIntro,
+        t.damagedIntro,
         summary,
-        track,
-        t.stuckCloser,
+        "",
+        t.damagedCloser,
+        "",
+        sign,
+      ]);
+
+    case "order_error":
+      return joinLines([
+        hi,
+        "",
+        t.orderErrorIntro,
+        summary,
+        "",
+        t.orderErrorCloser,
         "",
         sign,
       ]);
@@ -102,6 +121,9 @@ export function generateDraft(input: DraftInput): string {
         sign,
       ]);
 
+    case "pre_purchase_question":
+      return joinLines([hi, "", t.prePurchaseIntro, t.prePurchaseClarify, "", sign]);
+
     case "unknown":
     default:
       return joinLines([
@@ -115,6 +137,10 @@ export function generateDraft(input: DraftInput): string {
         sign,
       ]);
   }
+}
+
+function normalizeDraftIntent(intent: DraftIntent): SupportIntent {
+  return intent === "package_stuck" ? "delivery_delay" : intent;
 }
 
 export function buildDraft(
@@ -259,12 +285,24 @@ const T = {
       "I'm sorry to hear the parcel has not reached you even though it shows as delivered. Here is what I have on file:",
     deliveredCloser:
       "Could you please check with neighbours and any safe-drop location, and confirm the delivery address on the order is correct? We will open an investigation with the carrier in parallel.",
+    damagedIntro:
+      "I'm sorry to hear that your product arrived damaged. I have located your order:",
+    damagedCloser:
+      "Could you please send us a photo of the damaged item and the packaging? Once we have that, we can review the situation and confirm the next steps.",
+    orderErrorIntro:
+      "I'm sorry there seems to be an issue with your order. I have located the order details:",
+    orderErrorCloser:
+      "Could you please confirm what you received and what you expected to receive? We will compare this with the order details and come back to you with next steps.",
     stuckIntro: "Thanks for letting us know. I've reviewed the tracking information for your order:",
     stuckCloser:
       "We will contact the carrier to ask for an update. I'll get back to you as soon as I have more information.",
     refundIntro: "Thank you for your message. I have located your order:",
     refundCloser:
       "Before processing anything, could you share a few more details about the reason for the refund request? Once I have that, I'll review the order with our team and come back to you with next steps.",
+    prePurchaseIntro:
+      "Thanks for your message. I'll be happy to help with your question before you place an order.",
+    prePurchaseClarify:
+      "Could you please share the product, variant, or detail you would like us to confirm?",
     unknownIntro: "Thanks for reaching out. I've located the following order on our side:",
     unknownClarify: "Could you tell me a bit more about what you'd like help with?",
     unknownClarifyWarned:
@@ -286,12 +324,24 @@ const T = {
       "Je suis désolé que le colis ne soit pas arrivé alors qu'il est marqué comme livré. Voici les informations que j'ai :",
     deliveredCloser:
       "Pouvez-vous vérifier auprès des voisins et du point de dépôt habituel, et confirmer l'adresse de livraison renseignée sur la commande ? Nous ouvrons une enquête auprès du transporteur en parallèle.",
+    damagedIntro:
+      "Je suis désolé que votre produit soit arrivé abîmé. J'ai retrouvé votre commande :",
+    damagedCloser:
+      "Pourriez-vous nous envoyer une photo du produit abîmé ainsi que de l'emballage ? Dès réception, nous pourrons examiner la situation et vous confirmer la marche à suivre.",
+    orderErrorIntro:
+      "Je suis désolé qu'il y ait une erreur sur votre commande. J'ai retrouvé les informations de commande :",
+    orderErrorCloser:
+      "Pourriez-vous nous confirmer ce que vous avez reçu et ce que vous attendiez ? Nous comparerons ces éléments avec la commande et reviendrons vers vous avec la suite à donner.",
     stuckIntro: "Merci de nous avoir prévenus. J'ai consulté les informations de suivi de votre commande :",
     stuckCloser:
       "Nous contactons le transporteur pour obtenir une mise à jour. Je reviens vers vous dès que j'ai plus d'informations.",
     refundIntro: "Merci pour votre message. J'ai retrouvé votre commande :",
     refundCloser:
       "Avant de procéder, pourriez-vous nous préciser la raison de votre demande de remboursement ? Dès réception de ces éléments, je reviendrai vers vous avec la suite à donner.",
+    prePurchaseIntro:
+      "Merci pour votre message. Nous pouvons bien sûr vous aider avant votre achat.",
+    prePurchaseClarify:
+      "Pourriez-vous nous préciser le produit, la variante ou le point que vous souhaitez confirmer ?",
     unknownIntro: "Merci pour votre message. J'ai retrouvé la commande suivante :",
     unknownClarify: "Pourriez-vous nous en dire un peu plus sur votre demande ?",
     unknownClarifyWarned:

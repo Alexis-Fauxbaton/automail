@@ -10,7 +10,7 @@ This is a support copilot, not a bot. Nothing is sent automatically.
 
 ## What it does
 
-- Detects the support intent (WISMO, delivery delay, stuck parcel, refund request, …)
+- Detects support intent, including multiple intents in the same thread when needed (for example delivered-not-received + refund request)
 - Extracts identifiers from the message (order number, customer email, tracking number)
 - Searches the Shopify Admin API for matching orders
 - Retrieves order, fulfillment, and tracking facts
@@ -20,14 +20,20 @@ This is a support copilot, not a bot. Nothing is sent automatically.
 
 ## Supported flows (MVP)
 
-| Intent | Description |
-|--------|-------------|
-| `where_is_my_order` | Order and fulfillment lookup |
-| `delivery_delay` | Estimated delivery context |
-| `marked_delivered_not_received` | Last-mile investigation |
-| `package_stuck` | Carrier status check |
-| `refund_request` | Financial status + policy |
-| `unknown` | Flagged for manual review |
+Canonical support intents are defined by `SUPPORT_INTENTS` in `app/lib/support/types.ts`:
+
+| Intent | French label | Description |
+|--------|--------------|-------------|
+| `where_is_my_order` | Ou est ma commande | Order and fulfillment lookup |
+| `delivery_delay` | Retard de livraison | Estimated delivery context, including stuck tracking or no movement updates |
+| `marked_delivered_not_received` | Livre non recu | Last-mile investigation when tracking says delivered but the customer says they did not receive the parcel |
+| `damaged_product` | Produit abime | Product or item received damaged, broken, or unusable |
+| `order_error` | Erreur de commande | Wrong item, wrong size/color, missing item, or preparation mistake |
+| `refund_request` | Remboursement | Refund, reimbursement, or money-back request |
+| `pre_purchase_question` | Question avant achat | Question before buying or placing an order |
+| `unknown` | Autre | Manual review when no supported intent clearly applies |
+
+Analyses keep a primary `intent` for prioritization, SQL filtering, and draft generation, and can also include an ordered `intents` array for every detected intent. Older analyses without `intents` are treated as single-intent using their primary `intent`.
 
 ---
 
@@ -109,6 +115,21 @@ prisma/
 | `SyncJob` | Durable background job queue (sync, backfill, resync) |
 | `LlmCallLog` | Per-call cost and token tracking |
 
+### Mail sync and tracking refresh
+
+Mailbox sync also keeps visible Shopify/tracking facts fresh. After each manual
+or automatic mail sync, active support analyses are refreshed when their
+`IncomingEmail.lastAnalyzedAt` value is missing or older than 24 hours.
+
+The refresh re-runs the support analysis for the latest analyzed incoming email
+per thread, which refetches Shopify order/fulfillment data and tracking facts.
+It does not run for threads explicitly classified as `non_support`, or for
+threads in `resolved` / `no_reply_needed` states.
+
+The inbox displays the analysis freshness next to the Tracking section title
+(`Updated ...` / `Not yet updated`). Draft regeneration and refinement also
+trigger a stricter 1-hour freshness check before generating text.
+
 ### Shopify scopes
 
 Read-only: `read_orders`, `read_all_orders`, `read_customers`, `read_fulfillments`.
@@ -186,6 +207,8 @@ npm test && npm run test:integration && npm run test:e2e
 
 The app runs as a single Node process on Render. The auto-sync background loop
 starts at boot (`entry.server.tsx`) and polls for new emails on a per-shop interval.
+Each auto-sync cycle also refreshes active support tracking/Shopify analyses
+older than 24 hours.
 
 ```shell
 npm run setup   # prisma generate + migrate deploy

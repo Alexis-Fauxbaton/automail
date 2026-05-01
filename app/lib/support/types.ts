@@ -3,13 +3,18 @@
 
 export type Confidence = "high" | "medium" | "low";
 
-export type SupportIntent =
-  | "where_is_my_order"
-  | "delivery_delay"
-  | "marked_delivered_not_received"
-  | "package_stuck"
-  | "refund_request"
-  | "unknown";
+export const SUPPORT_INTENTS = [
+  "where_is_my_order",
+  "delivery_delay",
+  "marked_delivered_not_received",
+  "damaged_product",
+  "order_error",
+  "refund_request",
+  "pre_purchase_question",
+  "unknown",
+] as const;
+
+export type SupportIntent = (typeof SUPPORT_INTENTS)[number];
 
 export interface ParsedEmail {
   subject: string;
@@ -115,7 +120,10 @@ export interface Warning {
 }
 
 export interface SupportAnalysis {
+  /** Primary intent used for prioritization, filters, and draft generation. */
   intent: SupportIntent;
+  /** All detected intents, ordered by priority. Falls back to [intent] for legacy analyses. */
+  intents?: SupportIntent[];
   identifiers: ExtractedIdentifiers;
   order: OrderFacts | null;
   /** If several orders match the identifiers. */

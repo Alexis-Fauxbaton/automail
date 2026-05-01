@@ -253,7 +253,6 @@ export function buildCrawlTasks(
     "where_is_my_order",
     "delivery_delay",
     "marked_delivered_not_received",
-    "package_stuck",
     "refund_request", // needed: if package not received, live status informs the reply
   ];
 

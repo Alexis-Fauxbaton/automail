@@ -28,7 +28,7 @@ vi.mock("../settings", () => ({
     refundPolicy: "",
   },
 }));
-import type { OrderFacts, TrackingFacts } from "../types";
+import { SUPPORT_INTENTS, type OrderFacts, type TrackingFacts } from "../types";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -145,8 +145,9 @@ describe("Lost parcel rule: never declare the package lost", () => {
     expect(text).toMatch(/neighbour|neighbor|safe.?drop|investigation|address/i);
   });
 
-  it("package-stuck draft does not declare the parcel lost", () => {
+  it("legacy package_stuck draft is treated like a delivery delay and does not declare the parcel lost", () => {
     const text = draft({ intent: "package_stuck" });
+    expect(text).toMatch(/delay|retard|tracking|suivi/i);
     expect(text).not.toMatch(/\blost\b/i);
     expect(text).not.toMatch(/\bperdu\b/i);
   });
@@ -219,14 +220,7 @@ describe("Language auto-detection", () => {
 
 describe("Draft structure", () => {
   it("always starts with a greeting", () => {
-    for (const intent of [
-      "where_is_my_order",
-      "delivery_delay",
-      "marked_delivered_not_received",
-      "package_stuck",
-      "refund_request",
-      "unknown",
-    ] as const) {
+    for (const intent of SUPPORT_INTENTS) {
       const text = draft({ intent });
       // First line must be a greeting
       const firstLine = text.split("\n")[0];
@@ -271,6 +265,18 @@ describe("Draft structure", () => {
   it("unknown intent with no warnings uses the standard clarification message", () => {
     const text = draft({ intent: "unknown", warnings: [] });
     expect(text).not.toBe("");
+  });
+
+  it("pre-purchase question without an order does not ask for an order number", () => {
+    const text = draft({ intent: "pre_purchase_question", order: null });
+    expect(text).toMatch(/before you place an order|avant votre achat/i);
+    expect(text).not.toMatch(/order number|numéro de commande/i);
+  });
+
+  it("damaged product draft asks for photos without claiming a refund", () => {
+    const text = draft({ intent: "damaged_product" });
+    expect(text).toMatch(/photo/i);
+    expect(text).not.toMatch(/refund (?:has been|was) issued|remboursement (?:a été|est) effectué/i);
   });
 });
 

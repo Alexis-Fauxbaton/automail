@@ -5,24 +5,18 @@
  */
 
 import { getOpenAIClient, trackedChatCompletion, type TrackedCallContext } from "../llm/client";
-import type { ExtractedIdentifiers, ParsedEmail, SupportIntent } from "./types";
+import { SUPPORT_INTENTS, type ExtractedIdentifiers, type ParsedEmail, type SupportIntent } from "./types";
 import { extractIdentifiers } from "./identifier-extractor";
-import { classifyIntent } from "./intent-classifier";
+import { classifyIntent, classifyIntents } from "./intent-classifier";
 
-const VALID_INTENTS: SupportIntent[] = [
-  "where_is_my_order",
-  "delivery_delay",
-  "marked_delivered_not_received",
-  "package_stuck",
-  "refund_request",
-  "unknown",
-];
+const VALID_INTENTS: readonly SupportIntent[] = SUPPORT_INTENTS;
 
 const SYSTEM_PROMPT = `You are an assistant that extracts structured data from customer support emails for an e-commerce store.
 
 Given an email subject and body, return a JSON object with this exact shape:
 {
-  "intent": one of: "where_is_my_order" | "delivery_delay" | "marked_delivered_not_received" | "package_stuck" | "refund_request" | "unknown",
+  "intent": one primary intent, one of: "where_is_my_order" | "delivery_delay" | "marked_delivered_not_received" | "damaged_product" | "order_error" | "refund_request" | "pre_purchase_question" | "unknown",
+  "intents": array of all matching intents, ordered from most important to least important. Use ["unknown"] only if no support intent applies,
   "orderNumber": string or null,   // digits only, no # sign, e.g. "1002"
   "email": string or null,         // customer email address if present
   "customerName": string or null,  // full name of the customer if clearly stated
@@ -33,8 +27,11 @@ Intent definitions:
 - where_is_my_order: customer wants to know where their parcel is or its tracking status
 - delivery_delay: customer complains the delivery is late
 - marked_delivered_not_received: carrier says delivered but customer hasn't received it
-- package_stuck: tracking hasn't updated in a while, parcel seems stuck
+- damaged_product: customer says an item/product arrived damaged, broken, or unusable
+- order_error: customer reports a wrong item, wrong size/color, missing item, or another order preparation mistake
+- delivery_delay also covers parcels whose tracking has not updated in a while or appears stuck
 - refund_request: customer explicitly asks for a refund or reimbursement
+- pre_purchase_question: customer asks a question before buying or placing an order
 - unknown: none of the above clearly applies
 
 Rules:
@@ -44,6 +41,7 @@ Rules:
 
 export interface LLMParseResult {
   intent: SupportIntent;
+  intents: SupportIntent[];
   identifiers: ExtractedIdentifiers;
   usedLLM: boolean;
 }
@@ -58,6 +56,7 @@ export async function llmParseEmail(
     // No API key configured — fall back silently to regex.
     return {
       intent: classifyIntent(parsed),
+      intents: classifyIntents(parsed),
       identifiers: extractIdentifiers(parsed),
       usedLLM: false,
     };
@@ -84,11 +83,10 @@ export async function llmParseEmail(
     const raw = response.choices[0]?.message?.content ?? "";
     const parsed_json = JSON.parse(raw) as Record<string, unknown>;
 
-    const intent: SupportIntent = VALID_INTENTS.includes(
-      parsed_json.intent as SupportIntent,
-    )
-      ? (parsed_json.intent as SupportIntent)
-      : "unknown";
+    const parsedIntent = coerceIntent(parsed_json.intent);
+
+    const intents = normalizeIntents(parsed_json.intents, parsedIntent);
+    const intent = intents[0] ?? "unknown";
 
     const identifiers: ExtractedIdentifiers = {
       orderNumber: strOrUndefined(parsed_json.orderNumber),
@@ -97,15 +95,29 @@ export async function llmParseEmail(
       trackingNumber: strOrUndefined(parsed_json.trackingNumber),
     };
 
-    return { intent, identifiers, usedLLM: true };
+    return { intent, intents, identifiers, usedLLM: true };
   } catch (err) {
     console.error("[llm-parser] OpenAI call failed, falling back to regex:", err);
     return {
       intent: classifyIntent(parsed),
+      intents: classifyIntents(parsed),
       identifiers: extractIdentifiers(parsed),
       usedLLM: false,
     };
   }
+}
+
+function normalizeIntents(value: unknown, primary: SupportIntent): SupportIntent[] {
+  const parsed = Array.isArray(value) ? value.map(coerceIntent).filter((intent) => intent !== "unknown") : [];
+  const meaningful = parsed.filter((intent) => intent !== "unknown");
+  const ordered = primary !== "unknown" ? [primary, ...meaningful] : meaningful;
+  const unique = [...new Set(ordered)];
+  return unique.length > 0 ? unique : ["unknown"];
+}
+
+function coerceIntent(value: unknown): SupportIntent {
+  if (value === "package_stuck") return "delivery_delay";
+  return VALID_INTENTS.includes(value as SupportIntent) ? (value as SupportIntent) : "unknown";
 }
 
 function strOrUndefined(val: unknown): string | undefined {

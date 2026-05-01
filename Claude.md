@@ -22,12 +22,16 @@ This is a support copilot, not a full CRM.
 
 ## MVP scope
 The MVP must support these flows:
-- Where is my order
-- Delivery delay
-- Package marked as delivered but not received
-- Package appears stuck
-- Refund request
-- Unknown / manual review case
+- `where_is_my_order` - Where is my order / order tracking request
+- `delivery_delay` - Delivery delay / late delivery, including stuck tracking or no movement updates
+- `marked_delivered_not_received` - Package marked as delivered but not received
+- `damaged_product` - Product or item received damaged, broken, or unusable
+- `order_error` - Wrong item, wrong size/color, missing item, or preparation mistake
+- `refund_request` - Refund or reimbursement request
+- `pre_purchase_question` - Question before buying or placing an order
+- `unknown` - Unknown / manual review case
+
+These exact values are the canonical support intents. Analyses keep a primary `intent` for compatibility and an ordered `intents` array when several intents apply to the same email or conversation.
 
 The MVP must:
 - extract useful identifiers from the message
@@ -146,7 +150,8 @@ Expected high-level flow:
    - otherwise infer likely provider from tracking number pattern
    - use external tracking lookup only if needed
 6. Build a structured result:
-   - detected intent
+   - detected primary intent
+   - all detected intents when a message/conversation contains several support intents
    - extracted identifiers
    - verified Shopify facts
    - verified tracking facts
@@ -239,6 +244,10 @@ Requirements:
 - prefer Shopify-provided tracking URLs or carrier data
 - if scraping is introduced, keep it behind a dedicated interface
 - clearly label fallback-derived data as less reliable
+- automatic and manual mail sync must refresh active support analyses/tracking when `lastAnalyzedAt` is missing or older than 24 hours
+- draft regeneration and refinement must also refresh analysis/tracking first when the last update is older than 1 hour
+- do not refresh tracking for threads classified as `non_support`, `resolved`, or `no_reply_needed`
+- the last analysis/tracking update time must remain visible next to the Tracking section title
 
 Do not hardcode one giant tracking logic block inside a route or component.
 

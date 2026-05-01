@@ -70,8 +70,11 @@
     "intent_where_is_my_order": "Où est ma commande",
     "intent_delivery_delay": "Retard de livraison",
     "intent_marked_delivered_not_received": "Livré non reçu",
-    "intent_package_stuck": "Colis bloqué",
+    "intent_damaged_product": "Produit abîmé",
+    "intent_order_error": "Erreur de commande",
+    "intent_package_stuck": "Retard de livraison",
     "intent_refund_request": "Remboursement",
+    "intent_pre_purchase_question": "Question avant achat",
     "intent_unknown": "Autre"
   },
   "settings": {

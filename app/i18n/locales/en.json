@@ -70,8 +70,11 @@
     "intent_where_is_my_order": "Where is my order",
     "intent_delivery_delay": "Delivery delay",
     "intent_marked_delivered_not_received": "Marked delivered not received",
-    "intent_package_stuck": "Package stuck",
+    "intent_damaged_product": "Damaged product",
+    "intent_order_error": "Order error",
+    "intent_package_stuck": "Delivery delay",
     "intent_refund_request": "Refund request",
+    "intent_pre_purchase_question": "Pre-purchase question",
     "intent_unknown": "Unknown"
   },
   "settings": {

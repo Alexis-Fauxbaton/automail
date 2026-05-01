@@ -242,7 +242,8 @@ export async function createZohoClient(shop: string): Promise<MailClient> {
         `/api/accounts/${accountId}/folders/${folderId}/messages/${messageId}/content`,
         { includeBlockContent: "true" },
       )) as { data?: { content: string } };
-      const htmlBody = contentData.data?.content ?? "";
+      const rawHtml = contentData.data?.content ?? "";
+      const htmlBody = rawHtml ? await embedZohoInlineImages(rawHtml, token, getApiDomain()) : rawHtml;
       const bodyText = cleanHtml(htmlBody);
 
       // Parse sender
@@ -364,6 +365,64 @@ export async function createZohoClient(shop: string): Promise<MailClient> {
 }
 
 // --- Helpers ---
+
+const IMAGE_DISPLAY_RE = /src\s*=\s*"(\/mail\/ImageDisplay\?[^"]+)"/gi;
+const MAX_INLINE_IMAGE_BYTES = 512 * 1024;
+
+/**
+ * Replaces Zoho /mail/ImageDisplay?... src attributes with data: URIs by
+ * fetching each image server-side using the Zoho OAuth token.
+ */
+async function embedZohoInlineImages(
+  html: string,
+  accessToken: string,
+  domain: string,
+): Promise<string> {
+  const matches: Array<{ placeholder: string; relUrl: string }> = [];
+  let m: RegExpExecArray | null;
+  IMAGE_DISPLAY_RE.lastIndex = 0;
+  while ((m = IMAGE_DISPLAY_RE.exec(html)) !== null) {
+    matches.push({ placeholder: m[0], relUrl: m[1] });
+  }
+  console.log(`[zoho/embedImages] found ${matches.length} ImageDisplay URLs`);
+  if (matches.length === 0) return html;
+
+  const unique = [...new Map(matches.map((x) => [x.relUrl, x])).values()];
+  const replacements = new Map<string, string>();
+
+  await Promise.all(
+    unique.map(async ({ placeholder, relUrl }) => {
+      try {
+        const imageUrl = `https://${domain}${relUrl.replace(/&amp;/g, "&")}`;
+        const res = await fetch(imageUrl, {
+          headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
+        });
+        const contentType = res.headers.get("Content-Type") ?? "";
+        console.log(`[zoho/embedImages] ${res.status} type=${contentType} url=${relUrl}`);
+        if (!res.ok) {
+          console.warn(`[zoho/embedImages] non-ok status ${res.status}`);
+          return;
+        }
+        if (!contentType.startsWith("image/")) {
+          console.warn(`[zoho/embedImages] non-image content-type: ${contentType} — skipping`);
+          return;
+        }
+        const buffer = Buffer.from(await res.arrayBuffer());
+        if (buffer.byteLength > MAX_INLINE_IMAGE_BYTES) {
+          console.warn(`[zoho/embedImages] too large (${buffer.byteLength}B), skipping`);
+          return;
+        }
+        const base64 = buffer.toString("base64");
+        replacements.set(placeholder, `src="data:${contentType};base64,${base64}"`);
+      } catch (err) {
+        console.warn(`[zoho/embedImages] fetch error for ${relUrl}:`, err);
+      }
+    }),
+  );
+
+  if (replacements.size === 0) return html;
+  return html.replace(IMAGE_DISPLAY_RE, (match) => replacements.get(match) ?? match);
+}
 
 /** Fetch attachment metadata for a Zoho message (best-effort, returns [] on error). */
 async function fetchZohoAttachmentsMeta(

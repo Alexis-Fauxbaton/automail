@@ -4,6 +4,7 @@
  */
 import type { Plugin } from "vite";
 import type { IncomingMessage, ServerResponse } from "http";
+import { verifyOAuthState } from "./app/lib/mail/oauth-state";
 
 export function mailAuthPlugin(): Plugin {
   return {
@@ -32,24 +33,21 @@ export function mailAuthPlugin(): Plugin {
             const rawState = url.searchParams.get("state") ?? "";
 
             if (!code || !rawState) {
-              res.writeHead(302, { Location: "/app/inbox?error=missing_params" });
-              res.end();
+              res.writeHead(400, { "Content-Type": "text/plain" });
+              res.end("Missing OAuth parameters (code or state)");
               return;
             }
 
-            let provider: "gmail" | "zoho" = "gmail";
-            let shop = rawState;
-            if (rawState.startsWith("zoho:")) {
-              provider = "zoho";
-              shop = rawState.slice(5);
-            } else if (rawState.startsWith("gmail:")) {
-              provider = "gmail";
-              shop = rawState.slice(6);
+            const verified = verifyOAuthState(rawState);
+            if (!verified) {
+              console.warn("[mail-auth-plugin] Invalid OAuth state, state_len=", rawState.length);
+              res.writeHead(400, { "Content-Type": "text/plain" });
+              res.end("Invalid or expired OAuth state. Please try connecting again.");
+              return;
             }
 
-            console.log(
-              `[mail-auth-plugin] Exchanging ${provider} token for shop ${shop}`,
-            );
+            const { provider, shop } = verified;
+            console.log(`[mail-auth-plugin] Exchanging ${provider} token for shop ${shop}`);
 
             if (provider === "zoho") {
               const { exchangeZohoCode, saveZohoConnection } = await import(
@@ -75,8 +73,9 @@ export function mailAuthPlugin(): Plugin {
             res.end();
           } catch (err) {
             console.error("[mail-auth-plugin] Token exchange failed:", err);
-            res.writeHead(302, { Location: "/app/inbox?error=auth_failed" });
-            res.end();
+            const msg = err instanceof Error ? err.message : String(err);
+            res.writeHead(500, { "Content-Type": "text/plain" });
+            res.end(`Token exchange failed: ${msg}`);
           }
         }) as any,
       });
