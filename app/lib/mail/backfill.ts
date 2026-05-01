@@ -147,15 +147,16 @@ export async function runOpportunisticThreadBackfill(
   if (!conn) return { added: 0 };
   const client = await getMailClient(thread.shop, conn.provider);
 
+  const localIds = await prisma.incomingEmail.findMany({
+    where: { canonicalThreadId, shop: thread.shop },
+    select: { externalMessageId: true },
+  });
+  const localSet = new Set(localIds.map((r) => r.externalMessageId));
+
   let added = 0;
   for (const mapping of thread.providerIds) {
     try {
       const remote = await client.getThreadMessages(mapping.providerThreadId);
-      const localIds = await prisma.incomingEmail.findMany({
-        where: { canonicalThreadId },
-        select: { externalMessageId: true },
-      });
-      const localSet = new Set(localIds.map((r) => r.externalMessageId));
       const missing = remote.filter((m) => !localSet.has(m.id));
       for (const m of missing) {
         try {

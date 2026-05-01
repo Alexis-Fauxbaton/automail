@@ -161,7 +161,7 @@ export async function recomputeThreadState(
   }
 
   const messages = await prisma.incomingEmail.findMany({
-    where: { canonicalThreadId },
+    where: { canonicalThreadId, shop: thread.shop },
     orderBy: { receivedAt: "asc" },
     select: {
       id: true,
