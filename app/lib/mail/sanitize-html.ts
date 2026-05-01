@@ -54,10 +54,24 @@ export function sanitizeEmailHtml(
       if (att.inlineData) return `src='data:${att.mimeType};base64,${att.inlineData}'`;
       return `src='/api/incoming-attachment?id=${att.id}'`;
     })
-    // Strip relative src attributes — they'd resolve to our app's routes and cause 404s.
+    // Rewrite or strip relative src attributes.
+    // Zoho inline image URLs (/mail/ImageDisplay?...) are rewritten to our proxy.
+    // All other relative URLs are stripped to prevent 404s against our app routes.
     // Absolute https:// and data: are kept; cid: was already handled above.
-    .replace(/src\s*=\s*"(?!https?:\/\/|data:)([^"]*)"/gi, 'src=""')
-    .replace(/src\s*=\s*'(?!https?:\/\/|data:)([^']*)'/gi, "src=''")
+    .replace(/src\s*=\s*"(?!https?:\/\/|data:|\/api\/)([^"]*)"/gi, (_match, relUrl) => {
+      if (relUrl.startsWith("/mail/ImageDisplay?")) {
+        const qs = relUrl.slice("/mail/ImageDisplay?".length);
+        return `src="/api/zoho-inline?${qs}"`;
+      }
+      return 'src=""';
+    })
+    .replace(/src\s*=\s*'(?!https?:\/\/|data:|\/api\/)([^']*)'/gi, (_match, relUrl) => {
+      if (relUrl.startsWith("/mail/ImageDisplay?")) {
+        const qs = relUrl.slice("/mail/ImageDisplay?".length);
+        return `src='/api/zoho-inline?${qs}'`;
+      }
+      return "src=''";
+    })
     // Strip relative href attributes (keep https://, mailto:, #, javascript already handled)
     .replace(/href\s*=\s*"(?!https?:\/\/|mailto:|#)([^"]*)"/gi, 'href="#"')
     .replace(/href\s*=\s*'(?!https?:\/\/|mailto:|#)([^']*)'/gi, "href='#'")
