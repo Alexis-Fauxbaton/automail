@@ -351,6 +351,7 @@ export async function createZohoClient(shop: string): Promise<MailClient> {
               receivedAt: new Date(parseInt(item.receivedTime, 10)),
               labelIds: [],
               headers: {},
+              attachments: [],
             });
           } catch (err) {
             console.error(`[zoho] Failed to fetch content for ${item.messageId}:`, err);

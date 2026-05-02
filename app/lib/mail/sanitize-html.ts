@@ -32,6 +32,17 @@ export function sanitizeEmailHtml(
   cidMap: Map<string, { id: string; mimeType: string; inlineData: string | null }>,
 ): string {
   return html
+    // Remove <base> tags that redirect all relative links
+    .replace(/<base[^>]*>/gi, "")
+    // Remove <link> tags that could load external stylesheets
+    .replace(/<link[^>]*>/gi, "")
+    // Remove <meta> tags (http-equiv redirect risk)
+    .replace(/<meta[^>]*>/gi, "")
+    // Block data:text/html and data:text/javascript URIs in src/href
+    .replace(/(src|href)\s*=\s*"data:text\/(html|javascript)[^"]*"/gi, '$1="#"')
+    .replace(/(src|href)\s*=\s*'data:text\/(html|javascript)[^']*'/gi, "$1='#'")
+    // Strip SVG event handlers (onload, onerror, etc. on SVG elements)
+    .replace(/<svg[^>]*on\w+\s*=[^>]*>/gi, (m) => m.replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, ""))
     // Remove <script> blocks
     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
     // Remove <style> blocks (may contain expression() or behavior: attacks)

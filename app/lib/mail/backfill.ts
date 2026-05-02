@@ -24,6 +24,21 @@ import { extractAndCache, mergeThreadIdentifiers } from "../support/thread-ident
 import { recomputeThreadState } from "../support/thread-state";
 import { prefilterEmail } from "../gmail/prefilter";
 
+async function runInBatches<T>(
+  items: T[],
+  batchSize: number,
+  delayMs: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  for (let i = 0; i < items.length; i += batchSize) {
+    const batch = items.slice(i, i + batchSize);
+    await Promise.allSettled(batch.map(fn));
+    if (i + batchSize < items.length && delayMs > 0) {
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+}
+
 async function getMailClient(shop: string, provider: string): Promise<MailClient> {
   if (provider === "zoho") return createZohoClient(shop);
   return createGmailClient(shop);
@@ -61,14 +76,14 @@ export async function runOnboardingBackfill(
   const fresh = messageIds.filter((id) => !existingSet.has(id));
 
   let ingested = 0;
-  for (const msgId of fresh) {
+  await runInBatches(fresh, 10, 50, async (msgId) => {
     try {
       await ingestHistoricalMessage(shop, conn.provider, client, msgId, conn.email);
       ingested++;
     } catch (err) {
       console.error("[backfill/onboarding] failed for", msgId, err);
     }
-  }
+  });
 
   await prisma.mailConnection.update({
     where: { shop },
@@ -100,14 +115,14 @@ export async function runManualBackfill(
   const fresh = messageIds.filter((id) => !existingSet.has(id));
 
   let ingested = 0;
-  for (const msgId of fresh) {
+  await runInBatches(fresh, 10, 50, async (msgId) => {
     try {
       await ingestHistoricalMessage(shop, conn.provider, client, msgId, conn.email);
       ingested++;
     } catch (err) {
       console.error("[backfill/manual] failed for", msgId, err);
     }
-  }
+  });
   return { ingested, skipped: existing.length };
 }
 
@@ -132,15 +147,16 @@ export async function runOpportunisticThreadBackfill(
   if (!conn) return { added: 0 };
   const client = await getMailClient(thread.shop, conn.provider);
 
+  const localIds = await prisma.incomingEmail.findMany({
+    where: { canonicalThreadId, shop: thread.shop },
+    select: { externalMessageId: true },
+  });
+  const localSet = new Set(localIds.map((r) => r.externalMessageId));
+
   let added = 0;
   for (const mapping of thread.providerIds) {
     try {
       const remote = await client.getThreadMessages(mapping.providerThreadId);
-      const localIds = await prisma.incomingEmail.findMany({
-        where: { canonicalThreadId },
-        select: { externalMessageId: true },
-      });
-      const localSet = new Set(localIds.map((r) => r.externalMessageId));
       const missing = remote.filter((m) => !localSet.has(m.id));
       for (const m of missing) {
         try {
@@ -219,7 +235,7 @@ async function ingestHistoricalMessage(
     tier1Result = pf.passed ? "passed" : `filtered:${pf.reason}`;
   }
 
-  await prisma.incomingEmail.create({
+  const created = await prisma.incomingEmail.create({
     data: {
       shop,
       externalMessageId: msg.id,
@@ -239,16 +255,13 @@ async function ingestHistoricalMessage(
       processingStatus: isOutgoing ? "outgoing" : "classified",
       tier1Result,
     },
+    select: { id: true },
   });
 
   await refreshThreadStats(canonicalThreadId);
   if (!isOutgoing) {
-    const row = await prisma.incomingEmail.findUniqueOrThrow({
-      where: { shop_externalMessageId: { shop, externalMessageId: msgId } },
-      select: { id: true },
-    });
     try {
-      await extractAndCache(row.id, msg.subject, msg.bodyText);
+      await extractAndCache(created.id, msg.subject, msg.bodyText);
       await mergeThreadIdentifiers(canonicalThreadId);
     } catch (err) {
       console.error("[backfill] identifier merge failed:", err);

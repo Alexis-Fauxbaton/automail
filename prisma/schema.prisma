@@ -21,7 +21,7 @@ model Session {
   isOnline      Boolean   @default(false)
   scope         String?
   expires       DateTime?
-  accessToken   String
+  accessToken   String    // encrypted
   userId        BigInt?
   firstName     String?
   lastName      String?
@@ -32,6 +32,8 @@ model Session {
   emailVerified Boolean?  @default(false)
   refreshToken        String?
   refreshTokenExpires DateTime?
+
+  @@index([shop])
 }
 
 // Per-shop configuration for the support copilot draft generator.
@@ -69,6 +71,8 @@ model MailConnection {
   onboardingBackfillDays   Int      @default(60)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+
+  @@index([autoSyncEnabled, lastSyncAt])
 }
 
 // Canonical thread: a normalized conversation identity that may group
@@ -132,6 +136,7 @@ model Thread {
   @@index([shop, lastMessageAt])
   @@index([shop, supportNature])
   @@index([shop, operationalState])
+  @@index([shop, operationalState, operationalStateUpdatedAt])
 }
 
 // Mapping from a provider-native threadId to the canonical Thread.id.

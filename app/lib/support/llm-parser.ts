@@ -77,7 +77,7 @@ export async function llmParseEmail(
         temperature: 0,
         max_tokens: 256,
       },
-      { callSite: "llm-parser", ...ctx },
+      { callSite: "llm-parser", shop: ctx?.shop ?? "", ...ctx },
     );
 
     const raw = response.choices[0]?.message?.content ?? "";

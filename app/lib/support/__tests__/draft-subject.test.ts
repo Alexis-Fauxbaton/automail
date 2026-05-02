@@ -22,4 +22,20 @@ describe("buildReplySubject", () => {
   it("strips multiple nested Re: prefixes", () => {
     expect(buildReplySubject("Re: Re: Re: Order question")).toBe("Re: Order question");
   });
+
+  it("strips Fwd: prefix", () => {
+    expect(buildReplySubject("Fwd: Where is my order?")).toBe("Re: Where is my order?");
+  });
+
+  it("strips Fw: prefix", () => {
+    expect(buildReplySubject("Fw: Where is my order?")).toBe("Re: Where is my order?");
+  });
+
+  it("strips mixed Re: and Fwd: prefixes", () => {
+    expect(buildReplySubject("Re: Fwd: Order question")).toBe("Re: Order question");
+  });
+
+  it("handles case-insensitive Fwd: prefix", () => {
+    expect(buildReplySubject("FWD: Test subject")).toBe("Re: Test subject");
+  });
 });

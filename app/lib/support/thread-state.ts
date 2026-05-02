@@ -8,7 +8,6 @@
 // Thread.supportNature / operationalState / structuredState directly.
 
 import prisma from "../../db.server";
-import { getTrueLatestMessage } from "../mail/thread-resolver";
 import { recordStateTransition } from "./thread-state-history";
 
 export type SupportNature =
@@ -161,7 +160,7 @@ export async function recomputeThreadState(
   }
 
   const messages = await prisma.incomingEmail.findMany({
-    where: { canonicalThreadId },
+    where: { canonicalThreadId, shop: thread.shop },
     orderBy: { receivedAt: "asc" },
     select: {
       id: true,
@@ -251,7 +250,9 @@ export async function recomputeThreadState(
     hasIncoming: incomingCount > 0,
   });
 
-  const trueLatest = await getTrueLatestMessage(canonicalThreadId);
+  // Use the last element of the already-fetched messages array (ordered asc)
+  // instead of an extra DB round-trip via getTrueLatestMessage.
+  const trueLatest = messages.length > 0 ? messages[messages.length - 1] : null;
 
   const structured: StructuredThreadState = {
     messageCount: messages.length,
@@ -288,44 +289,30 @@ export async function recomputeThreadState(
     thread.previousOperationalState !== null &&
     thread.operationalStateUpdatedAt !== null;
   if (wasManuallyResolved) {
-    const resolvedAt = thread.operationalStateUpdatedAt!.getTime();
+    const resolvedAtDate = thread.operationalStateUpdatedAt;
+    if (!resolvedAtDate) return structured; // unreachable: guard above ensures non-null
+    const resolvedAt = resolvedAtDate.getTime();
     const hasNewIncoming =
       lastCustomerAt !== null && lastCustomerAt.getTime() > resolvedAt;
     if (!hasNewIncoming) {
       // No new customer message since the manual resolve — honour it.
       // Still update supportNature and structuredState.
-      const structured: StructuredThreadState = {
-        messageCount: messages.length,
-        incomingCount,
-        outgoingCount,
-        orderResolved: !!thread.resolvedOrderNumber,
-        trackingResolved: !!thread.resolvedTrackingNumber,
-        resolvedOrderNumber: thread.resolvedOrderNumber,
-        resolvedTrackingNumber: thread.resolvedTrackingNumber,
-        resolutionConfidence:
-          (thread.resolutionConfidence as StructuredThreadState["resolutionConfidence"]) ?? "none",
-        lastCustomerMessageAt: lastCustomerAt?.toISOString() ?? null,
-        lastAgentMessageAt: lastAgentAt?.toISOString() ?? null,
-        lastDirection,
+      const resolvedStructured: StructuredThreadState = {
+        ...structured,
         awaitingCustomer: false,
         awaitingMerchant: false,
         replyNeeded: false,
-        hasDraft,
-        supportNature: finalNature,
-        operationalState: "resolved",
-        trueLatestMessageId: trueLatest?.id ?? null,
-        targetMessageId,
-        historyStatus: (thread.historyStatus as StructuredThreadState["historyStatus"]) ?? "unknown",
+        operationalState: "resolved" as const,
       };
       await prisma.thread.update({
         where: { id: canonicalThreadId },
         data: {
           supportNature: finalNature,
           supportNatureUpdatedAt: finalNature !== thread.supportNature ? now : undefined,
-          structuredState: JSON.stringify(structured),
+          structuredState: JSON.stringify(resolvedStructured),
         },
       });
-      return structured;
+      return resolvedStructured;
     }
     // New incoming after manual resolve — fall through to normal recompute
     // (thread is reopened automatically).
@@ -402,25 +389,41 @@ export async function recomputeAllOpenThreads(
   // Only process threads that have never been through recomputeThreadState
   // (operationalStateUpdatedAt IS NULL). Threads already computed but stuck
   // in "open" (e.g. outgoing-only) must not be re-enqueued every tick.
-  const threads = await prisma.thread.findMany({
-    where: { shop, operationalState: "open", operationalStateUpdatedAt: null },
-    select: { id: true },
-  });
-
+  let cursor: string | undefined;
   let processed = 0;
   let errors = 0;
-  for (const thread of threads) {
-    try {
-      await recomputeThreadState(thread.id, opts);
-      processed++;
-    } catch (err) {
-      errors++;
-      console.error(`[recompute] shop=${shop} thread=${thread.id} failed:`, err);
+  const BATCH_SIZE = 5;
+  const PAGE_SIZE = 100;
+
+  for (;;) {
+    const page = await prisma.thread.findMany({
+      where: { shop, operationalState: "open", operationalStateUpdatedAt: null },
+      select: { id: true },
+      take: PAGE_SIZE,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      orderBy: { id: "asc" },
+    });
+    if (page.length === 0) break;
+    cursor = page[page.length - 1].id;
+
+    // Process the page in concurrent batches of BATCH_SIZE
+    for (let i = 0; i < page.length; i += BATCH_SIZE) {
+      const batch = page.slice(i, i + BATCH_SIZE);
+      const results = await Promise.allSettled(
+        batch.map((t) => recomputeThreadState(t.id, opts)),
+      );
+      for (const r of results) {
+        if (r.status === "fulfilled") {
+          processed++;
+        } else {
+          errors++;
+          console.error(`[recompute] shop=${shop} batch item failed:`, r.reason);
+        }
+      }
     }
   }
-  console.log(
-    `[recompute] shop=${shop} done: processed=${processed} errors=${errors}`,
-  );
+
+  console.log(`[recompute] shop=${shop} done: processed=${processed} errors=${errors}`);
   return { processed, errors };
 }
 

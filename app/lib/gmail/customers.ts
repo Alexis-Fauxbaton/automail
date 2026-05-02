@@ -10,9 +10,19 @@ const CUSTOMERS_QUERY = `#graphql
   }
 `;
 
+const CACHE_TTL_MS = 20 * 60 * 1000; // 20 minutes
+
+const cache = new Map<string, { emails: Set<string>; fetchedAt: number }>();
+
 export async function fetchCustomerEmails(
   admin: AdminGraphqlClient,
+  shop: string,
 ): Promise<Set<string>> {
+  const cached = cache.get(shop);
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+    return cached.emails;
+  }
+
   const emails = new Set<string>();
   try {
     const res = await admin.graphql(CUSTOMERS_QUERY, {
@@ -25,5 +35,7 @@ export async function fetchCustomerEmails(
   } catch (err) {
     console.error("[gmail/customers] Failed to fetch customer emails:", err);
   }
+
+  cache.set(shop, { emails, fetchedAt: Date.now() });
   return emails;
 }

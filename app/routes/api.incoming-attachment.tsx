@@ -5,6 +5,23 @@ import { getGmailService } from "../lib/gmail/client";
 import { getZohoAccessToken } from "../lib/zoho/auth";
 import { listZohoFoldersRaw } from "../lib/zoho/client";
 
+const SAFE_INLINE_MIME_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+  "image/svg+xml",
+  "application/pdf",
+]);
+
+function safeMimeType(mime: string): { contentType: string; forceDownload: boolean } {
+  const normalized = mime.toLowerCase().split(";")[0].trim();
+  if (SAFE_INLINE_MIME_TYPES.has(normalized)) {
+    return { contentType: normalized, forceDownload: false };
+  }
+  return { contentType: "application/octet-stream", forceDownload: true };
+}
+
 /**
  * GET /api/incoming-attachment?id=<attachmentId>
  *
@@ -50,12 +67,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
   // Fast path: serve stored inline data
   if (attachment.inlineData) {
     const buffer = Buffer.from(attachment.inlineData, "base64");
+    const { contentType, forceDownload } = safeMimeType(attachment.mimeType);
+    const safeCd = forceDownload ? `attachment; filename="${safeFileName}"` : cd;
     return new Response(buffer, {
       headers: {
-        "Content-Type": attachment.mimeType,
+        "Content-Type": contentType,
         "Content-Length": String(buffer.length),
-        "Content-Disposition": cd,
+        "Content-Disposition": safeCd,
         "Cache-Control": "private, max-age=604800",
+        "X-Content-Type-Options": "nosniff",
       },
     });
   }
@@ -76,12 +96,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
       const data = res.data.data;
       if (!data) return new Response("Empty attachment", { status: 502 });
       const buffer = Buffer.from(data, "base64url");
+      const { contentType, forceDownload } = safeMimeType(attachment.mimeType);
+      const safeCd = forceDownload ? `attachment; filename="${safeFileName}"` : cd;
       return new Response(buffer, {
         headers: {
-          "Content-Type": attachment.mimeType,
+          "Content-Type": contentType,
           "Content-Length": String(buffer.length),
-          "Content-Disposition": cd,
+          "Content-Disposition": safeCd,
           "Cache-Control": "private, max-age=3600",
+          "X-Content-Type-Options": "nosniff",
         },
       });
     }
@@ -115,12 +138,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
       });
       if (!proxyRes.ok) return new Response("Provider error", { status: 502 });
       const buffer = Buffer.from(await proxyRes.arrayBuffer());
+      const { contentType, forceDownload } = safeMimeType(attachment.mimeType);
+      const safeCd = forceDownload ? `attachment; filename="${safeFileName}"` : cd;
       return new Response(buffer, {
         headers: {
-          "Content-Type": attachment.mimeType,
+          "Content-Type": contentType,
           "Content-Length": String(buffer.byteLength),
-          "Content-Disposition": cd,
+          "Content-Disposition": safeCd,
           "Cache-Control": "private, max-age=3600",
+          "X-Content-Type-Options": "nosniff",
         },
       });
     }

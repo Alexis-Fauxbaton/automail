@@ -143,13 +143,18 @@ export async function markJobDone(id: string): Promise<void> {
   });
 }
 
-export async function markJobFailed(id: string, err: unknown): Promise<void> {
+export async function markJobFailed(id: string, err: unknown, knownAttempts?: number): Promise<void> {
   const message = err instanceof Error ? err.message : String(err);
-  const job = await prisma.syncJob.findUnique({
-    where: { id },
-    select: { attempts: true },
-  });
-  const attempts = job?.attempts ?? 0;
+  let attempts: number;
+  if (knownAttempts !== undefined) {
+    attempts = knownAttempts;
+  } else {
+    const job = await prisma.syncJob.findUnique({
+      where: { id },
+      select: { attempts: true },
+    });
+    attempts = job?.attempts ?? 0;
+  }
   const exhausted = attempts >= MAX_ATTEMPTS;
   // Exponential backoff: attempt N → delay 2^(N-1) × BASE_BACKOFF_MS.
   const backoffMs = Math.min(

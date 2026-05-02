@@ -105,7 +105,7 @@ export async function classifyEmail(
         temperature: 0,
         max_tokens: 30,
       },
-      { callSite: "classifier", ...ctx },
+      { callSite: "classifier", shop: ctx.shop ?? "", ...ctx },
     );
 
     const raw = response.choices[0]?.message?.content ?? "";
@@ -121,6 +121,10 @@ export async function classifyEmail(
     }
     return "incertain";
   } catch (err) {
+    // Re-throw rate-limit errors so the pipeline's retry mechanism can handle them.
+    if (err instanceof Error && (err.message.includes("429") || err.message.includes("rate limit"))) {
+      throw err;
+    }
     console.error("[gmail/classifier] LLM classification failed:", err);
     return "incertain";
   }

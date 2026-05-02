@@ -1,6 +1,7 @@
 // Integration tests for GDPR webhook handlers.
 // Uses a real Postgres DB, isolated by TEST_SHOP.
 //
+// REQ-GDPR-01: customers/data_request acknowledges with 200
 // REQ-GDPR-02: customers/redact deletes emails from the redacted customer
 // REQ-GDPR-03: shop/redact deletes all shop data
 // REQ-GDPR-SIG: invalid signature → action throws 401
@@ -26,6 +27,7 @@ vi.mock('../../../shopify.server', () => ({
 }));
 
 import { authenticate } from '../../../shopify.server';
+import { action as customersDataRequestAction } from '../../../routes/webhooks.customers.data_request';
 import { action as customersRedactAction } from '../../../routes/webhooks.customers.redact';
 import { action as shopRedactAction } from '../../../routes/webhooks.shop.redact';
 
@@ -55,6 +57,24 @@ afterAll(async () => {
 // ---------------------------------------------------------------------------
 
 describe('GDPR webhooks — integration DB', () => {
+  it('customers/data_request acknowledges with 200 (REQ-GDPR-01)', async () => {
+    vi.mocked(authenticate.webhook).mockResolvedValueOnce({
+      topic: 'customers/data_request',
+      shop: TEST_SHOP,
+      payload: {
+        customer: { id: 456, email: 'user@example.com' },
+      },
+    } as any);
+
+    const response = await customersDataRequestAction({
+      request: makeRequest(),
+      params: {},
+      context: {} as any,
+    } as any);
+
+    expect(response.status).toBe(200);
+  });
+
   it('customers/redact deletes emails from the redacted customer (REQ-GDPR-02)', async () => {
     // 1. Seed: create a thread and two emails — one from the victim, one from someone else.
     const thread = await createTestThread();
@@ -109,8 +129,23 @@ describe('GDPR webhooks — integration DB', () => {
   });
 
   it('shop/redact deletes all shop data (REQ-GDPR-03)', async () => {
-    // 1. Seed: thread + mailConnection + supportSettings.
+    // 1. Seed: thread + mailConnection + supportSettings + incomingEmail.
     await createTestThread();
+
+    await testDb.incomingEmail.create({
+      data: {
+        shop: TEST_SHOP,
+        externalMessageId: 'msg-shop-redact',
+        fromAddress: 'customer@example.com',
+        fromName: '',
+        subject: 'Test',
+        snippet: '',
+        bodyText: '',
+        receivedAt: new Date(),
+        extractedIdentifiers: '{}',
+        labelIds: '[]',
+      },
+    });
 
     await testDb.mailConnection.create({
       data: {
@@ -145,16 +180,18 @@ describe('GDPR webhooks — integration DB', () => {
     expect(response.status).toBe(200);
 
     // 5. All shop data must be gone.
-    const [threadCount, mailConnectionCount, supportSettingsCount] =
+    const [threadCount, mailConnectionCount, supportSettingsCount, emailCount] =
       await Promise.all([
         testDb.thread.count({ where: { shop: TEST_SHOP } }),
         testDb.mailConnection.count({ where: { shop: TEST_SHOP } }),
         testDb.supportSettings.count({ where: { shop: TEST_SHOP } }),
+        testDb.incomingEmail.count({ where: { shop: TEST_SHOP } }),
       ]);
 
     expect(threadCount).toBe(0);
     expect(mailConnectionCount).toBe(0);
     expect(supportSettingsCount).toBe(0);
+    expect(emailCount).toBe(0);
   });
 
   it('invalid webhook signature → action throws 401 (REQ-GDPR-SIG)', async () => {

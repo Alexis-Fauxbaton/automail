@@ -3,6 +3,23 @@ import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { getZohoAccessToken } from "../lib/zoho/auth";
 
+const SAFE_INLINE_MIME_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+  "image/svg+xml",
+  "application/pdf",
+]);
+
+function safeMimeType(mime: string): { contentType: string; forceDownload: boolean } {
+  const normalized = mime.toLowerCase().split(";")[0].trim();
+  if (SAFE_INLINE_MIME_TYPES.has(normalized)) {
+    return { contentType: normalized, forceDownload: false };
+  }
+  return { contentType: "application/octet-stream", forceDownload: true };
+}
+
 /**
  * GET /api/zoho-inline?na=...&nmsgId=...&f=...&cid=...&mode=...
  *
@@ -50,15 +67,21 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }
 
     const buffer = Buffer.from(await res.arrayBuffer());
-    const contentType = res.headers.get("Content-Type") || "image/jpeg";
+    const rawContentType = res.headers.get("Content-Type") || "image/jpeg";
+    const { contentType, forceDownload } = safeMimeType(rawContentType);
 
-    return new Response(buffer, {
-      headers: {
-        "Content-Type": contentType,
-        "Content-Length": String(buffer.byteLength),
-        "Cache-Control": "private, max-age=3600",
-      },
-    });
+    const headers: Record<string, string> = {
+      "Content-Type": contentType,
+      "Content-Length": String(buffer.byteLength),
+      "Cache-Control": "private, max-age=3600",
+      "X-Content-Type-Options": "nosniff",
+    };
+
+    if (forceDownload) {
+      headers["Content-Disposition"] = "attachment";
+    }
+
+    return new Response(buffer, { headers });
   } catch (err) {
     console.error("[api.zoho-inline] error:", err);
     return new Response("Failed to fetch image", { status: 502 });
