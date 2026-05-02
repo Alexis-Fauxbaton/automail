@@ -1,11 +1,18 @@
 import { getAuthenticatedClient } from "./auth";
-import { cleanHtml } from "../gmail/client";
+import { cleanHtml } from "../mail/html-utils";
 import type { MailMessage, MailAttachment } from "../mail/types";
 
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 const MSG_SELECT =
   "id,conversationId,subject,receivedDateTime,from,body,internetMessageHeaders,internetMessageId,categories,inferenceClassification,hasAttachments";
 const INLINE_EMBED_LIMIT = 200 * 1024; // 200 KB
+
+/** Escape a string for safe use in OData filter expressions.
+ * OData escapes single quotes by doubling them: ' → ''
+ */
+function odataEscapeString(value: string): string {
+  return value.replace(/'/g, "''");
+}
 
 interface GraphEmailAddress {
   name: string;
@@ -205,7 +212,7 @@ export async function getThreadMessages(
 ): Promise<MailMessage[]> {
   const { accessToken } = await getAuthenticatedClient(shop);
   const url =
-    `${GRAPH_BASE}/me/messages?$filter=conversationId eq '${encodeURIComponent(conversationId)}'` +
+    `${GRAPH_BASE}/me/messages?$filter=conversationId eq '${odataEscapeString(conversationId)}'` +
     `&$select=${MSG_SELECT}&$orderby=receivedDateTime asc&$top=50`;
 
   const res = await graphFetch<{ value?: GraphMessage[] }>(accessToken, url);
