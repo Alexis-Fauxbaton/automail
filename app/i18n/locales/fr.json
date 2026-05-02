@@ -168,6 +168,7 @@
     "connectDesc": "Analysez automatiquement votre boîte mail, classifiez les emails support et générez des brouillons de réponse.",
     "connectGmail": "Connecter Gmail",
     "connectZoho": "Connecter Zoho Mail",
+    "connectOutlook": "Connecter Outlook / Microsoft 365",
     "lastSync": "Dernière sync : {{time}}",
     "autoSyncOn": "Sync auto : toutes les {{minutes}}m",
     "autoSyncOff": "Sync auto : désactivée",

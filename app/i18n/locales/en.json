@@ -168,6 +168,7 @@
     "connectDesc": "Automatically scan your inbox for customer support emails, classify them, and generate draft replies.",
     "connectGmail": "Connect Gmail",
     "connectZoho": "Connect Zoho Mail",
+    "connectOutlook": "Connect Outlook / Microsoft 365",
     "lastSync": "Last sync: {{time}}",
     "autoSyncOn": "Auto-sync: every {{minutes}}m",
     "autoSyncOff": "Auto-sync: off",
