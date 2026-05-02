@@ -91,8 +91,19 @@ async function tick(): Promise<void> {
  */
 async function enqueueDuePeriodicSyncs(): Promise<void> {
   const now = new Date();
+  // Coarse pre-filter: only fetch connections whose lastSyncAt is null OR
+  // older than 1 minute (the minimum sync interval). This cuts fetched rows
+  // in large deployments without changing correctness — the per-connection
+  // fine-grained check below remains the authoritative gate.
+  const oneMinuteAgo = new Date(now.getTime() - 60_000);
   const connections = await prisma.mailConnection.findMany({
-    where: { autoSyncEnabled: true },
+    where: {
+      autoSyncEnabled: true,
+      OR: [
+        { lastSyncAt: null },
+        { lastSyncAt: { lte: oneMinuteAgo } },
+      ],
+    },
     select: {
       shop: true,
       lastSyncAt: true,
@@ -102,7 +113,26 @@ async function enqueueDuePeriodicSyncs(): Promise<void> {
     },
   });
 
+  // Collect shops that have an active Shopify offline session.
+  // Offline sessions (isOnline: false) are the durable shop-level tokens.
+  const shopList = connections.map((c) => c.shop);
+  const activeSessions = shopList.length > 0
+    ? await prisma.session.findMany({
+        where: {
+          shop: { in: shopList },
+          isOnline: false,
+          OR: [
+            { expires: null },
+            { expires: { gt: new Date() } },
+          ],
+        },
+        select: { shop: true },
+      })
+    : [];
+  const activeShops = new Set(activeSessions.map((s) => s.shop));
+
   for (const c of connections) {
+    if (!activeShops.has(c.shop)) continue; // no valid Shopify session
     const intervalMs = Math.max(1, c.autoSyncIntervalMinutes) * 60_000;
     const due =
       !c.lastSyncAt || now.getTime() - c.lastSyncAt.getTime() >= intervalMs;
@@ -234,7 +264,7 @@ async function runJob(job: {
       `[auto-sync] shop=${job.shop} job=${job.id} kind=${job.kind} failed after ${Date.now() - startedAt}ms:`,
       err,
     );
-    await markJobFailed(job.id, err).catch(() => {});
+    await markJobFailed(job.id, err, job.attempts).catch(() => {});
   } finally {
     inFlight = Math.max(0, inFlight - 1);
     runningShops.delete(job.shop);
@@ -296,4 +326,10 @@ async function runSyncForShop(
   }
 }
 
+// Reset the singleton guard on hot reload so the loop doesn't duplicate.
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    started = false;
+  });
+}
 
