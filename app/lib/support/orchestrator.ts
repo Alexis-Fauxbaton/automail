@@ -43,6 +43,13 @@ export interface AnalyzeInput {
    * automatically — the user must click "Generate draft" explicitly.
    */
   skipDraft?: boolean;
+  /**
+   * When true, skip Shopify order search, tracking lookup, and context
+   * crawler (steps 2-4). Intent and identifiers are still extracted.
+   * Use this for resolved threads during resync — we want to restore
+   * intent badges without hitting external APIs unnecessarily.
+   */
+  skipTracking?: boolean;
 }
 
 export interface SupportAnalysisExtended extends SupportAnalysis {
@@ -108,50 +115,56 @@ export async function analyzeSupportEmail(
   // 2. Shopify order search
   let matchedBy: Awaited<ReturnType<typeof searchOrders>>["matchedBy"] = null;
   let candidates: ReturnType<typeof normalizeOrder>[] = [];
-  try {
-    const result = await searchOrders(input.admin, identifiers);
-    matchedBy = result.matchedBy;
-    candidates = result.orders.map(normalizeOrder);
-  } catch (err) {
-    warnings.push({
-      code: "shopify_api_error",
-      message: "Shopify order search failed.",
-    });
-    console.error("[orchestrator] Shopify search failed:", err);
+  if (!input.skipTracking) {
+    try {
+      const result = await searchOrders(input.admin, identifiers);
+      matchedBy = result.matchedBy;
+      candidates = result.orders.map(normalizeOrder);
+    } catch (err) {
+      warnings.push({
+        code: "shopify_api_error",
+        message: "Shopify order search failed.",
+      });
+      console.error("[orchestrator] Shopify search failed:", err);
+    }
   }
 
   const order = candidates[0] ?? null;
 
   // 3. Tracking facts — one entry per fulfillment, 17track first
   let trackings: FulfillmentTrackingFacts[] = [];
-  try {
-    trackings = await getTrackingFacts(order);
-  } catch (err) {
-    warnings.push({
-      code: "tracking_lookup_error",
-      message: "Tracking lookup failed; using Shopify-only data.",
-    });
-    console.error("[orchestrator] Tracking lookup failed:", err);
+  if (!input.skipTracking) {
+    try {
+      trackings = await getTrackingFacts(order);
+    } catch (err) {
+      warnings.push({
+        code: "tracking_lookup_error",
+        message: "Tracking lookup failed; using Shopify-only data.",
+      });
+      console.error("[orchestrator] Tracking lookup failed:", err);
+    }
   }
 
   // 4. Context crawler — fetch and extract relevant live data
   let crawledContexts: CrawledContext[] = [];
-  try {
-    const tasks = buildCrawlTasks(intent, trackings, order);
-    crawledContexts = await crawlContexts(tasks, tctx);
-    const failedCrawls = crawledContexts.filter((c) => !c.success);
-    if (failedCrawls.length > 0) {
+  if (!input.skipTracking) {
+    try {
+      const tasks = buildCrawlTasks(intent, trackings, order);
+      crawledContexts = await crawlContexts(tasks, tctx);
+      const failedCrawls = crawledContexts.filter((c) => !c.success);
+      if (failedCrawls.length > 0) {
+        warnings.push({
+          code: "crawl_partial_failure",
+          message: `Could not retrieve live context from: ${failedCrawls.map((c) => c.url).join(", ")}`,
+        });
+      }
+    } catch (err) {
       warnings.push({
-        code: "crawl_partial_failure",
-        message: `Could not retrieve live context from: ${failedCrawls.map((c) => c.url).join(", ")}`,
+        code: "crawl_error",
+        message: "Context retrieval failed; draft based on Shopify data only.",
       });
+      console.error("[orchestrator] Crawler failed:", err);
     }
-  } catch (err) {
-    warnings.push({
-      code: "crawl_error",
-      message: "Context retrieval failed; draft based on Shopify data only.",
-    });
-    console.error("[orchestrator] Crawler failed:", err);
   }
 
   // 5. Confidence scoring

@@ -117,9 +117,20 @@ async function _processNewEmails(
 
   report.total = messageIds.length;
 
-  // Dedup: skip messages already in DB
+  // Dedup: skip messages that have already been through Tier 2/3.
+  // "classified" emails without tier2Result were ingested by the backfill
+  // without LLM analysis — include them so Tier 2/3 can run after a resync,
+  // restoring intent badges that would otherwise disappear.
   const existing = await prisma.incomingEmail.findMany({
-    where: { shop, externalMessageId: { in: messageIds } },
+    where: {
+      shop,
+      externalMessageId: { in: messageIds },
+      OR: [
+        { processingStatus: "outgoing" },
+        { processingStatus: "analyzed" },
+        { processingStatus: "classified", tier2Result: { not: null } },
+      ],
+    },
     select: { externalMessageId: true },
   });
   const existingIds = new Set(existing.map((e) => e.externalMessageId));
@@ -407,10 +418,13 @@ async function ingestAndPrefilter(
   // processingStatus to "ingested" and trigger unnecessary Tier 2/3
   // re-processing during a resync, causing misclassification due to
   // stale context (e.g. agentHasReplied flipping the classifier).
-  // Only re-process emails that are truly new (ingested) or failed.
+  // Only re-process emails that are truly new (ingested), failed, or
+  // were ingested by the backfill without Tier 2 (classified + no tier2Result).
+  const isBackfillOnly = record.processingStatus === "classified" && !record.tier2Result;
   if (
     record.processingStatus !== "ingested" &&
-    record.processingStatus !== "error"
+    record.processingStatus !== "error" &&
+    !isBackfillOnly
   ) {
     // Already processed — still recompute thread state in case a new
     // outgoing message changed the conversation context.
@@ -551,6 +565,15 @@ async function classifyAndDraft(
     where: { id: recordId },
   });
 
+  // Resolved threads: restore intent badges without hitting Shopify/tracking.
+  const thread = record.canonicalThreadId
+    ? await prisma.thread.findUnique({
+        where: { id: record.canonicalThreadId },
+        select: { operationalState: true },
+      })
+    : null;
+  const isResolved = thread?.operationalState === "resolved";
+
   // Rebuild a MailMessage shape from the DB record for the classifier.
   const msg: MailMessage = {
     id: record.externalMessageId,
@@ -673,6 +696,8 @@ async function classifyAndDraft(
       // Draft generation is intentionally skipped during auto-sync.
       // The user must click "Generate draft" explicitly in the inbox.
       skipDraft: true,
+      // Resolved threads: extract intent only, skip Shopify/tracking fetch.
+      skipTracking: isResolved,
     });
     await prisma.incomingEmail.update({
       where: { id: record.id },

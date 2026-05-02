@@ -33,6 +33,8 @@ The MVP must support these flows:
 
 These exact values are the canonical support intents. Analyses keep a primary `intent` for compatibility and an ordered `intents` array when several intents apply to the same email or conversation.
 
+Intent is classified at the **thread level**, not per message. `buildThreadContext` concatenates all messages in the thread (labeled `--- Earlier message ---` / `--- Latest message ---`) and sends the full block to the LLM. The result is stored on the latest incoming email of the thread (the "semantic anchor") and displayed as the thread's badge.
+
 The MVP must:
 - extract useful identifiers from the message
 - search Shopify for matching orders
