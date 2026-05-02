@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { authenticate } from "../shopify.server";
 import { getAuthUrl as getGmailAuthUrl, getConnection, deleteConnection } from "../lib/gmail/auth";
 import { getZohoAuthUrl } from "../lib/zoho/auth";
+import { getAuthUrl as getOutlookAuthUrl } from "../lib/outlook/auth";
 import { reanalyzeEmail, redraftEmail, processNewEmails, getMailClient, persistEmailAttachments, type ProcessingReport } from "../lib/gmail/pipeline";
 import { refineDraft } from "../lib/gmail/refine-draft";
 import { runDiagnosis, type DiagnosisReport } from "../lib/gmail/diagnose";
@@ -248,9 +249,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   // Build auth URLs for both providers (only shown when not connected)
   let gmailAuthUrl: string | null = null;
   let zohoAuthUrl: string | null = null;
+  let outlookAuthUrl: string | null = null;
   if (!connection) {
     try { gmailAuthUrl = getGmailAuthUrl(shop); } catch { /* credentials not configured */ }
     try { zohoAuthUrl = getZohoAuthUrl(shop); } catch { /* credentials not configured */ }
+    try { outlookAuthUrl = getOutlookAuthUrl(shop); } catch { /* credentials not configured */ }
   }
 
   // Check if a heavy background job is still pending or running for this shop.
@@ -275,6 +278,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     autoSyncIntervalMinutes: connection?.autoSyncIntervalMinutes ?? 5,
     gmailAuthUrl,
     zohoAuthUrl,
+    outlookAuthUrl,
     emails,
     threadStates,
     priorContact,
@@ -907,6 +911,7 @@ function ConnectionCard({
   lastSyncAt,
   gmailAuthUrl,
   zohoAuthUrl,
+  outlookAuthUrl,
   isSyncing,
   autoSyncEnabled,
   autoSyncIntervalMinutes,
@@ -917,6 +922,7 @@ function ConnectionCard({
   lastSyncAt: string | null;
   gmailAuthUrl: string | null;
   zohoAuthUrl: string | null;
+  outlookAuthUrl: string | null;
   isSyncing: boolean;
   autoSyncEnabled: boolean;
   autoSyncIntervalMinutes: number;
@@ -943,13 +949,18 @@ function ConnectionCard({
                 {t("inbox.connectZoho")}
               </s-button>
             )}
+            {outlookAuthUrl && (
+              <s-button variant="secondary" onClick={() => { window.top!.location.href = outlookAuthUrl; }}>
+                {t("inbox.connectOutlook")}
+              </s-button>
+            )}
           </s-stack>
         </s-stack>
       </s-box>
     );
   }
 
-  const providerLabel = provider === "zoho" ? "Zoho Mail" : "Gmail";
+  const providerLabel = provider === "zoho" ? "Zoho Mail" : provider === "outlook" ? "Outlook / Microsoft 365" : "Gmail";
 
   return (
     <s-stack direction="block" gap="small-300">
@@ -2560,6 +2571,7 @@ export default function InboxPage() {
           lastSyncAt={loaderData.lastSyncAt}
           gmailAuthUrl={loaderData.gmailAuthUrl}
           zohoAuthUrl={loaderData.zohoAuthUrl}
+          outlookAuthUrl={loaderData.outlookAuthUrl}
           isSyncing={isSyncing}
           autoSyncEnabled={loaderData.autoSyncEnabled}
           autoSyncIntervalMinutes={loaderData.autoSyncIntervalMinutes}
