@@ -50,10 +50,9 @@ export async function exchangeCodeForTokens(code: string) {
   });
 
   if (!tokenRes.ok) {
-    const err = await tokenRes.json().catch(() => ({}));
-    throw new Error(
-      `Microsoft token exchange failed (${tokenRes.status}): ${(err as { error_description?: string }).error_description ?? JSON.stringify(err)}`,
-    );
+    const err = await tokenRes.json().catch(() => ({})) as { error?: string; error_description?: string };
+    console.error("[outlook/auth] token exchange error:", err.error, err.error_description);
+    throw new Error(`Microsoft token exchange failed (${tokenRes.status})`);
   }
 
   const tokenData = await tokenRes.json() as {
@@ -65,8 +64,13 @@ export async function exchangeCodeForTokens(code: string) {
   const meRes = await fetch(GRAPH_ME, {
     headers: { Authorization: `Bearer ${tokenData.access_token}` },
   });
-  const meData = await meRes.json() as { mail?: string; userPrincipalName?: string };
-  const email = meData.mail || meData.userPrincipalName || "unknown";
+  if (!meRes.ok) {
+    console.warn("[outlook/auth] failed to fetch user email from Graph /me, using 'unknown'");
+  }
+  const meData = meRes.ok ? await meRes.json() as { mail?: string; userPrincipalName?: string } : {};
+  const email = (meData as { mail?: string; userPrincipalName?: string }).mail
+    || (meData as { mail?: string; userPrincipalName?: string }).userPrincipalName
+    || "unknown";
 
   return {
     accessToken: tokenData.access_token,
@@ -96,10 +100,9 @@ async function refreshAccessToken(refreshToken: string): Promise<{
   });
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(
-      `Microsoft token refresh failed (${res.status}): ${(err as { error_description?: string }).error_description ?? JSON.stringify(err)}`,
-    );
+    const err = await res.json().catch(() => ({})) as { error?: string; error_description?: string };
+    console.error("[outlook/auth] token refresh error:", err.error, err.error_description);
+    throw new Error(`Microsoft token refresh failed (${res.status})`);
   }
 
   const data = await res.json() as {
