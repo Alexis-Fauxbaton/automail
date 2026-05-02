@@ -139,7 +139,7 @@ async function _processNewEmails(
   }
 
   // Fetch Shopify customer emails for cross-reference (Tier 1 boost)
-  const customerEmails = await fetchCustomerEmails(admin);
+  const customerEmails = await fetchCustomerEmails(admin, shop);
 
   // ---------------------------------------------------------------------
   // PASS 1 — Ingestion + Tier 1 (free regex prefilter)
@@ -148,37 +148,42 @@ async function _processNewEmails(
   // This ensures that when Pass 2 runs, the full thread context
   // (including outgoing replies) is already persisted.
   // ---------------------------------------------------------------------
-  for (let i = 0; i < newMessageIds.length; i++) {
-    if (i > 0 && i % 10 === 0 && (await isCancelled(shop, syncStartedAt))) {
+  const INGESTION_BATCH_SIZE = 10;
+  for (let i = 0; i < newMessageIds.length; i += INGESTION_BATCH_SIZE) {
+    if (i > 0 && (await isCancelled(shop, syncStartedAt))) {
       console.log(`[gmail/pipeline] Sync cancelled during ingestion after ${i} emails.`);
       report.cancelled = true;
       break;
     }
-    const msgId = newMessageIds[i];
-    try {
-      await ingestAndPrefilter(shop, conn.provider, client, msgId, customerEmails, conn.email, report);
-    } catch (err) {
-      report.errors++;
-      console.error(`[gmail/pipeline] Ingestion error for ${msgId}:`, err);
-      try {
-        await prisma.incomingEmail.upsert({
-          where: { shop_externalMessageId: { shop, externalMessageId: msgId } },
-          create: {
-            shop,
-            externalMessageId: msgId,
-            fromAddress: "",
-            subject: "",
-            receivedAt: new Date(),
-            processingStatus: "error",
-            errorMessage: err instanceof Error ? err.message : String(err),
-          },
-          update: {
-            processingStatus: "error",
-            errorMessage: err instanceof Error ? err.message : String(err),
-          },
-        });
-      } catch { /* ignore */ }
-    }
+    const batch = newMessageIds.slice(i, i + INGESTION_BATCH_SIZE);
+    await Promise.allSettled(
+      batch.map(async (msgId) => {
+        try {
+          await ingestAndPrefilter(shop, conn.provider, client, msgId, customerEmails, conn.email, report);
+        } catch (err) {
+          report.errors++;
+          console.error(`[gmail/pipeline] Ingestion error for ${msgId}:`, err);
+          try {
+            await prisma.incomingEmail.upsert({
+              where: { shop_externalMessageId: { shop, externalMessageId: msgId } },
+              create: {
+                shop,
+                externalMessageId: msgId,
+                fromAddress: "",
+                subject: "",
+                receivedAt: new Date(),
+                processingStatus: "error",
+                errorMessage: err instanceof Error ? err.message : String(err),
+              },
+              update: {
+                processingStatus: "error",
+                errorMessage: err instanceof Error ? err.message : String(err),
+              },
+            });
+          } catch { /* ignore */ }
+        }
+      }),
+    );
   }
 
   // ---------------------------------------------------------------------
@@ -188,26 +193,31 @@ async function _processNewEmails(
   // ---------------------------------------------------------------------
   if (!report.cancelled) {
     const threadsToClassify = await pickThreadsForClassification(shop, newMessageIds);
-    for (let i = 0; i < threadsToClassify.length; i++) {
-      if (i > 0 && i % 5 === 0 && (await isCancelled(shop, syncStartedAt))) {
+    const CLASSIFY_BATCH_SIZE = 5;
+    for (let i = 0; i < threadsToClassify.length; i += CLASSIFY_BATCH_SIZE) {
+      if (i > 0 && (await isCancelled(shop, syncStartedAt))) {
         console.log(`[gmail/pipeline] Sync cancelled during classification after ${i} threads.`);
         report.cancelled = true;
         break;
       }
-      const recordId = threadsToClassify[i];
-      try {
-        await classifyAndDraft(shop, admin, client, recordId, customerEmails, conn.email, report);
-      } catch (err) {
-        report.errors++;
-        console.error(`[gmail/pipeline] Classification error for ${recordId}:`, err);
-        await prisma.incomingEmail.update({
-          where: { id: recordId },
-          data: {
-            processingStatus: "error",
-            errorMessage: err instanceof Error ? err.message : String(err),
-          },
-        }).catch(() => {});
-      }
+      const batch = threadsToClassify.slice(i, i + CLASSIFY_BATCH_SIZE);
+      await Promise.allSettled(
+        batch.map(async (recordId) => {
+          try {
+            await classifyAndDraft(shop, admin, client, recordId, customerEmails, conn.email, report);
+          } catch (err) {
+            report.errors++;
+            console.error(`[gmail/pipeline] Classification error for ${recordId}:`, err);
+            await prisma.incomingEmail.update({
+              where: { id: recordId },
+              data: {
+                processingStatus: "error",
+                errorMessage: err instanceof Error ? err.message : String(err),
+              },
+            }).catch(() => {});
+          }
+        }),
+      );
     }
   }
 
