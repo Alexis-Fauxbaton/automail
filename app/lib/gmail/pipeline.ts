@@ -244,12 +244,7 @@ export async function persistEmailAttachments(
   providerMsgId: string,
   attachments: MailAttachment[],
 ): Promise<void> {
-  const existing = await prisma.incomingEmailAttachment.findMany({
-    where: { emailId },
-    select: { id: true },
-  });
-  if (existing.length > 0) return; // already persisted
-
+  if (attachments.length === 0) return;
   await prisma.incomingEmailAttachment.createMany({
     data: attachments.map((att) => ({
       shop,
@@ -317,7 +312,7 @@ async function ingestAndPrefilter(
     rfcReferences,
   });
 
-  const msgAttachments = msg.attachments ?? [];
+  const msgAttachments = msg.attachments;
   const hasAttachments = msgAttachments.length > 0;
 
   // Upsert the base record
@@ -558,6 +553,7 @@ async function classifyAndDraft(
     receivedAt: record.receivedAt,
     labelIds: [],
     headers: {},
+    attachments: [],
   };
 
   // --- Tier 2: LLM classification ---
@@ -761,7 +757,7 @@ async function buildThreadContext(
           subject: m.subject,
           body: m.bodyText,
           isLatest: i === latestIdx,
-          attachmentFileNames: (m.attachments ?? [])
+          attachmentFileNames: m.attachments
             .filter((a) => a.disposition === "attachment")
             .map((a) => a.fileName),
         }));

@@ -235,7 +235,7 @@ async function ingestHistoricalMessage(
     tier1Result = pf.passed ? "passed" : `filtered:${pf.reason}`;
   }
 
-  await prisma.incomingEmail.create({
+  const created = await prisma.incomingEmail.create({
     data: {
       shop,
       externalMessageId: msg.id,
@@ -255,16 +255,13 @@ async function ingestHistoricalMessage(
       processingStatus: isOutgoing ? "outgoing" : "classified",
       tier1Result,
     },
+    select: { id: true },
   });
 
   await refreshThreadStats(canonicalThreadId);
   if (!isOutgoing) {
-    const row = await prisma.incomingEmail.findUniqueOrThrow({
-      where: { shop_externalMessageId: { shop, externalMessageId: msgId } },
-      select: { id: true },
-    });
     try {
-      await extractAndCache(row.id, msg.subject, msg.bodyText);
+      await extractAndCache(created.id, msg.subject, msg.bodyText);
       await mergeThreadIdentifiers(canonicalThreadId);
     } catch (err) {
       console.error("[backfill] identifier merge failed:", err);

@@ -34,7 +34,7 @@ export interface MailMessage {
   /** Lowercase header map (e.g. list-unsubscribe). */
   headers: Record<string, string>;
   /** Attachments and inline images. Empty array when none. */
-  attachments?: MailAttachment[];
+  attachments: MailAttachment[];
 }
 
 export type MailProvider = "gmail" | "zoho";
