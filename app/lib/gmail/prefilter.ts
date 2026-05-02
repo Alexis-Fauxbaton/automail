@@ -16,18 +16,26 @@ const EXCLUDED_LABELS = new Set([
   "CATEGORY_SOCIAL",
   "CATEGORY_UPDATES",
   "CATEGORY_FORUMS",
+  // Outlook-specific: inferenceClassification=other and promotional categories
+  "OUTLOOK_OTHER",
+  "OUTLOOK_CATEGORY_Promotions",
+  "OUTLOOK_CATEGORY_Newsletters",
+  "OUTLOOK_CATEGORY_Social updates",
 ]);
 
 /** Domains owned by the store — notifications from these are not customer support. */
 const SAFE_DOMAIN_RE = /^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?)+$/;
 
+let _storeDomains: Set<string> | null = null;
 function getStoreDomains(): Set<string> {
+  if (_storeDomains) return _storeDomains;
   const raw = process.env.STORE_EMAIL_DOMAINS ?? "";
   const domains = new Set<string>();
   for (const d of raw.split(",")) {
     const trimmed = d.trim().toLowerCase();
     if (trimmed && SAFE_DOMAIN_RE.test(trimmed)) domains.add(trimmed);
   }
+  _storeDomains = domains;
   return domains;
 }
 
