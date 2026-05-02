@@ -4,6 +4,7 @@ import tsconfigPaths from "vite-tsconfig-paths";
 export default defineConfig({
   plugins: [tsconfigPaths()],
   test: {
+    pool: "vmForks",
     environment: "node",
     include: ["app/**/*.test.ts"],
     exclude: ["app/lib/__tests__/integration/**/*.test.ts"],
