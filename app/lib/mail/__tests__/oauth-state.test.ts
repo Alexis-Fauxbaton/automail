@@ -4,11 +4,10 @@ import { createHmac } from "crypto";
 
 const TEST_SECRET = "test-secret-for-oauth-state";
 
-beforeEach(() => {
-  process.env.SHOPIFY_API_SECRET = TEST_SECRET;
-});
-
 describe("oauth-state", () => {
+  beforeEach(() => {
+    process.env.SHOPIFY_API_SECRET = TEST_SECRET;
+  });
   it("round-trip: verifyOAuthState(signOAuthState(gmail, shop)) returns expected object", () => {
     const state = signOAuthState("gmail", "test.myshopify.com");
     expect(verifyOAuthState(state)).toEqual({
