@@ -37,7 +37,7 @@ export interface MailMessage {
   attachments: MailAttachment[];
 }
 
-export type MailProvider = "gmail" | "zoho";
+export type MailProvider = "gmail" | "zoho" | "outlook";
 
 /**
  * Interface that each mail provider client must implement.

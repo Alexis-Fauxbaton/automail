@@ -22,7 +22,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "crypto";
 
 const STATE_TTL_MS = 10 * 60_000; // 10 minutes
 
-export type MailOAuthProvider = "gmail" | "zoho";
+export type MailOAuthProvider = "gmail" | "zoho" | "outlook";
 
 interface StatePayload {
   p: MailOAuthProvider;
@@ -82,7 +82,7 @@ export function verifyOAuthState(raw: string): VerifiedState | null {
   } catch {
     return null;
   }
-  if (!payload || (payload.p !== "gmail" && payload.p !== "zoho")) return null;
+  if (!payload || (payload.p !== "gmail" && payload.p !== "zoho" && payload.p !== "outlook")) return null;
   if (typeof payload.s !== "string" || !payload.s) return null;
   if (typeof payload.t !== "number") return null;
   if (Date.now() - payload.t > STATE_TTL_MS) return null;

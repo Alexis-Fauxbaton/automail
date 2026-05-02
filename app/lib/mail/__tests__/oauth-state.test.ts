@@ -52,8 +52,8 @@ describe("oauth-state", () => {
   });
 
   it("wrong provider returns null", () => {
-    // Manually construct a state with provider "outlook"
-    const payload = { p: "outlook", s: "test.myshopify.com", t: Date.now(), n: "abc123" };
+    // Manually construct a state with provider "microsoft" (invalid provider)
+    const payload = { p: "microsoft" as any, s: "test.myshopify.com", t: Date.now(), n: "abc123" };
     const body = Buffer.from(JSON.stringify(payload), "utf8")
       .toString("base64")
       .replace(/\+/g, "-")
@@ -86,5 +86,13 @@ describe("oauth-state", () => {
     const s1 = signOAuthState("gmail", "test.myshopify.com");
     const s2 = signOAuthState("gmail", "test.myshopify.com");
     expect(s1).not.toBe(s2);
+  });
+
+  it("signs and verifies an outlook state", () => {
+    const state = signOAuthState("outlook", "test-shop.myshopify.com");
+    const result = verifyOAuthState(state);
+    expect(result).not.toBeNull();
+    expect(result!.provider).toBe("outlook");
+    expect(result!.shop).toBe("test-shop.myshopify.com");
   });
 });
