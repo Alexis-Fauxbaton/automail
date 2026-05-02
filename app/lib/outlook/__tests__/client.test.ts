@@ -21,14 +21,14 @@ const SAMPLE_GRAPH_MSG = {
   subject: "Order #1234 issue",
   receivedDateTime: "2026-05-01T10:00:00Z",
   from: { emailAddress: { name: "Jane Doe", address: "jane@example.com" } },
-  body: { contentType: "text", content: "Hello, where is my order?" },
+  body: { contentType: "text" as const, content: "Hello, where is my order?" },
   internetMessageHeaders: [
     { name: "Message-ID", value: "<abc@mail.example.com>" },
     { name: "In-Reply-To", value: "<prev@mail.example.com>" },
   ],
   internetMessageId: "<abc@mail.example.com>",
-  categories: [],
-  inferenceClassification: "focused",
+  categories: [] as string[],
+  inferenceClassification: "focused" as const,
   hasAttachments: false,
 };
 
@@ -51,7 +51,7 @@ describe("parseGraphMessage", () => {
   it("strips HTML tags and sets bodyText from html body", () => {
     const htmlMsg = {
       ...SAMPLE_GRAPH_MSG,
-      body: { contentType: "html", content: "<p>Hello <b>world</b></p>" },
+      body: { contentType: "html" as const, content: "<p>Hello <b>world</b></p>" },
     };
     const msg = parseGraphMessage(htmlMsg);
     expect(msg.bodyText).toContain("Hello world");
@@ -59,7 +59,7 @@ describe("parseGraphMessage", () => {
   });
 
   it("maps inferenceClassification=other to labelIds=[OUTLOOK_OTHER]", () => {
-    const otherMsg = { ...SAMPLE_GRAPH_MSG, inferenceClassification: "other" };
+    const otherMsg = { ...SAMPLE_GRAPH_MSG, inferenceClassification: "other" as const };
     const msg = parseGraphMessage(otherMsg);
     expect(msg.labelIds).toContain("OUTLOOK_OTHER");
   });
