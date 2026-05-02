@@ -22,13 +22,17 @@ function adminInboxUrl(shop: string, params: Record<string, string>): string {
   return `https://admin.shopify.com/store/${storeName}/apps/${apiKey}/app/inbox?${qs}`;
 }
 
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
 function errorPage(title: string, detail: string): Response {
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Auth error</title>
 <style>body{font-family:sans-serif;padding:40px;max-width:600px;margin:auto}
 h1{color:#b91c1c}pre{background:#f1f5f9;padding:12px;border-radius:6px;white-space:pre-wrap;word-break:break-all}</style>
 </head><body>
-<h1>${title}</h1>
-<pre>${detail}</pre>
+<h1>${escapeHtml(title)}</h1>
+<pre>${escapeHtml(detail)}</pre>
 <p>Check the server logs for more details. You can close this tab and retry from the Shopify admin.</p>
 </body></html>`;
   return new Response(html, { status: 400, headers: { "Content-Type": "text/html; charset=utf-8" } });
@@ -41,6 +45,21 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   console.log(`[mail-auth] incoming code=${!!code} state_len=${rawState.length} state_preview=${rawState.slice(0, 40)}`);
 
+  const oauthError = url.searchParams.get("error");
+  if (oauthError) {
+    const errorDesc = url.searchParams.get("error_description") ?? "";
+    console.warn(`[mail-auth] OAuth provider error: ${oauthError} — ${errorDesc}`);
+    if (errorDesc.includes("AADSTS65001") || oauthError === "consent_required") {
+      return errorPage(
+        "Microsoft admin consent required",
+        "Your Microsoft 365 administrator must approve this app before you can connect it.\n\n" +
+        "Ask your IT admin to visit the Microsoft Azure portal and grant consent for the 'Mail.Read' permission.\n\n" +
+        "After admin approval, retry connecting from the Shopify admin.",
+      );
+    }
+    return errorPage(`OAuth error: ${oauthError}`, errorDesc);
+  }
+
   if (!code || !rawState) {
     console.warn("[mail-auth] missing code or state");
     return errorPage("Missing OAuth parameters", `code present: ${!!code}\nstate present: ${!!rawState}`);
@@ -49,8 +68,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const verified = verifyOAuthState(rawState);
   if (!verified) {
     console.warn("[mail-auth] rejected invalid OAuth state");
-    // Try to decode payload for debugging (ignore signature)
-    let debugInfo = `state length: ${rawState.length}\nstate preview: ${rawState.slice(0, 60)}`;
+    // Log full state details server-side only — never expose decoded payload to browser.
+    const debugInfo = `state length: ${rawState.length}\nstate preview: ${rawState.slice(0, 20)}...`;
     try {
       const dot = rawState.lastIndexOf(".");
       if (dot > 0) {
@@ -59,7 +78,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         const decoded = Buffer.from(body.replace(/-/g, "+").replace(/_/g, "/") + pad, "base64").toString("utf8");
         const payload = JSON.parse(decoded);
         const age = Date.now() - payload.t;
-        debugInfo += `\ndecoded payload: ${decoded}\nage: ${Math.round(age / 1000)}s (TTL: 600s)`;
+        console.warn(`[mail-auth] state rejected: age=${Math.round(age / 1000)}s payload=${decoded}`);
       }
     } catch { /* best-effort */ }
     return errorPage("Invalid OAuth state", debugInfo);
@@ -75,6 +94,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       );
       const tokens = await exchangeZohoCode(code);
       await saveZohoConnection(shop, tokens);
+    } else if (provider === "outlook") {
+      const { exchangeCodeForTokens, saveConnection } = await import(
+        "../lib/outlook/auth"
+      );
+      const tokens = await exchangeCodeForTokens(code);
+      await saveConnection(shop, tokens);
     } else {
       const { exchangeCodeForTokens, saveConnection } = await import(
         "../lib/gmail/auth"

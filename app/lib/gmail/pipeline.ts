@@ -40,6 +40,10 @@ export interface ProcessingReport {
 
 export async function getMailClient(shop: string, provider: string): Promise<MailClient> {
   if (provider === "zoho") return createZohoClient(shop);
+  if (provider === "outlook") {
+    const { createOutlookClient } = await import("../outlook/mail-client");
+    return createOutlookClient(shop);
+  }
   return createGmailClient(shop);
 }
 
@@ -146,11 +150,33 @@ async function _processNewEmails(
         ...(newCursor ? { historyId: newCursor } : {}),
       },
     });
+    // Backfill even when there are no new messages — resolved threads
+    // accumulate over time and need intent badges regardless of new activity.
+    try {
+      await backfillResolvedIntents(shop, admin);
+    } catch (err) {
+      console.error("[gmail/pipeline] backfillResolvedIntents failed:", err);
+    }
     return report;
   }
 
   // Fetch Shopify customer emails for cross-reference (Tier 1 boost)
   const customerEmails = await fetchCustomerEmails(admin, shop);
+
+  // PRE-PASS-1: backfill closed-thread intent badges BEFORE Pass 1 mutates
+  // operationalState. During a resync (historyId=null), all emails are deleted
+  // and re-ingested without analysisResult. Pass 1's recomputeThreadState then
+  // temporarily flips no_reply_needed → waiting_merchant (noReplyNeeded=false
+  // with no analysisResult). By saving analysisResult here first, we give
+  // recomputeThreadState the data it needs to keep those threads in their
+  // correct closed state throughout Pass 1 and Pass 2.
+  // For regular syncs (few new messages) this call is nearly free: alreadyAnalyzed
+  // covers almost all threads and the function returns after two cheap DB queries.
+  try {
+    await backfillResolvedIntents(shop, admin);
+  } catch (err) {
+    console.error("[gmail/pipeline] pre-pass1 backfillResolvedIntents failed:", err);
+  }
 
   // ---------------------------------------------------------------------
   // PASS 1 — Ingestion + Tier 1 (free regex prefilter)
@@ -230,6 +256,14 @@ async function _processNewEmails(
         }),
       );
     }
+  }
+
+  // Backfill intent badges for resolved threads that lack detectedIntent.
+  // Best-effort: failures must never abort the main sync.
+  try {
+    await backfillResolvedIntents(shop, admin);
+  } catch (err) {
+    console.error("[gmail/pipeline] backfillResolvedIntents failed:", err);
   }
 
   // Update sync cursor
@@ -478,6 +512,305 @@ async function ingestAndPrefilter(
   } catch (err) {
     console.error("[pipeline] state recompute failed:", err);
   }
+}
+
+/**
+ * Backfill intent badges for resolved threads that have no analysisResult.
+ *
+ * The inbox list badge reads intent from analysisResult JSON (not detectedIntent).
+ * Threads that were resolved before Tier 3 ran have no analysisResult and therefore
+ * no badge. This function runs a lightweight analysis (skipTracking + skipDraft) on
+ * those threads and stores the result so the badge appears.
+ *
+ * Per-thread strategy:
+ *   1. Skip threads that already have at least one email with analysisResult.
+ *   2. For the remaining threads, find the latest incoming email that passed Tier 1.
+ *   3. Run analyzeSupportEmail (intent + identifiers only, no Shopify/tracking).
+ *   4. Persist analysisResult + detectedIntent + processingStatus="analyzed".
+ */
+export async function backfillResolvedIntents(
+  shop: string,
+  admin: AdminGraphqlClient,
+  opts: { maxThreads?: number } = {},
+): Promise<void> {
+  // Step 1: collect thread IDs for both closed states.
+  // The inbox "Résolu" bucket displays operationalState "resolved" AND
+  // "no_reply_needed" together, so both must be backfilled.
+  const [resolvedRows, noReplyRows] = await Promise.all([
+    prisma.thread.findMany({ where: { shop, operationalState: "resolved" }, select: { id: true } }),
+    prisma.thread.findMany({ where: { shop, operationalState: "no_reply_needed" }, select: { id: true } }),
+  ]);
+  const resolvedSet = new Set(resolvedRows.map((t) => t.id));
+  const noReplySet = new Set(noReplyRows.map((t) => t.id));
+
+  // Step 1b: threads that appear in the "Résolu" tab via the UI's 7-day
+  // auto-resolve heuristic (last message outgoing, age ≥ 7 days) but have no
+  // DB Thread record with operationalState "resolved" or "no_reply_needed".
+  // This covers both pure sent-folder threads (all outgoing) and mixed threads
+  // where the latest email is outgoing. Adding them to resolvedSet lets the
+  // anchor strategy (Steps 3a/3b/3c) pick the best email for each.
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const outgoingOldIds = (
+    await prisma.incomingEmail.findMany({
+      where: { shop, processingStatus: "outgoing", receivedAt: { lt: sevenDaysAgo } },
+      select: { canonicalThreadId: true },
+      distinct: ["canonicalThreadId"],
+    })
+  )
+    .map((e) => e.canonicalThreadId)
+    .filter((id): id is string => !!id);
+  for (const id of outgoingOldIds) resolvedSet.add(id);
+
+  const allClosedIds = [...resolvedSet, ...noReplySet];
+  console.log(
+    `[pipeline] backfillResolvedIntents: shop=${shop} resolved=${resolvedSet.size} noReply=${noReplySet.size} outgoingOld=${outgoingOldIds.length} total=${allClosedIds.length}`,
+  );
+  if (allClosedIds.length === 0) return;
+
+  // Step 2: threads that already have at least one email with analysisResult.
+  const alreadyAnalyzed = new Set(
+    (
+      await prisma.incomingEmail.findMany({
+        where: {
+          shop,
+          canonicalThreadId: { in: allClosedIds },
+          analysisResult: { not: null },
+        },
+        select: { canonicalThreadId: true },
+        distinct: ["canonicalThreadId"],
+      })
+    )
+      .map((e) => e.canonicalThreadId)
+      .filter((id): id is string => !!id),
+  );
+
+  const needsBackfill = allClosedIds.filter((id) => !alreadyAnalyzed.has(id));
+  console.log(
+    `[pipeline] backfillResolvedIntents: alreadyAnalyzed=${alreadyAnalyzed.size} needsBackfill=${needsBackfill.length}`,
+  );
+  if (needsBackfill.length === 0) return;
+
+  // Default cap 200 for regular syncs (fast LLM-only calls, but don't hog
+  // the sync slot). Callers can pass Infinity for a full resync pass.
+  const toProcess = needsBackfill.slice(0, opts.maxThreads ?? 200);
+  console.log(`[pipeline] backfillResolvedIntents: ${toProcess.length} thread(s) need intent backfill`);
+
+  // Fetch mailbox address once — used by buildThreadContext for direction labels.
+  const connEmail = (
+    await prisma.mailConnection.findUnique({ where: { shop }, select: { email: true } })
+  )?.email ?? "";
+
+  const anchorSelect = {
+    id: true,
+    subject: true,
+    bodyText: true,
+    threadId: true,
+    canonicalThreadId: true,
+  } as const;
+
+  // Process in parallel chunks of 5 — each thread is independent
+  // (different canonicalThreadId, no shared state). skipTracking means each
+  // iteration is just a few DB reads + one LLM call (~1-2s).
+  // Kept at 5 (not 10) to avoid hitting OpenAI rate limits when
+  // backfillResolvedIntents runs right after a heavy processNewEmails Pass 2
+  // (which may have already made 50-80 LLM calls during a resync).
+  const CONCURRENCY = 5;
+
+  async function processThread(canonicalThreadId: string): Promise<void> {
+    // Step 3a: prefer the latest email that passed Tier 1.
+    let anchor = await prisma.incomingEmail.findFirst({
+      where: {
+        shop,
+        canonicalThreadId,
+        processingStatus: { notIn: ["outgoing", "error"] },
+        tier1Result: "passed",
+      },
+      orderBy: { receivedAt: "desc" },
+      select: anchorSelect,
+    });
+
+    // Step 3b: fallback — only for "resolved" threads (manually closed by the
+    // merchant, definitely a support conversation). Skip for "no_reply_needed"
+    // to avoid classifying automated notifications (Trustpilot, Zoho, etc.)
+    // that correctly land in that state without a customer email.
+    if (!anchor && resolvedSet.has(canonicalThreadId)) {
+      anchor = await prisma.incomingEmail.findFirst({
+        where: {
+          shop,
+          canonicalThreadId,
+          processingStatus: { notIn: ["outgoing"] },
+          bodyText: { not: "" },
+        },
+        orderBy: { receivedAt: "desc" },
+        select: anchorSelect,
+      });
+    }
+
+    // Step 3c: last resort for "resolved" threads — use the OLDEST outgoing
+    // email (AMBIENT HOME's first reply). The first reply typically quotes the
+    // customer's original message, giving the LLM enough context to infer
+    // intent. This covers threads stored entirely in the Sent folder
+    // (canonicalThreadId different from the customer's inbox thread).
+    // We do NOT change processingStatus to "analyzed" for these anchors to
+    // avoid polluting the Tier 3 counter with sent-folder emails.
+    let isOutgoingAnchor = false;
+    if (!anchor && resolvedSet.has(canonicalThreadId)) {
+      anchor = await prisma.incomingEmail.findFirst({
+        where: {
+          shop,
+          canonicalThreadId,
+          processingStatus: "outgoing",
+          bodyText: { not: "" },
+        },
+        orderBy: { receivedAt: "asc" },
+        select: anchorSelect,
+      });
+      if (anchor) isOutgoingAnchor = true;
+    }
+
+    // Step 4: no email in DB at all (thread emails are older than the 60-day
+    // backfill window, deleted by the resync). Try to pull them from the mail
+    // provider via the opportunistic backfill, then retry anchor selection.
+    // Covers modern threads with ThreadProviderId mappings. Legacy thr_* threads
+    // without mappings will have 0 added and fall through to the skip below.
+    if (!anchor && resolvedSet.has(canonicalThreadId)) {
+      try {
+        const fetched = await runOpportunisticThreadBackfill(canonicalThreadId);
+        if (fetched.added > 0) {
+          console.log(
+            `[pipeline] backfillResolvedIntents: fetched ${fetched.added} email(s) from provider for thread=${canonicalThreadId}`,
+          );
+          // Retry Steps 3a → 3b → 3c after provider fetch.
+          anchor = await prisma.incomingEmail.findFirst({
+            where: {
+              shop, canonicalThreadId,
+              processingStatus: { notIn: ["outgoing", "error"] },
+              tier1Result: "passed",
+            },
+            orderBy: { receivedAt: "desc" },
+            select: anchorSelect,
+          });
+          if (!anchor) {
+            anchor = await prisma.incomingEmail.findFirst({
+              where: {
+                shop, canonicalThreadId,
+                processingStatus: { notIn: ["outgoing"] },
+                bodyText: { not: "" },
+              },
+              orderBy: { receivedAt: "desc" },
+              select: anchorSelect,
+            });
+          }
+          if (!anchor) {
+            anchor = await prisma.incomingEmail.findFirst({
+              where: { shop, canonicalThreadId, processingStatus: "outgoing", bodyText: { not: "" } },
+              orderBy: { receivedAt: "asc" },
+              select: anchorSelect,
+            });
+            if (anchor) isOutgoingAnchor = true;
+          }
+        }
+      } catch (err) {
+        console.error(
+          `[pipeline] backfillResolvedIntents: provider fetch failed for thread=${canonicalThreadId}:`,
+          err,
+        );
+      }
+    }
+
+    if (!anchor) {
+      console.log(`[pipeline] backfillResolvedIntents: no anchor for thread=${canonicalThreadId} (likely legacy orphan — no emails in DB)`);
+      return;
+    }
+
+    console.log(`[pipeline] processThread: anchor=${anchor.id.substring(0,20)} thread=${canonicalThreadId.substring(0,20)} tier1=${anchor.bodyText?.length ?? 0}chars`);
+
+    // Build full thread context (DB fallback, no mail client needed) so the
+    // LLM has conversation history, not just the single anchor email body.
+    const threadContext = await buildThreadContext(
+      shop,
+      anchor.threadId,
+      canonicalThreadId,
+      anchor.id,
+      connEmail,
+      undefined,
+    );
+
+    const threadResolution = await getThreadResolution(canonicalThreadId);
+    const analysis = await analyzeSupportEmail({
+      subject: anchor.subject,
+      body: threadContext.body,
+      conversationMessages: threadContext.messages,
+      admin,
+      shop,
+      skipDraft: true,
+      skipTracking: true,
+      trackedCallContext: { shop, emailId: anchor.id, threadId: anchor.threadId },
+      threadResolution: threadResolution
+        ? {
+            identifiers: {
+              orderNumber: threadResolution.orderNumber,
+              trackingNumber: threadResolution.trackingNumber,
+              email: threadResolution.email,
+              customerName: threadResolution.customerName,
+            },
+            confidence: threadResolution.confidence,
+          }
+        : undefined,
+    });
+    console.log(`[pipeline] processThread: analyze done intent=${analysis.intent} usedLLM=${analysis.warnings?.some(w => w.code === 'llm_fallback') ? 'no' : 'yes'} thread=${canonicalThreadId.substring(0,20)}`);
+    await prisma.incomingEmail.update({
+      where: { id: anchor.id },
+      data: {
+        analysisResult: JSON.stringify(analysis),
+        detectedIntent: analysis.intent,
+        analysisConfidence: analysis.confidence,
+        // Don't overwrite processingStatus for outgoing anchors — the email
+        // stays as "outgoing"; we only add the badge metadata.
+        ...(isOutgoingAnchor ? {} : { processingStatus: "analyzed" }),
+        lastAnalyzedAt: new Date(),
+      },
+    });
+    // Recompute thread state immediately so Thread.structuredState reflects
+    // the new analysisResult. Critical for the pre-Pass-1 call: Pass 1's
+    // recomputeThreadState reads analysisResult to decide noReplyNeeded, and
+    // a stale structuredState could cause it to flip back to waiting_merchant.
+    if (anchor.canonicalThreadId) {
+      try {
+        await recomputeThreadState(anchor.canonicalThreadId, { mailboxAddress: connEmail });
+      } catch (err) {
+        console.error(`[pipeline] processThread: recomputeThreadState failed for thread=${canonicalThreadId}:`, err);
+      }
+    }
+    console.log(`[pipeline] processThread: saved anchor=${anchor.id.substring(0,20)} intent=${analysis.intent}`);
+  }
+
+  let done = 0;
+  let failed = 0;
+  for (let i = 0; i < toProcess.length; i += CONCURRENCY) {
+    const chunk = toProcess.slice(i, i + CONCURRENCY);
+    const results = await Promise.allSettled(
+      chunk.map((canonicalThreadId) =>
+        processThread(canonicalThreadId).catch((err) => {
+          failed++;
+          console.error(
+            `[pipeline] backfillResolvedIntents: failed for thread=${canonicalThreadId}:`,
+            err,
+          );
+        }),
+      ),
+    );
+    done += results.filter((r) => r.status === "fulfilled").length;
+    // Small pause between chunks — avoids hammering OpenAI rate limits
+    // when backfillResolvedIntents runs immediately after a heavy Pass 2
+    // (e.g. full resync with 50+ LLM classification calls).
+    if (i + CONCURRENCY < toProcess.length) {
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  }
+  console.log(
+    `[pipeline] backfillResolvedIntents: done=${done} failed=${failed} total=${toProcess.length}`,
+  );
 }
 
 /**
