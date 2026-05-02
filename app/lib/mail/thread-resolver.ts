@@ -189,17 +189,22 @@ export async function refreshThreadStats(
   canonicalThreadId: string,
   db: PrismaClient | Prisma.TransactionClient = prisma,
 ): Promise<void> {
-  const agg = await db.incomingEmail.aggregate({
-    where: { canonicalThreadId },
-    _count: { _all: true },
-    _min: { receivedAt: true },
-    _max: { receivedAt: true },
-  });
-  const latest = await db.incomingEmail.findFirst({
-    where: { canonicalThreadId },
-    orderBy: [{ receivedAt: "desc" }, { createdAt: "desc" }],
-    select: { id: true },
-  });
+  // Merge two DB round-trips into one transaction: aggregate stats and
+  // latest-message lookup are fetched in parallel, then a single update
+  // writes all four fields atomically.
+  const [agg, latest] = await Promise.all([
+    db.incomingEmail.aggregate({
+      where: { canonicalThreadId },
+      _count: { _all: true },
+      _min: { receivedAt: true },
+      _max: { receivedAt: true },
+    }),
+    db.incomingEmail.findFirst({
+      where: { canonicalThreadId },
+      orderBy: [{ receivedAt: "desc" }, { createdAt: "desc" }],
+      select: { id: true },
+    }),
+  ]);
   await db.thread.update({
     where: { id: canonicalThreadId },
     data: {

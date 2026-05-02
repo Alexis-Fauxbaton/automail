@@ -8,7 +8,6 @@
 // Thread.supportNature / operationalState / structuredState directly.
 
 import prisma from "../../db.server";
-import { getTrueLatestMessage } from "../mail/thread-resolver";
 import { recordStateTransition } from "./thread-state-history";
 
 export type SupportNature =
@@ -251,7 +250,9 @@ export async function recomputeThreadState(
     hasIncoming: incomingCount > 0,
   });
 
-  const trueLatest = await getTrueLatestMessage(canonicalThreadId);
+  // Use the last element of the already-fetched messages array (ordered asc)
+  // instead of an extra DB round-trip via getTrueLatestMessage.
+  const trueLatest = messages.length > 0 ? messages[messages.length - 1] : null;
 
   const structured: StructuredThreadState = {
     messageCount: messages.length,

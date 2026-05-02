@@ -993,7 +993,12 @@ export async function redraftEmail(emailId: string, shop: string): Promise<strin
   if (!record || record.shop !== shop) throw new Error("Email not found");
   if (!record.analysisResult) throw new Error("No analysis result found — run Refresh context first");
 
-  const analysis = JSON.parse(record.analysisResult as string);
+  let analysis: ReturnType<typeof JSON.parse>;
+  try {
+    analysis = JSON.parse(record.analysisResult as string);
+  } catch {
+    throw new Error("analysisResult is not valid JSON — run Refresh context first");
+  }
 
   const { generateLLMDraft } = await import("../support/llm-draft");
   const { getSettings } = await import("../support/settings");

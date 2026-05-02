@@ -90,6 +90,7 @@ async function tick(): Promise<void> {
  * inside `enqueueJob`, so a pending/running job blocks repeats).
  */
 async function enqueueDuePeriodicSyncs(): Promise<void> {
+  try {
   const now = new Date();
   // Coarse pre-filter: only fetch connections whose lastSyncAt is null OR
   // older than 1 minute (the minimum sync interval). This cuts fetched rows
@@ -142,6 +143,9 @@ async function enqueueDuePeriodicSyncs(): Promise<void> {
     await enqueueJob(c.shop, "sync").catch((err) =>
       console.error(`[auto-sync] enqueue periodic for ${c.shop} failed:`, err),
     );
+  }
+  } catch (err) {
+    console.error("[auto-sync] enqueueDuePeriodicSyncs failed:", err);
   }
 }
 

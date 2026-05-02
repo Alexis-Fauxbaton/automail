@@ -61,7 +61,7 @@ export type CallSite =
 
 export interface TrackedCallContext {
   callSite: CallSite;
-  shop?: string;
+  shop: string;
   emailId?: string;
   threadId?: string;
 }
