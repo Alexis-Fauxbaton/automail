@@ -264,12 +264,22 @@ export async function persistEmailAttachments(
   });
 }
 
+const cancelledCache = new Map<string, { result: boolean; checkedAt: number }>();
+const CANCEL_CHECK_TTL_MS = 15_000;
+
 async function isCancelled(shop: string, syncStartedAt: Date): Promise<boolean> {
+  const now = Date.now();
+  const cached = cancelledCache.get(shop);
+  if (cached && now - cached.checkedAt < CANCEL_CHECK_TTL_MS) {
+    return cached.result;
+  }
   const fresh = await prisma.mailConnection.findUnique({
     where: { shop },
     select: { syncCancelledAt: true },
   });
-  return !!(fresh?.syncCancelledAt && fresh.syncCancelledAt > syncStartedAt);
+  const result = !!(fresh?.syncCancelledAt && fresh.syncCancelledAt > syncStartedAt);
+  cancelledCache.set(shop, { result, checkedAt: now });
+  return result;
 }
 
 /**
