@@ -59,6 +59,7 @@ model MailConnection {
   refreshToken   String   // encrypted
   tokenExpiry    DateTime
   historyId      String?  // Gmail only — incremental sync cursor
+  deltaToken     String?  // Outlook only — Microsoft Graph delta link (full URL)
   lastSyncAt     DateTime?
   lastSyncError  String?  // last top-level sync error message, if any
   syncCancelledAt DateTime? // set by the user to abort a running sync
@@ -302,6 +303,7 @@ model LlmCallLog {
   durationMs      Int      @default(0)
   createdAt       DateTime @default(now())
 
+  @@index([shop])
   @@index([shop, createdAt])
   @@index([emailId])
   @@index([threadId])
