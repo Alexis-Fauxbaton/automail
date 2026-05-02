@@ -51,13 +51,15 @@ import prisma from "../../../db.server";
 // Helpers
 // ---------------------------------------------------------------------------
 
+type MockFn = ReturnType<typeof vi.fn>;
+
 /** Return the mock instance created by the most recent `new OAuth2()` call. */
 function getLastOAuth2Instance(): {
-  generateAuthUrl: ReturnType<typeof vi.fn>;
-  getToken: ReturnType<typeof vi.fn>;
-  setCredentials: ReturnType<typeof vi.fn>;
+  generateAuthUrl: MockFn;
+  getToken: MockFn;
+  setCredentials: MockFn;
 } {
-  const OAuth2 = google.auth.OAuth2 as ReturnType<typeof vi.fn>;
+  const OAuth2 = google.auth.OAuth2 as unknown as MockFn;
   const results = OAuth2.mock.results;
   return results[results.length - 1]?.value;
 }
@@ -72,8 +74,8 @@ beforeEach(() => {
   process.env.SHOPIFY_API_SECRET = "test-shopify-secret";
 
   // Reset the OAuth2 constructor so each test gets fresh per-instance spies.
-  (google.auth.OAuth2 as ReturnType<typeof vi.fn>).mockReset();
-  (google.auth.OAuth2 as ReturnType<typeof vi.fn>).mockImplementation(function () {
+  (google.auth.OAuth2 as unknown as MockFn).mockReset();
+  (google.auth.OAuth2 as unknown as MockFn).mockImplementation(function () {
     return {
       generateAuthUrl: vi.fn().mockReturnValue(
         "https://accounts.google.com/o/oauth2/auth?state=test",
@@ -84,7 +86,7 @@ beforeEach(() => {
   });
 
   // Reset $transaction.
-  (prisma.$transaction as ReturnType<typeof vi.fn>).mockReset();
+  (prisma.$transaction as unknown as MockFn).mockReset();
 });
 
 describe("gmail/auth", () => {
@@ -95,7 +97,7 @@ describe("gmail/auth", () => {
       const instance = getLastOAuth2Instance();
       expect(instance.generateAuthUrl).toHaveBeenCalledOnce();
 
-      const [options] = instance.generateAuthUrl.mock.calls[0] as [{ state?: string }][];
+      const [options] = instance.generateAuthUrl.mock.calls[0] as [{ state?: string }];
       expect(typeof options.state).toBe("string");
       expect((options.state as string).length).toBeGreaterThan(0);
     });
@@ -104,7 +106,7 @@ describe("gmail/auth", () => {
   describe("exchangeCodeForTokens", () => {
     it("throws when access_token is missing", async () => {
       // Override getToken for this specific OAuth2 instance.
-      (google.auth.OAuth2 as ReturnType<typeof vi.fn>).mockImplementationOnce(function () {
+      (google.auth.OAuth2 as unknown as MockFn).mockImplementationOnce(function () {
         return {
           generateAuthUrl: vi.fn(),
           getToken: vi.fn().mockResolvedValueOnce({ tokens: { refresh_token: "rt" } }),
@@ -116,7 +118,7 @@ describe("gmail/auth", () => {
     });
 
     it("throws when refresh_token is missing", async () => {
-      (google.auth.OAuth2 as ReturnType<typeof vi.fn>).mockImplementationOnce(function () {
+      (google.auth.OAuth2 as unknown as MockFn).mockImplementationOnce(function () {
         return {
           generateAuthUrl: vi.fn(),
           getToken: vi.fn().mockResolvedValueOnce({ tokens: { access_token: "at" } }),
@@ -135,7 +137,7 @@ describe("gmail/auth", () => {
       const txDelete = vi.fn();
       const txDeleteMany = vi.fn();
 
-      (prisma.$transaction as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (prisma.$transaction as unknown as MockFn).mockImplementationOnce(
         async (cb: (tx: unknown) => Promise<void>) =>
           cb({ mailConnection: { delete: txDelete }, incomingEmail: { deleteMany: txDeleteMany } }),
       );

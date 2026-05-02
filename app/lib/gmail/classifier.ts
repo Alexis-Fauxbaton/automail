@@ -105,7 +105,7 @@ export async function classifyEmail(
         temperature: 0,
         max_tokens: 30,
       },
-      { callSite: "classifier", ...ctx },
+      { callSite: "classifier", shop: ctx.shop ?? "", ...ctx },
     );
 
     const raw = response.choices[0]?.message?.content ?? "";

@@ -107,7 +107,7 @@ async function askLLM(
         temperature: 0,
         max_tokens: 256,
       },
-      { callSite: "tracking-agent", ...ctx },
+      { callSite: "tracking-agent", shop: ctx?.shop ?? "", ...ctx },
     );
 
     const raw = response.choices[0]?.message?.content ?? "";

@@ -46,7 +46,7 @@ Return ONLY the updated email text. No explanation, no markdown, no quotes.`;
       temperature: 0.3,
       max_tokens: 600,
     },
-    { callSite: "refine-draft", ...ctx },
+    { callSite: "refine-draft", shop: ctx?.shop ?? "", ...ctx },
   );
 
   return response.choices[0]?.message?.content?.trim() ?? currentDraft;

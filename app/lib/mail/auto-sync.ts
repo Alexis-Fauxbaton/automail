@@ -197,6 +197,7 @@ async function runJob(job: {
   shop: string;
   kind: SyncJobKind;
   params: Record<string, unknown>;
+  attempts: number;
 }): Promise<void> {
   // bookkeeping moved to drainJobQueue
   const startedAt = Date.now();
