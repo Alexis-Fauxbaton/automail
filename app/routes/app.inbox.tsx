@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useFetcher, useLoaderData, useNavigation, useRevalidator } from "react-router";
 import { useTranslation } from "react-i18next";
+import { useMobile } from "~/hooks/useMobile";
 
 import { authenticate } from "../shopify.server";
 import { getAuthUrl as getGmailAuthUrl, getConnection, deleteConnection } from "../lib/gmail/auth";
@@ -2447,6 +2448,7 @@ export default function InboxPage() {
     intent: "",
   });
   const [expandedThreadId, setExpandedThreadId] = useState<string | null>(null);
+  const isMobile = useMobile();
 
   const emails: SerializedEmail[] =
     (actionData as { emails?: SerializedEmail[] })?.emails ?? loaderData.emails;
@@ -2509,6 +2511,42 @@ export default function InboxPage() {
   const selectedThreadMeta = expandedThreadId
     ? threadMeta.find((m) => m.thread.threadId === expandedThreadId) ?? null
     : null;
+
+  // On mobile: full-screen detail view replaces the list
+  if (isMobile && selectedThreadMeta) {
+    return (
+      <div className="ui-inbox-root">
+        <div style={{ marginBottom: "12px" }}>
+          <button
+            type="button"
+            onClick={() => setExpandedThreadId(null)}
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              fontSize: "14px",
+              fontWeight: 500,
+              color: "var(--ui-slate-700)",
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              padding: "0",
+            }}
+          >
+            ← {t("inbox.backToList")}
+          </button>
+        </div>
+        <ThreadDetailPanel
+          thread={selectedThreadMeta.thread}
+          threadState={selectedThreadMeta.state}
+          connectedEmail={loaderData.connectedEmail}
+          bucket={selectedThreadMeta.bucket}
+          previousContact={selectedThreadMeta.previousContact}
+          onClose={() => setExpandedThreadId(null)}
+        />
+      </div>
+    );
+  }
 
   const matchesFilters = (m: (typeof threadMeta)[number]): boolean => {
     if (filters.intent !== "") {

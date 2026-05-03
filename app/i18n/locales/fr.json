@@ -283,7 +283,8 @@
     "signalRepliedElsewhere": "Répondu dans un autre fil",
     "signalPriorContactBoth": "Contact récurrent (adresse + commande)",
     "signalPriorContactOrder": "Contact récurrent (même commande)",
-    "signalPriorContactAddress": "Contact récurrent (même adresse)"
+    "signalPriorContactAddress": "Contact récurrent (même adresse)",
+    "backToList": "Retour à la liste"
   },
   "login": {
     "heading": "Connexion",
