@@ -357,6 +357,20 @@
   background: rgba(255, 255, 255, 0.18);
   color: #ffffff;
 }
+@media (max-width: 768px) {
+  .ui-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .ui-tabs::-webkit-scrollbar {
+    display: none;
+  }
+  .ui-tab {
+    flex-shrink: 0;
+  }
+}
 
 /* ---------------- Stat row (label/value list) ---------------- */
 .ui-statrow {
@@ -456,7 +470,8 @@ s-page::part(header) {
   .ui-grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 640px) {
-  .ui-grid-4, .ui-grid-2 { grid-template-columns: 1fr; }
+  .ui-grid-4 { grid-template-columns: 1fr 1fr; }
+  .ui-grid-2 { grid-template-columns: 1fr; }
 }
 .ui-split {
   display: grid;
@@ -465,4 +480,63 @@ s-page::part(header) {
 }
 @media (max-width: 1100px) {
   .ui-split { grid-template-columns: 1fr; }
+}
+
+/* ── Mobile responsive ──────────────────────────────────────────────── */
+
+/* Two-column analysis panel (order context | draft) → stacks on mobile */
+.ui-analysis-grid {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) minmax(0, 1fr);
+  border-bottom: 1px solid var(--ui-slate-100);
+}
+@media (max-width: 768px) {
+  .ui-analysis-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Thread detail sticky panel → becomes static on mobile */
+.ui-detail-panel {
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  border-radius: var(--ui-radius-2xl);
+}
+@media (max-width: 768px) {
+  .ui-detail-panel {
+    position: static;
+    max-height: none;
+    overflow-y: visible;
+  }
+}
+
+/* Thread row badge/pill container — prevents horizontal overflow */
+.ui-thread-row-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  overflow: hidden;
+  max-width: 100%;
+}
+
+/* Reduced padding on mobile */
+@media (max-width: 640px) {
+  .ui-inbox-root {
+    padding: 0 12px 24px;
+  }
+  .ui-card {
+    padding: 14px;
+  }
+}
+
+/* Minimum 44px touch targets on mobile */
+@media (max-width: 768px) {
+  .ui-inbox-root button,
+  .ui-inbox-root [role="button"] {
+    min-height: 44px;
+  }
 }
