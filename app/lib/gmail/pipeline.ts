@@ -1293,6 +1293,27 @@ export async function reanalyzeEmail(
     ? await getThreadResolution(record.canonicalThreadId)
     : null;
 
+  // Honour any manual classification overrides set by the user in the
+  // editor: feed the orchestrator with reuseIntents/reuseOrder so the
+  // draft is written from the user's chosen classification, not from
+  // the LLM's autonomous re-classification.
+  const previous = record.analysisResult
+    ? (JSON.parse(record.analysisResult) as Awaited<ReturnType<typeof analyzeSupportEmail>>)
+    : null;
+  const reuseIntents = previous && previous.manualOverrides?.intents
+    ? {
+        intent: previous.intent,
+        intents: previous.intents ?? [previous.intent],
+        identifiers: previous.identifiers,
+      }
+    : undefined;
+  const reuseOrder = previous && previous.manualOverrides?.order
+    ? {
+        order: previous.order,
+        orderCandidates: previous.orderCandidates ?? [],
+      }
+    : undefined;
+
   const analysis = await analyzeSupportEmail({
     subject: record.subject,
     body: threadContext.body,
@@ -1315,7 +1336,14 @@ export async function reanalyzeEmail(
           confidence: threadResolution.confidence,
         }
       : undefined,
+    reuseIntents,
+    reuseOrder,
   });
+
+  // Carry forward manual override markers so they survive the regen.
+  if (previous?.manualOverrides) {
+    analysis.manualOverrides = previous.manualOverrides;
+  }
 
   await prisma.incomingEmail.update({
     where: { id: emailId },
@@ -1328,6 +1356,19 @@ export async function reanalyzeEmail(
       lastAnalyzedAt: new Date(),
     },
   });
+
+  // If the user manually set the order, re-apply it on Thread now that
+  // mergeThreadIdentifiers may have pulled an old order number out of
+  // the email body again.
+  if (record.canonicalThreadId && previous?.manualOverrides?.order) {
+    const finalOrderNumber = analysis.order?.name?.replace(/^#/, "") ?? null;
+    await prisma.thread.update({
+      where: { id: record.canonicalThreadId },
+      data: { resolvedOrderNumber: finalOrderNumber },
+    }).catch((err) => {
+      console.error("[pipeline] reanalyze: thread order sync failed:", err);
+    });
+  }
   if (analysis.draftReply && !options.skipDraft) {
     const { upsertReplyDraftBody } = await import("../support/reply-draft");
     await upsertReplyDraftBody(emailId, shop, analysis.draftReply);
