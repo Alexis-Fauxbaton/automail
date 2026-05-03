@@ -519,7 +519,7 @@ s-page::part(header) {
   align-items: center;
   gap: 6px;
   margin-bottom: 10px;
-  overflow: hidden;
+  overflow-x: hidden;
   max-width: 100%;
 }
 
@@ -535,8 +535,8 @@ s-page::part(header) {
 
 /* Minimum 44px touch targets on mobile */
 @media (max-width: 768px) {
-  .ui-inbox-root button,
-  .ui-inbox-root [role="button"] {
+  .ui-inbox-root button:not(.ui-tab),
+  .ui-inbox-root [role="button"]:not(.ui-tab) {
     min-height: 44px;
   }
 }
