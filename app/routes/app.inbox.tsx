@@ -13,6 +13,7 @@ import { refineDraft } from "../lib/gmail/refine-draft";
 import { runDiagnosis, type DiagnosisReport } from "../lib/gmail/diagnose";
 import { enqueueJob } from "../lib/mail/job-queue";
 import { AnalysisDisplay } from "../components/SupportAnalysisDisplay";
+import { ClassificationEditModal, type ClassificationEditSubmit } from "../components/ClassificationEditModal";
 import type { SupportAnalysisExtended } from "../lib/support/orchestrator";
 import type { MailProvider } from "../lib/mail/types";
 import { decodeHtmlEntities } from "../lib/gmail/client";
@@ -2265,6 +2266,43 @@ function ThreadDetailPanel({
     (bucket === "to_process" || bucket === "waiting_merchant" || bucket === "waiting_customer") &&
     (previousContact.recentReply || previousContact.byAddress || previousContact.byOrder);
 
+  const [editingClassification, setEditingClassification] = useState(false);
+  const classificationFetcher = useFetcher<typeof action>();
+  const isSubmittingClassification = classificationFetcher.state !== "idle";
+  const classificationErrorCode =
+    classificationFetcher.data && "classificationError" in classificationFetcher.data
+      ? (classificationFetcher.data.classificationError as string | undefined)
+      : undefined;
+
+  const submitClassificationEdit = (edit: ClassificationEditSubmit) => {
+    const fd = new FormData();
+    fd.set("_action", "updateClassification");
+    fd.set("threadId", latest.canonicalThreadId ?? "");
+    if (edit.resetIntents) fd.set("resetIntents", "1");
+    if (edit.intents) fd.set("intents", JSON.stringify(edit.intents));
+    if (edit.orderChange) {
+      fd.set("orderChangeType", edit.orderChange.type);
+      if (edit.orderChange.type === "candidate") {
+        fd.set("orderId", edit.orderChange.orderId);
+        fd.set("candidate", JSON.stringify(edit.orderChange.candidate));
+      } else if (edit.orderChange.type === "search") {
+        fd.set("orderNumber", edit.orderChange.orderNumber);
+      }
+    }
+    classificationFetcher.submit(fd, { method: "post" });
+  };
+
+  useEffect(() => {
+    if (
+      classificationFetcher.state === "idle" &&
+      classificationFetcher.data &&
+      "classificationUpdated" in classificationFetcher.data &&
+      classificationFetcher.data.classificationUpdated
+    ) {
+      setEditingClassification(false);
+    }
+  }, [classificationFetcher.state, classificationFetcher.data]);
+
   const analysisEmail = [...emails].reverse().find((e) => e.analysisResult) ?? null;
   const draftEmail = latest.draftReply ? latest : (analysisEmail?.draftReply ? analysisEmail : null);
   const order = analysisEmail?.analysisResult?.order;
@@ -2465,11 +2503,25 @@ function ThreadDetailPanel({
                   <span className="ui-pill ui-pill--warning" style={{ fontSize: "10px" }}>{t("inbox.pillBasedOnPrevious")}</span>
                 )}
               </div>
-              <AnalysisDisplay analysis={analysisEmail.analysisResult} lastAnalyzedAt={analysisEmail.lastAnalyzedAt} />
+              <AnalysisDisplay
+                analysis={analysisEmail.analysisResult}
+                lastAnalyzedAt={analysisEmail.lastAnalyzedAt}
+                onEdit={() => setEditingClassification(true)}
+              />
             </div>
           )}
         </div>
       </div>
+
+      {editingClassification && analysisEmail?.analysisResult && (
+        <ClassificationEditModal
+          analysis={analysisEmail.analysisResult}
+          onSubmit={submitClassificationEdit}
+          onClose={() => setEditingClassification(false)}
+          isSubmitting={isSubmittingClassification}
+          errorCode={classificationErrorCode}
+        />
+      )}
 
       {/* ── Thread complet (repliable) ── */}
       <div>
