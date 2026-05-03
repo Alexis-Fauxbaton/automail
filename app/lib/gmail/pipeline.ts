@@ -1082,7 +1082,7 @@ async function classifyAndDraft(
  *     so we include outgoing replies the merchant sent from their mailbox.
  *  2. On failure, fall back to DB-stored incoming messages only.
  */
-async function buildThreadContext(
+export async function buildThreadContext(
   shop: string,
   threadId: string,
   canonicalThreadId: string | null,
