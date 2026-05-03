@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useActionData, useFetcher, useLoaderData, useNavigation, useRevalidator } from "react-router";
+import { Form, useActionData, useFetcher, useLoaderData, useNavigation, useRevalidator, useSearchParams } from "react-router";
 import { useTranslation } from "react-i18next";
 import { useMobile } from "../hooks/useMobile";
 
@@ -2444,41 +2444,49 @@ export default function InboxPage() {
     nature: "all",
     intent: "",
   });
-  const [expandedThreadId, setExpandedThreadId] = useState<string | null>(null);
   const isMobile = useMobile();
 
-  // Restore scroll position when returning to the list on mobile.
-  // Saved in onSelect when opening a thread; consumed once when closing.
+  // The expanded thread id lives in the URL (?thread=<id>) so that the
+  // device/browser back button naturally closes the detail view on mobile
+  // and bookmarks/refreshes preserve the open thread on desktop.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const expandedThreadId = searchParams.get("thread");
+
+  const setExpandedThreadId = (threadId: string | null) => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (threadId === null) next.delete("thread");
+        else next.set("thread", threadId);
+        return next;
+      },
+      { preventScrollReset: true },
+    );
+  };
+
+  // Save list scroll on mobile when opening a thread, restore when closing.
   const savedScrollRef = useRef(0);
+  const prevThreadIdRef = useRef<string | null>(expandedThreadId);
   useEffect(() => {
-    if (!isMobile || expandedThreadId !== null) return;
-    if (savedScrollRef.current <= 0) return;
-    const target = savedScrollRef.current;
-    savedScrollRef.current = 0;
-    requestAnimationFrame(() => window.scrollTo(0, target));
+    if (!isMobile) {
+      prevThreadIdRef.current = expandedThreadId;
+      return;
+    }
+    const prev = prevThreadIdRef.current;
+    if (prev === null && expandedThreadId !== null) {
+      // Just opened on mobile: scroll to top so user sees the back button.
+      savedScrollRef.current = window.scrollY || document.documentElement.scrollTop || 0;
+      requestAnimationFrame(() => window.scrollTo(0, 0));
+    } else if (prev !== null && expandedThreadId === null && savedScrollRef.current > 0) {
+      // Just closed on mobile: restore the list scroll position.
+      const target = savedScrollRef.current;
+      savedScrollRef.current = 0;
+      requestAnimationFrame(() => window.scrollTo(0, target));
+    }
+    prevThreadIdRef.current = expandedThreadId;
   }, [isMobile, expandedThreadId]);
 
-  // Make the device/browser back button close the thread detail on mobile
-  // instead of leaving the app. We push a history entry on open and listen
-  // for popstate to clear state when the user navigates back.
-  const mobileHistoryPushedRef = useRef(false);
-  useEffect(() => {
-    if (!isMobile) return;
-    const handler = () => {
-      setExpandedThreadId(null);
-      mobileHistoryPushedRef.current = false;
-    };
-    window.addEventListener("popstate", handler);
-    return () => window.removeEventListener("popstate", handler);
-  }, [isMobile]);
-
-  const closeMobileThread = () => {
-    if (mobileHistoryPushedRef.current) {
-      window.history.back();
-    } else {
-      setExpandedThreadId(null);
-    }
-  };
+  const closeMobileThread = () => setExpandedThreadId(null);
 
   const emails: SerializedEmail[] =
     (actionData as { emails?: SerializedEmail[] })?.emails ?? loaderData.emails;
@@ -2763,21 +2771,11 @@ export default function InboxPage() {
                       isSelected={expandedThreadId === thread.threadId}
                       connectedEmail={loaderData.connectedEmail}
                       previousContact={previousContact}
-                      onSelect={() => {
-                        const next = expandedThreadId === thread.threadId ? null : thread.threadId;
-                        if (isMobile && next !== null && expandedThreadId === null) {
-                          // Opening on mobile: save scroll, push history so device back returns here
-                          savedScrollRef.current = window.scrollY || document.documentElement.scrollTop || 0;
-                          window.history.pushState({ mobileThreadOpen: true }, "");
-                          mobileHistoryPushedRef.current = true;
-                          setExpandedThreadId(next);
-                        } else if (isMobile && next === null) {
-                          // Toggling closed via re-clicking same thread
-                          closeMobileThread();
-                        } else {
-                          setExpandedThreadId(next);
-                        }
-                      }}
+                      onSelect={() =>
+                        setExpandedThreadId(
+                          expandedThreadId === thread.threadId ? null : thread.threadId,
+                        )
+                      }
                       onOrderClick={(orderNumber) =>
                         setFilters((prev) => ({ ...prev, search: orderNumber }))
                       }
