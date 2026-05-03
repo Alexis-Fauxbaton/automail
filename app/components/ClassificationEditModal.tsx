@@ -3,6 +3,39 @@ import { useTranslation } from "react-i18next";
 import { SUPPORT_INTENTS, type SupportIntent } from "../lib/support/types";
 import type { OrderFacts, SupportAnalysis } from "../lib/support/types";
 
+function ChipIconBtn({
+  label,
+  onClick,
+  disabled,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  children: React.ReactNode;
+}) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={label}
+      aria-label={label}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onFocus={() => setHover(true)}
+      onBlur={() => setHover(false)}
+      style={{
+        ...styles.chipIconBtn,
+        ...(disabled ? styles.chipIconBtnDisabled : hover ? styles.chipIconBtnHover : {}),
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
 export interface ClassificationEditSubmit {
   intents?: SupportIntent[];
   resetIntents?: boolean;
@@ -90,7 +123,9 @@ const styles: Record<string, CSSProperties> = {
     color: "inherit",
     opacity: 0.65,
     padding: 0,
+    transition: "opacity 0.12s, background 0.12s",
   },
+  chipIconBtnHover: { opacity: 1, background: "rgba(15,23,42,0.10)" },
   chipIconBtnDisabled: { opacity: 0.25, cursor: "not-allowed" },
   primaryBadge: {
     fontSize: "9px",
@@ -323,38 +358,36 @@ export function ClassificationEditModal({
                       </span>
                     )}
                     <span>{intentLabel(value)}</span>
-                    <button
-                      type="button"
+                    <ChipIconBtn
+                      label={
+                        idx === 0
+                          ? t("classification.alreadyPrimary", "Déjà l'intention principale")
+                          : isPrimary
+                            ? t("classification.demoteIntent", "Rétrograder")
+                            : t("classification.moveIntentUp", "Monter (rendre principal si en tête)")
+                      }
                       onClick={() => moveIntent(idx, -1)}
                       disabled={idx === 0}
-                      aria-label="Move up"
-                      style={{
-                        ...styles.chipIconBtn,
-                        ...(idx === 0 ? styles.chipIconBtnDisabled : {}),
-                      }}
                     >
                       ↑
-                    </button>
-                    <button
-                      type="button"
+                    </ChipIconBtn>
+                    <ChipIconBtn
+                      label={
+                        idx === intents.length - 1
+                          ? t("classification.alreadyLast", "Déjà en dernière position")
+                          : t("classification.moveIntentDown", "Descendre")
+                      }
                       onClick={() => moveIntent(idx, 1)}
                       disabled={idx === intents.length - 1}
-                      aria-label="Move down"
-                      style={{
-                        ...styles.chipIconBtn,
-                        ...(idx === intents.length - 1 ? styles.chipIconBtnDisabled : {}),
-                      }}
                     >
                       ↓
-                    </button>
-                    <button
-                      type="button"
+                    </ChipIconBtn>
+                    <ChipIconBtn
+                      label={t("classification.removeIntent", "Retirer cette intention")}
                       onClick={() => removeIntent(idx)}
-                      aria-label="Remove"
-                      style={styles.chipIconBtn}
                     >
                       ×
-                    </button>
+                    </ChipIconBtn>
                   </span>
                 );
               })}
