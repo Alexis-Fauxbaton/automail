@@ -2533,10 +2533,17 @@ function ThreadDetailPanel({
           {analysisEmail?.analysisResult && (
             <div>
               <div style={{ ...sectionLabel, display: "flex", gap: "8px", alignItems: "center", marginBottom: "14px" }}>
-                {t("inbox.sectionAnalysis")}
+                <span>{t("inbox.sectionAnalysis")}</span>
                 {analysisEmail !== latest && (
                   <span className="ui-pill ui-pill--warning" style={{ fontSize: "10px" }}>{t("inbox.pillBasedOnPrevious")}</span>
                 )}
+                <PencilButton
+                  onClick={() => setEditingClassification(true)}
+                  hasOverrides={
+                    analysisEmail.analysisResult.manualOverrides?.intents !== undefined ||
+                    analysisEmail.analysisResult.manualOverrides?.order !== undefined
+                  }
+                />
               </div>
               <AnalysisDisplay
                 analysis={analysisEmail.analysisResult}

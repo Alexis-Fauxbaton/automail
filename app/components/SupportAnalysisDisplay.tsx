@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { SupportAnalysisExtended } from "../lib/support/orchestrator";
 import type { FulfillmentTrackingFacts, TrackingFacts } from "../lib/support/types";
@@ -6,25 +6,42 @@ import type { FulfillmentTrackingFacts, TrackingFacts } from "../lib/support/typ
 // ─── Helper Components ───────────────────────────────────────────────────────────
 
 export function PencilButton({ onClick, hasOverrides }: { onClick: () => void; hasOverrides: boolean }) {
+  const { t } = useTranslation();
+  const [hover, setHover] = useState(false);
+  const baseColor = hasOverrides ? "#5c5f62" : "#6d7175";
+  const hoverColor = "#202223";
+  const label = hasOverrides
+    ? t("classification.manuallyEdited", "Modifié manuellement")
+    : t("classification.editTitle", "Modifier la classification");
   return (
     <button
       type="button"
       onClick={onClick}
-      title={hasOverrides ? "Modifié manuellement — cliquer pour modifier" : "Modifier la classification"}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onFocus={() => setHover(true)}
+      onBlur={() => setHover(false)}
+      aria-label={label}
+      title={label}
       style={{
-        background: "transparent",
-        border: "none",
+        background: hover ? "#f1f2f3" : "transparent",
+        border: "1px solid",
+        borderColor: hover ? "#c9cccf" : "transparent",
+        borderRadius: "6px",
         cursor: "pointer",
-        padding: "2px 4px",
+        padding: "2px 6px",
         display: "inline-flex",
         alignItems: "center",
         gap: "4px",
-        color: hasOverrides ? "#6d7175" : "#8c9196",
-        fontSize: "12px",
+        color: hover ? hoverColor : baseColor,
+        fontSize: "13px",
+        lineHeight: 1,
+        transition: "background 0.12s, border-color 0.12s, color 0.12s",
       }}
     >
       <span aria-hidden>✎</span>
-      {hasOverrides && <span style={{ fontSize: "10px" }}>•</span>}
+      {hasOverrides && <span aria-hidden style={{ fontSize: "9px", color: "#bf8b00" }}>●</span>}
+      {hover && <span style={{ fontSize: "11px" }}>{label}</span>}
     </button>
   );
 }
