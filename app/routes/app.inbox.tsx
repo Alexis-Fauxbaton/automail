@@ -2386,7 +2386,7 @@ function ThreadDetailPanel({
               <span style={{ color: "var(--ui-amber-700)", fontSize: "14px", cursor: "help" }}>⚠</span>
               {showSignals && (
                 <div style={{
-                  position: "absolute", bottom: "calc(100% + 6px)", right: 0,
+                  position: "absolute", top: "calc(100% + 6px)", left: 0,
                   background: "#fff", border: "1px solid var(--ui-slate-200)",
                   borderRadius: "8px", padding: "8px 12px",
                   boxShadow: "0 4px 16px rgba(0,0,0,0.10)",
