@@ -408,7 +408,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent === "reanalyze") {
     const emailId = String(formData.get("emailId") ?? "");
-    const analysis = await reanalyzeEmail(emailId, admin, session.shop);
+    const skipDraft = formData.get("skipDraft") === "1";
+    const analysis = await reanalyzeEmail(emailId, admin, session.shop, { skipDraft });
+    // When skipDraft, hide the LLM-generated draft from the client so the
+    // user's existing draftReply is preserved in the UI.
+    if (skipDraft && analysis) {
+      analysis.draftReply = undefined;
+    }
     return { reanalyzed: { emailId, analysis }, report: null, disconnected: false, refined: null };
   }
 
@@ -1768,6 +1774,9 @@ function ThreadCard({
           <reanalyzeFetcher.Form method="post">
             <input type="hidden" name="_action" value="reanalyze" />
             <input type="hidden" name="emailId" value={latest.id} />
+            {latest.processingStatus === "error" && (
+              <input type="hidden" name="skipDraft" value="1" />
+            )}
             <s-button type="submit" variant="primary" {...(isGenerating ? { loading: true } : {})}>
               {latest.processingStatus === "error" ? t("inbox.retryAnalysis") : t("inbox.generateDraft")}
             </s-button>
@@ -2273,6 +2282,9 @@ function ThreadDetailPanel({
             <reanalyzeFetcher.Form method="post">
               <input type="hidden" name="_action" value="reanalyze" />
               <input type="hidden" name="emailId" value={latest.id} />
+              {!latest.draftReply && latest.processingStatus === "error" && (
+                <input type="hidden" name="skipDraft" value="1" />
+              )}
               <s-button type="submit" variant="primary" {...(isGenerating ? { loading: true } : {})}>
                 {latest.draftReply ? t("inbox.regenerateDraft") : latest.processingStatus === "error" ? t("inbox.retryAnalysis") : t("inbox.generateDraft")}
               </s-button>
