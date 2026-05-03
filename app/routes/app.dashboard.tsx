@@ -233,7 +233,7 @@ export default function Dashboard() {
       <div className="ui-page">
         <div className="ui-hero">
           <div style={{ display: "flex", flexWrap: "wrap", gap: 24, alignItems: "flex-end", justifyContent: "space-between" }}>
-            <div style={{ minWidth: 280 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
               <span className="ui-hero__eyebrow">
                 <TrendUpIcon size={14} />
                 {t("dashboard.eyebrow")}
