@@ -546,6 +546,38 @@ s-page::part(header) {
   }
 }
 
+/* Sender display: name + address inline-truncated on desktop, stacked on
+   mobile so neither line is awkwardly cut off. */
+.ui-sender-stack {
+  overflow: hidden;
+}
+.ui-sender-stack > .ui-sender-stack__name {
+  display: inline;
+}
+.ui-sender-stack > .ui-sender-stack__addr {
+  display: inline;
+  margin-left: 6px;
+}
+.ui-sender-stack {
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+@media (max-width: 640px) {
+  .ui-sender-stack {
+    display: flex;
+    flex-direction: column;
+    white-space: normal;
+  }
+  .ui-sender-stack > .ui-sender-stack__name,
+  .ui-sender-stack > .ui-sender-stack__addr {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-left: 0;
+  }
+}
+
 /* Thread action button row — stacks on mobile to avoid overlap when
    Polaris s-button widths exceed the viewport. */
 .ui-thread-actions-row {

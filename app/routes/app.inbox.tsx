@@ -1703,12 +1703,12 @@ function ThreadCard({
 
       {/* Row 2 : sender + time */}
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "8px", marginBottom: "4px" }}>
-        <div style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          <span style={{ fontWeight: 600, fontSize: "0.9375rem", color: "var(--ui-slate-900)" }}>
+        <div className="ui-sender-stack" style={{ minWidth: 0 }}>
+          <span className="ui-sender-stack__name" style={{ fontWeight: 600, fontSize: "0.9375rem", color: "var(--ui-slate-900)" }}>
             {latest.fromName || latest.fromAddress}
           </span>
-          {latest.fromName && latest.fromName !== latest.fromAddress && (
-            <span style={{ fontWeight: 400, fontSize: "0.8125rem", color: "var(--ui-slate-500)", marginLeft: "6px" }}>
+          {latest.fromName && (
+            <span className="ui-sender-stack__addr" style={{ fontWeight: 400, fontSize: "0.8125rem", color: "var(--ui-slate-500)" }}>
               {latest.fromAddress}
             </span>
           )}
@@ -2225,12 +2225,12 @@ function ThreadDetailPanel({
 
         {/* Row 2 : sender + collapse button */}
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "12px", marginBottom: "4px" }}>
-          <div style={{ minWidth: 0, overflow: "hidden" }}>
-            <span style={{ fontWeight: 700, fontSize: "0.9375rem", color: "var(--ui-slate-900)" }}>
+          <div className="ui-sender-stack" style={{ minWidth: 0 }}>
+            <span className="ui-sender-stack__name" style={{ fontWeight: 700, fontSize: "0.9375rem", color: "var(--ui-slate-900)" }}>
               {latest.fromName || latest.fromAddress}
             </span>
-            {latest.fromName && latest.fromName !== latest.fromAddress && (
-              <span style={{ fontWeight: 400, fontSize: "0.8125rem", color: "var(--ui-slate-500)", marginLeft: "8px" }}>
+            {latest.fromName && (
+              <span className="ui-sender-stack__addr" style={{ fontWeight: 400, fontSize: "0.8125rem", color: "var(--ui-slate-500)" }}>
                 {latest.fromAddress}
               </span>
             )}
