@@ -45,3 +45,67 @@ describe("findCandidateById", () => {
     expect(findCandidateById([], "gid://Order/3")).toBeNull();
   });
 });
+
+import { searchOrderByExactNumber } from "../manual-classification";
+import type { AdminGraphqlClient } from "../shopify/order-search";
+
+function fakeAdmin(orders: Array<{ id: string; name: string }>): AdminGraphqlClient {
+  return {
+    graphql: async () => ({
+      json: async () => ({
+        data: {
+          orders: {
+            edges: orders.map((o) => ({
+              node: {
+                id: o.id,
+                name: o.name,
+                createdAt: "2026-04-01T00:00:00Z",
+                displayFulfillmentStatus: "UNFULFILLED",
+                displayFinancialStatus: "PAID",
+                customer: { displayName: "Jane", email: "jane@example.com" },
+                lineItems: { edges: [] },
+                fulfillments: [],
+              },
+            })),
+          },
+        },
+      }),
+    }),
+  } as unknown as AdminGraphqlClient;
+}
+
+describe("searchOrderByExactNumber", () => {
+  test("returns the single match as OrderFacts", async () => {
+    const admin = fakeAdmin([{ id: "gid://Order/1", name: "#1001" }]);
+    const result = await searchOrderByExactNumber(admin, "1001");
+    expect(result.kind).toBe("found");
+    if (result.kind === "found") expect(result.order.name).toBe("#1001");
+  });
+
+  test("returns 'not_found' on zero matches", async () => {
+    const admin = fakeAdmin([]);
+    const result = await searchOrderByExactNumber(admin, "9999");
+    expect(result.kind).toBe("not_found");
+  });
+
+  test("returns 'ambiguous' on multiple matches", async () => {
+    const admin = fakeAdmin([
+      { id: "gid://Order/1", name: "#1001" },
+      { id: "gid://Order/2", name: "#1001" },
+    ]);
+    const result = await searchOrderByExactNumber(admin, "1001");
+    expect(result.kind).toBe("ambiguous");
+    if (result.kind === "ambiguous") expect(result.candidates).toHaveLength(2);
+  });
+
+  test("strips leading # from input", async () => {
+    const admin = fakeAdmin([{ id: "gid://Order/1", name: "#1001" }]);
+    const result = await searchOrderByExactNumber(admin, "#1001");
+    expect(result.kind).toBe("found");
+  });
+
+  test("rejects empty input", async () => {
+    const admin = fakeAdmin([]);
+    await expect(searchOrderByExactNumber(admin, "")).rejects.toThrow(/empty/i);
+  });
+});

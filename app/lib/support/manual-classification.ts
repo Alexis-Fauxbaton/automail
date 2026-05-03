@@ -1,8 +1,9 @@
 // Pure helpers used by the manual classification edit server action.
 // Keep this module dependency-light: no Prisma, no Shopify client.
 
-import { SUPPORT_INTENTS, type SupportIntent } from "./types";
-import type { OrderFacts } from "./types";
+import { SUPPORT_INTENTS, type SupportIntent, type OrderFacts } from "./types";
+import { searchOrders, type AdminGraphqlClient } from "./shopify/order-search";
+import { normalizeOrder } from "./shopify/order-normalizer";
 
 const ALLOWED = new Set<string>(SUPPORT_INTENTS);
 
@@ -37,4 +38,32 @@ export function findCandidateById(
   orderId: string,
 ): OrderFacts | null {
   return candidates.find((o) => o.id === orderId) ?? null;
+}
+
+export type ExactOrderSearchResult =
+  | { kind: "found"; order: OrderFacts }
+  | { kind: "not_found" }
+  | { kind: "ambiguous"; candidates: OrderFacts[] };
+
+/**
+ * Search Shopify for an exact order number (with or without the leading `#`).
+ * - 0 matches → "not_found"
+ * - 1 match → "found"
+ * - >1 matches → "ambiguous" (caller must show candidates and ask the user
+ *   to pick one)
+ */
+export async function searchOrderByExactNumber(
+  admin: AdminGraphqlClient,
+  rawNumber: string,
+): Promise<ExactOrderSearchResult> {
+  const trimmed = rawNumber.trim().replace(/^#/, "");
+  if (trimmed.length === 0) {
+    throw new Error("Order number cannot be empty");
+  }
+  const result = await searchOrders(admin, { orderNumber: trimmed });
+  if (result.orders.length === 0) return { kind: "not_found" };
+  if (result.orders.length > 1) {
+    return { kind: "ambiguous", candidates: result.orders.map(normalizeOrder) };
+  }
+  return { kind: "found", order: normalizeOrder(result.orders[0]) };
 }
