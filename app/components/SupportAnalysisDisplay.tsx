@@ -250,7 +250,7 @@ export function AnalysisDisplay({
         <s-banner tone="info">{conversation.noReplyReason}</s-banner>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+      <div className="ui-grid-2">
         <Card title={t("analysis.identifiersTitle")}>
           <IdentifiersList identifiers={analysis.identifiers} />
         </Card>

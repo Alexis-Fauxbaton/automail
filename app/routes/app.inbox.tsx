@@ -1788,6 +1788,7 @@ function DraftBlock({ email, threadSenderEmail }: {
   threadSenderEmail: string;
 }) {
   const { t } = useTranslation();
+  const isMobile = useMobile();
   const allVersions = [...email.draftHistory, email.draftReply!];
   const [versionIndex, setVersionIndex] = useState(allVersions.length - 1);
   const currentVersion = allVersions[versionIndex] ?? email.draftReply!;
@@ -2020,7 +2021,7 @@ function DraftBlock({ email, threadSenderEmail }: {
             <input type="hidden" name="_action" value="refine" />
             <input type="hidden" name="emailId" value={email.id} />
             <input type="hidden" name="currentDraft" value={bodyText} />
-            <s-stack direction="inline" gap="small-300" blockAlign="end">
+            <s-stack direction={isMobile ? "block" : "inline"} gap="small-300" blockAlign="end">
               <div style={{ flex: 1 }}>
                 <s-text-field label={t("inbox.adjustDraft")} name="instructions"
                   placeholder="e.g. Be more formal, mention refund policy, shorten…" />
@@ -2446,6 +2447,17 @@ export default function InboxPage() {
   const [expandedThreadId, setExpandedThreadId] = useState<string | null>(null);
   const isMobile = useMobile();
 
+  // Restore scroll position when returning to the list on mobile.
+  // Saved in onSelect when opening a thread; consumed once when closing.
+  const savedScrollRef = useRef(0);
+  useEffect(() => {
+    if (!isMobile || expandedThreadId !== null) return;
+    if (savedScrollRef.current <= 0) return;
+    const target = savedScrollRef.current;
+    savedScrollRef.current = 0;
+    requestAnimationFrame(() => window.scrollTo(0, target));
+  }, [isMobile, expandedThreadId]);
+
   const emails: SerializedEmail[] =
     (actionData as { emails?: SerializedEmail[] })?.emails ?? loaderData.emails;
 
@@ -2729,11 +2741,13 @@ export default function InboxPage() {
                       isSelected={expandedThreadId === thread.threadId}
                       connectedEmail={loaderData.connectedEmail}
                       previousContact={previousContact}
-                      onSelect={() =>
-                        setExpandedThreadId(
-                          expandedThreadId === thread.threadId ? null : thread.threadId,
-                        )
-                      }
+                      onSelect={() => {
+                        const next = expandedThreadId === thread.threadId ? null : thread.threadId;
+                        if (isMobile && next !== null) {
+                          savedScrollRef.current = window.scrollY || document.documentElement.scrollTop || 0;
+                        }
+                        setExpandedThreadId(next);
+                      }}
                       onOrderClick={(orderNumber) =>
                         setFilters((prev) => ({ ...prev, search: orderNumber }))
                       }
