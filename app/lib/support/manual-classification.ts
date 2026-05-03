@@ -122,3 +122,57 @@ export function applyClassificationEditToAnalysis(
   next.manualOverrides = Object.keys(overrides).length > 0 ? overrides : undefined;
   return next;
 }
+
+// Persistence layer — loads, mutates, and saves the analysis to the anchor email.
+
+import prisma from "../../db.server";
+import type { Prisma } from "@prisma/client";
+
+export interface PersistClassificationEditInput {
+  shop: string;
+  threadId: string;
+  edit: ClassificationEdit;
+}
+
+/**
+ * Load the anchor email for the thread, apply the edit to its analysis JSON,
+ * and persist the result. Returns the updated analysis.
+ *
+ * "Anchor" = the latest analyzed incoming email of the thread. This is the
+ * email that holds the canonical analysisResult for the inbox UI.
+ */
+export async function persistClassificationEdit(
+  input: PersistClassificationEditInput,
+): Promise<SupportAnalysis> {
+  const { shop, threadId, edit } = input;
+
+  const anchor = await prisma.incomingEmail.findFirst({
+    where: {
+      shop,
+      canonicalThreadId: threadId,
+      processingStatus: "analyzed",
+      analysisResult: { not: null },
+    },
+    orderBy: { receivedAt: "desc" },
+    select: { id: true, analysisResult: true },
+  });
+
+  if (!anchor || !anchor.analysisResult) {
+    throw new Error("Thread has no analyzed email to edit");
+  }
+
+  const current = JSON.parse(anchor.analysisResult) as SupportAnalysis;
+  const next = applyClassificationEditToAnalysis(current, edit);
+
+  const data: Prisma.IncomingEmailUpdateInput = {
+    analysisResult: JSON.stringify(next),
+    detectedIntent: next.intent,
+  };
+
+  await prisma.incomingEmail.update({
+    where: { id: anchor.id },
+    data,
+  });
+
+  return next;
+}
