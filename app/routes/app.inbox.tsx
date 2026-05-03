@@ -2530,7 +2530,8 @@ export default function InboxPage() {
               display: "flex",
               alignItems: "center",
               gap: "6px",
-              padding: "0",
+              padding: "10px 4px",
+              minHeight: "44px",
             }}
           >
             ← {t("inbox.backToList")}
