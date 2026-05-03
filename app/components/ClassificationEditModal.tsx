@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import { SUPPORT_INTENTS, type SupportIntent } from "../lib/support/types";
 import type { OrderFacts, SupportAnalysis } from "../lib/support/types";
@@ -12,6 +12,187 @@ export interface ClassificationEditSubmit {
     | { type: "detach" }
     | { type: "reset" };
 }
+
+const styles: Record<string, CSSProperties> = {
+  backdrop: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(15, 23, 42, 0.55)",
+    backdropFilter: "blur(2px)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 1000,
+    padding: "16px",
+  },
+  panel: {
+    background: "#fff",
+    borderRadius: "16px",
+    width: "min(580px, 100%)",
+    maxHeight: "90vh",
+    display: "flex",
+    flexDirection: "column",
+    boxShadow: "0 20px 50px rgba(15,23,42,0.25)",
+    overflow: "hidden",
+  },
+  header: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: "18px 22px",
+    borderBottom: "1px solid var(--ui-slate-200)",
+  },
+  title: { margin: 0, fontSize: "16px", fontWeight: 600, color: "var(--ui-slate-900)" },
+  closeBtn: {
+    background: "transparent",
+    border: "none",
+    cursor: "pointer",
+    fontSize: "20px",
+    color: "var(--ui-slate-500)",
+    lineHeight: 1,
+    padding: "4px 8px",
+    borderRadius: "6px",
+  },
+  body: { padding: "20px 22px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "22px" },
+  sectionTitle: {
+    margin: 0,
+    fontSize: "11px",
+    fontWeight: 700,
+    letterSpacing: "0.07em",
+    textTransform: "uppercase",
+    color: "var(--ui-slate-500)",
+  },
+  chipRow: { display: "flex", flexWrap: "wrap", gap: "8px" },
+  chipBase: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "2px",
+    padding: "4px 4px 4px 12px",
+    borderRadius: "999px",
+    fontSize: "13px",
+    fontWeight: 500,
+    border: "1px solid",
+    overflow: "hidden",
+  },
+  chipPrimary: { background: "#dcfce7", borderColor: "#86efac", color: "#14532d" },
+  chipSecondary: { background: "var(--ui-slate-100)", borderColor: "var(--ui-slate-200)", color: "var(--ui-slate-700)" },
+  chipIconBtn: {
+    background: "transparent",
+    border: "none",
+    cursor: "pointer",
+    width: "22px",
+    height: "22px",
+    borderRadius: "50%",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: "13px",
+    color: "inherit",
+    opacity: 0.65,
+    padding: 0,
+  },
+  chipIconBtnDisabled: { opacity: 0.25, cursor: "not-allowed" },
+  primaryBadge: {
+    fontSize: "9px",
+    textTransform: "uppercase",
+    letterSpacing: "0.06em",
+    background: "#15803d",
+    color: "#fff",
+    padding: "1px 6px",
+    borderRadius: "999px",
+    marginRight: "4px",
+  },
+  select: {
+    width: "100%",
+    padding: "8px 10px",
+    fontSize: "13px",
+    border: "1px solid var(--ui-slate-300)",
+    borderRadius: "8px",
+    background: "#fff",
+    color: "var(--ui-slate-800)",
+  },
+  resetLink: {
+    background: "transparent",
+    border: "none",
+    color: "var(--ui-blue-600)",
+    cursor: "pointer",
+    fontSize: "12px",
+    padding: 0,
+    textDecoration: "underline",
+    alignSelf: "flex-start",
+  },
+  radioList: { display: "flex", flexDirection: "column", gap: "6px" },
+  radioRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "10px",
+    padding: "10px 12px",
+    border: "1px solid var(--ui-slate-200)",
+    borderRadius: "10px",
+    cursor: "pointer",
+    transition: "border-color 0.12s, background 0.12s",
+  },
+  radioRowSelected: {
+    borderColor: "var(--ui-blue-500)",
+    background: "var(--ui-blue-50)",
+  },
+  radioInput: { accentColor: "var(--ui-blue-600)", margin: 0, cursor: "pointer" },
+  radioLabel: { fontSize: "13px", color: "var(--ui-slate-800)", lineHeight: 1.4, flex: 1, minWidth: 0 },
+  radioMuted: { fontSize: "12px", color: "var(--ui-slate-500)" },
+  searchRow: {
+    display: "flex",
+    gap: "8px",
+    marginTop: "6px",
+    paddingLeft: "32px",
+  },
+  searchInput: {
+    flex: 1,
+    padding: "8px 12px",
+    fontSize: "13px",
+    border: "1px solid var(--ui-slate-300)",
+    borderRadius: "8px",
+    outline: "none",
+    color: "var(--ui-slate-800)",
+  },
+  errorBanner: {
+    marginTop: "4px",
+    padding: "8px 12px",
+    borderRadius: "8px",
+    background: "#fef2f2",
+    border: "1px solid #fecaca",
+    color: "#b91c1c",
+    fontSize: "13px",
+  },
+  footer: {
+    display: "flex",
+    justifyContent: "flex-end",
+    gap: "8px",
+    padding: "14px 22px",
+    borderTop: "1px solid var(--ui-slate-200)",
+    background: "var(--ui-slate-50)",
+  },
+  btnSecondary: {
+    padding: "8px 14px",
+    fontSize: "13px",
+    fontWeight: 500,
+    border: "1px solid var(--ui-slate-300)",
+    borderRadius: "8px",
+    background: "#fff",
+    color: "var(--ui-slate-800)",
+    cursor: "pointer",
+  },
+  btnPrimary: {
+    padding: "8px 16px",
+    fontSize: "13px",
+    fontWeight: 600,
+    border: "1px solid var(--ui-blue-700)",
+    borderRadius: "8px",
+    background: "var(--ui-blue-600)",
+    color: "#fff",
+    cursor: "pointer",
+  },
+  btnDisabled: { opacity: 0.5, cursor: "not-allowed" },
+};
 
 export function ClassificationEditModal({
   analysis,
@@ -60,6 +241,8 @@ export function ClassificationEditModal({
   };
 
   const available = SUPPORT_INTENTS.filter((v) => !intents.includes(v));
+  const intentLabel = (value: SupportIntent) =>
+    t(`analysis.intent_${value}`, { defaultValue: value.replace(/_/g, " ") });
 
   const handleSubmit = () => {
     const payload: ClassificationEditSubmit = {};
@@ -92,173 +275,254 @@ export function ClassificationEditModal({
   };
 
   const canSubmit = !resetIntents ? intents.length > 0 : true;
+  const candidateRows: { order: OrderFacts; isCurrent: boolean }[] = [
+    ...(analysis.order ? [{ order: analysis.order, isCurrent: true }] : []),
+    ...analysis.orderCandidates
+      .filter((c) => c.id !== analysis.order?.id)
+      .map((order) => ({ order, isCurrent: false })),
+  ];
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.4)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 1000,
-      }}
-      onClick={onClose}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: "#fff",
-          borderRadius: "12px",
-          padding: "24px",
-          width: "min(560px, 92vw)",
-          maxHeight: "90vh",
-          overflowY: "auto",
-        }}
-      >
-        <h2 style={{ marginTop: 0, fontSize: "18px" }}>
-          {t("classification.editTitle", "Modifier la classification")}
-        </h2>
+    <div role="dialog" aria-modal="true" style={styles.backdrop} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={styles.panel}>
+        <div style={styles.header}>
+          <h2 style={styles.title}>
+            {t("classification.editTitle", "Modifier la classification")}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={t("common.cancel", "Fermer")}
+            style={styles.closeBtn}
+          >
+            ×
+          </button>
+        </div>
 
-        {/* Intents editor */}
-        <section style={{ marginTop: "16px" }}>
-          <h3 style={{ fontSize: "13px", textTransform: "uppercase", color: "#6d7175" }}>
-            {t("classification.intents", "Intentions")}
-          </h3>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "8px" }}>
-            {intents.map((value, idx) => (
-              <span
-                key={value}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "4px",
-                  padding: "4px 8px",
-                  background: idx === 0 ? "#e3f1df" : "#f1f1f1",
-                  borderRadius: "999px",
-                  fontSize: "12px",
+        <div style={styles.body}>
+          {/* Intents editor */}
+          <section style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+            <h3 style={styles.sectionTitle}>{t("classification.intents", "Intentions")}</h3>
+
+            <div style={styles.chipRow}>
+              {intents.length === 0 && (
+                <span style={{ fontSize: "13px", color: "var(--ui-slate-500)", fontStyle: "italic" }}>
+                  {t("classification.noIntent", "Aucune intention sélectionnée")}
+                </span>
+              )}
+              {intents.map((value, idx) => {
+                const isPrimary = idx === 0;
+                return (
+                  <span
+                    key={value}
+                    style={{ ...styles.chipBase, ...(isPrimary ? styles.chipPrimary : styles.chipSecondary) }}
+                  >
+                    {isPrimary && (
+                      <span style={styles.primaryBadge}>
+                        {t("classification.primary", "Principal")}
+                      </span>
+                    )}
+                    <span>{intentLabel(value)}</span>
+                    <button
+                      type="button"
+                      onClick={() => moveIntent(idx, -1)}
+                      disabled={idx === 0}
+                      aria-label="Move up"
+                      style={{
+                        ...styles.chipIconBtn,
+                        ...(idx === 0 ? styles.chipIconBtnDisabled : {}),
+                      }}
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => moveIntent(idx, 1)}
+                      disabled={idx === intents.length - 1}
+                      aria-label="Move down"
+                      style={{
+                        ...styles.chipIconBtn,
+                        ...(idx === intents.length - 1 ? styles.chipIconBtnDisabled : {}),
+                      }}
+                    >
+                      ↓
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeIntent(idx)}
+                      aria-label="Remove"
+                      style={styles.chipIconBtn}
+                    >
+                      ×
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+
+            {available.length > 0 && (
+              <select
+                value=""
+                onChange={(e) => {
+                  if (e.target.value) addIntent(e.target.value as SupportIntent);
                 }}
+                style={styles.select}
               >
-                <span>{value}</span>
-                <button type="button" onClick={() => moveIntent(idx, -1)} disabled={idx === 0} aria-label="Move up">↑</button>
-                <button
-                  type="button"
-                  onClick={() => moveIntent(idx, 1)}
-                  disabled={idx === intents.length - 1}
-                  aria-label="Move down"
+                <option value="">+ {t("classification.addIntent", "Ajouter une intention")}</option>
+                {available.map((v) => (
+                  <option key={v} value={v}>{intentLabel(v)}</option>
+                ))}
+              </select>
+            )}
+
+            {analysis.manualOverrides?.intents && (
+              <button
+                type="button"
+                onClick={() => {
+                  setResetIntents(true);
+                  setIntents([]);
+                }}
+                style={styles.resetLink}
+              >
+                {t("classification.resetIntents", "Réinitialiser les intentions")}
+              </button>
+            )}
+          </section>
+
+          {/* Order editor */}
+          <section style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+            <h3 style={styles.sectionTitle}>{t("classification.linkedOrder", "Commande liée")}</h3>
+
+            <div style={styles.radioList}>
+              {candidateRows.map(({ order, isCurrent }) => {
+                const selected = orderMode === "candidate" && selectedCandidateId === order.id;
+                return (
+                  <label
+                    key={order.id}
+                    style={{ ...styles.radioRow, ...(selected ? styles.radioRowSelected : {}) }}
+                  >
+                    <input
+                      type="radio"
+                      name="orderChoice"
+                      checked={selected}
+                      onChange={() => {
+                        setOrderMode("candidate");
+                        setSelectedCandidateId(order.id);
+                      }}
+                      style={styles.radioInput}
+                    />
+                    <span style={styles.radioLabel}>
+                      <strong>{order.name}</strong>
+                      {isCurrent && (
+                        <span
+                          style={{
+                            marginLeft: "8px",
+                            fontSize: "10px",
+                            background: "var(--ui-slate-200)",
+                            color: "var(--ui-slate-700)",
+                            padding: "1px 6px",
+                            borderRadius: "999px",
+                            textTransform: "uppercase",
+                            letterSpacing: "0.04em",
+                          }}
+                        >
+                          {t("classification.currentOrder", "actuelle")}
+                        </span>
+                      )}
+                      <div style={styles.radioMuted}>
+                        {order.customerName ?? "—"} · {new Date(order.createdAt).toLocaleDateString()}
+                      </div>
+                    </span>
+                  </label>
+                );
+              })}
+
+              <label
+                style={{ ...styles.radioRow, ...(orderMode === "search" ? styles.radioRowSelected : {}) }}
+              >
+                <input
+                  type="radio"
+                  name="orderChoice"
+                  checked={orderMode === "search"}
+                  onChange={() => setOrderMode("search")}
+                  style={styles.radioInput}
+                />
+                <span style={styles.radioLabel}>
+                  {t("classification.otherOrderNumber", "Autre numéro de commande")}
+                </span>
+              </label>
+              {orderMode === "search" && (
+                <div style={styles.searchRow}>
+                  <input
+                    type="text"
+                    value={searchInput}
+                    onChange={(e) => setSearchInput(e.target.value)}
+                    placeholder="#1234"
+                    style={styles.searchInput}
+                    autoFocus
+                  />
+                </div>
+              )}
+
+              <label
+                style={{ ...styles.radioRow, ...(orderMode === "detach" ? styles.radioRowSelected : {}) }}
+              >
+                <input
+                  type="radio"
+                  name="orderChoice"
+                  checked={orderMode === "detach"}
+                  onChange={() => setOrderMode("detach")}
+                  style={styles.radioInput}
+                />
+                <span style={styles.radioLabel}>
+                  {t("classification.detach", "Aucune commande (détacher)")}
+                </span>
+              </label>
+
+              {analysis.manualOverrides?.order && (
+                <label
+                  style={{ ...styles.radioRow, ...(orderMode === "reset" ? styles.radioRowSelected : {}) }}
                 >
-                  ↓
-                </button>
-                <button type="button" onClick={() => removeIntent(idx)} aria-label="Remove">×</button>
-              </span>
-            ))}
-          </div>
-          {available.length > 0 && (
-            <select
-              value=""
-              onChange={(e) => {
-                if (e.target.value) addIntent(e.target.value as SupportIntent);
-              }}
-              style={{ marginTop: "8px" }}
-            >
-              <option value="">+ {t("classification.addIntent", "Ajouter une intention")}</option>
-              {available.map((v) => (
-                <option key={v} value={v}>{v}</option>
-              ))}
-            </select>
+                  <input
+                    type="radio"
+                    name="orderChoice"
+                    checked={orderMode === "reset"}
+                    onChange={() => setOrderMode("reset")}
+                    style={styles.radioInput}
+                  />
+                  <span style={styles.radioLabel}>
+                    {t("classification.resetOrder", "Réinitialiser (laisser l'app rechercher)")}
+                  </span>
+                </label>
+              )}
+            </div>
+          </section>
+
+          {errorCode && (
+            <div style={styles.errorBanner}>
+              {t(`classification.errors.${errorCode}`, errorCode)}
+            </div>
           )}
-          {analysis.manualOverrides?.intents && (
-            <button
-              type="button"
-              onClick={() => {
-                setResetIntents(true);
-                setIntents([]);
-              }}
-              style={{ marginTop: "8px", fontSize: "12px" }}
-            >
-              {t("classification.resetIntents", "Réinitialiser les intentions")}
-            </button>
-          )}
-        </section>
+        </div>
 
-        {/* Order editor */}
-        <section style={{ marginTop: "20px" }}>
-          <h3 style={{ fontSize: "13px", textTransform: "uppercase", color: "#6d7175" }}>
-            {t("classification.linkedOrder", "Commande liée")}
-          </h3>
-          <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "8px" }}>
-            {analysis.orderCandidates.map((cand) => (
-              <label key={cand.id} style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-                <input
-                  type="radio"
-                  name="orderChoice"
-                  checked={orderMode === "candidate" && selectedCandidateId === cand.id}
-                  onChange={() => {
-                    setOrderMode("candidate");
-                    setSelectedCandidateId(cand.id);
-                  }}
-                />
-                <span>{cand.name} — {cand.customerName ?? "—"} — {new Date(cand.createdAt).toLocaleDateString()}</span>
-              </label>
-            ))}
-            <label style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-              <input
-                type="radio"
-                name="orderChoice"
-                checked={orderMode === "search"}
-                onChange={() => setOrderMode("search")}
-              />
-              <span>{t("classification.otherOrderNumber", "Autre numéro de commande")}</span>
-            </label>
-            {orderMode === "search" && (
-              <div style={{ display: "flex", gap: "6px", paddingLeft: "20px" }}>
-                <input
-                  type="text"
-                  value={searchInput}
-                  onChange={(e) => setSearchInput(e.target.value)}
-                  placeholder="#1234"
-                  style={{ flex: 1 }}
-                />
-              </div>
-            )}
-            <label style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-              <input
-                type="radio"
-                name="orderChoice"
-                checked={orderMode === "detach"}
-                onChange={() => setOrderMode("detach")}
-              />
-              <span>{t("classification.detach", "Aucune commande (détacher)")}</span>
-            </label>
-            {analysis.manualOverrides?.order && (
-              <label style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-                <input
-                  type="radio"
-                  name="orderChoice"
-                  checked={orderMode === "reset"}
-                  onChange={() => setOrderMode("reset")}
-                />
-                <span>{t("classification.resetOrder", "Réinitialiser (laisser l'app rechercher)")}</span>
-              </label>
-            )}
-          </div>
-        </section>
-
-        {errorCode && (
-          <div style={{ marginTop: "12px", color: "#bb2222", fontSize: "13px" }}>
-            {t(`classification.errors.${errorCode}`, errorCode)}
-          </div>
-        )}
-
-        <div style={{ marginTop: "20px", display: "flex", justifyContent: "flex-end", gap: "8px" }}>
-          <button type="button" onClick={onClose} disabled={isSubmitting}>
+        <div style={styles.footer}>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={isSubmitting}
+            style={{ ...styles.btnSecondary, ...(isSubmitting ? styles.btnDisabled : {}) }}
+          >
             {t("common.cancel", "Annuler")}
           </button>
-          <button type="button" onClick={handleSubmit} disabled={!canSubmit || isSubmitting}>
-            {t("common.save", "Enregistrer")}
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={!canSubmit || isSubmitting}
+            style={{ ...styles.btnPrimary, ...(!canSubmit || isSubmitting ? styles.btnDisabled : {}) }}
+          >
+            {isSubmitting
+              ? t("common.saving", "Enregistrement…")
+              : t("common.save", "Enregistrer")}
           </button>
         </div>
       </div>
