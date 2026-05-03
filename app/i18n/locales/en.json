@@ -283,7 +283,8 @@
     "signalRepliedElsewhere": "Replied in another thread",
     "signalPriorContactBoth": "Prior contact (address + order)",
     "signalPriorContactOrder": "Prior contact (same order)",
-    "signalPriorContactAddress": "Prior contact (same address)"
+    "signalPriorContactAddress": "Prior contact (same address)",
+    "backToList": "Back to inbox"
   },
   "login": {
     "heading": "Log in",

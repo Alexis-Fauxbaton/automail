@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useActionData, useFetcher, useLoaderData, useNavigation, useRevalidator } from "react-router";
+import { Form, useActionData, useFetcher, useLoaderData, useNavigation, useRevalidator, useSearchParams } from "react-router";
 import { useTranslation } from "react-i18next";
+import { useMobile } from "../hooks/useMobile";
 
 import { authenticate } from "../shopify.server";
 import { getAuthUrl as getGmailAuthUrl, getConnection, deleteConnection } from "../lib/gmail/auth";
@@ -407,7 +408,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent === "reanalyze") {
     const emailId = String(formData.get("emailId") ?? "");
-    const analysis = await reanalyzeEmail(emailId, admin, session.shop);
+    const skipDraft = formData.get("skipDraft") === "1";
+    const analysis = await reanalyzeEmail(emailId, admin, session.shop, { skipDraft });
+    // When skipDraft, hide the LLM-generated draft from the client so the
+    // user's existing draftReply is preserved in the UI.
+    if (skipDraft && analysis) {
+      analysis.draftReply = undefined;
+    }
     return { reanalyzed: { emailId, analysis }, report: null, disconnected: false, refined: null };
   }
 
@@ -1103,7 +1110,7 @@ function FiltersBar({
         flexWrap: "wrap",
       }}
     >
-      <label style={{ ...labelStyle, flex: "1 1 220px", minWidth: 180 }}>
+      <label style={{ ...labelStyle, flex: "1 1 180px", minWidth: 0 }}>
         {t("inbox.searchLabel")}
         <input
           type="search"
@@ -1618,7 +1625,7 @@ function ThreadCard({
       style={{ cursor: "pointer" }}
     >
       {/* Row 1 : badges */}
-      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px", marginBottom: "10px" }}>
+      <div className="ui-thread-row-tags">
         {cls === "uncertain" && <span className="ui-pill ui-pill--warning ui-pill--clickable" onClick={(e) => { e.stopPropagation(); onFilterClick({ nature: "uncertain" }); }}>{t("inbox.pillUncertain")}</span>}
         {/* Show "Non-support" badge for any thread in the "other" bucket:
             explicitly classified non_support (tier 1 or tier 2) AND outgoing-only
@@ -1702,12 +1709,12 @@ function ThreadCard({
 
       {/* Row 2 : sender + time */}
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "8px", marginBottom: "4px" }}>
-        <div style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          <span style={{ fontWeight: 600, fontSize: "0.9375rem", color: "var(--ui-slate-900)" }}>
+        <div className="ui-sender-stack" style={{ minWidth: 0 }}>
+          <span className="ui-sender-stack__name" style={{ fontWeight: 600, fontSize: "0.9375rem", color: "var(--ui-slate-900)" }}>
             {latest.fromName || latest.fromAddress}
           </span>
           {latest.fromName && (
-            <span style={{ fontWeight: 400, fontSize: "0.8125rem", color: "var(--ui-slate-500)", marginLeft: "6px" }}>
+            <span className="ui-sender-stack__addr" style={{ fontWeight: 400, fontSize: "0.8125rem", color: "var(--ui-slate-500)" }}>
               {latest.fromAddress}
             </span>
           )}
@@ -1742,6 +1749,8 @@ function ThreadCard({
           WebkitLineClamp: 2,
           WebkitBoxOrient: "vertical",
           marginBottom: "10px",
+          overflowWrap: "anywhere",
+          wordBreak: "break-word",
         }}>
           {reason || latest.snippet.slice(0, 140)}
           {!reason && latest.snippet.length > 140 ? "…" : ""}
@@ -1765,6 +1774,9 @@ function ThreadCard({
           <reanalyzeFetcher.Form method="post">
             <input type="hidden" name="_action" value="reanalyze" />
             <input type="hidden" name="emailId" value={latest.id} />
+            {latest.processingStatus === "error" && (
+              <input type="hidden" name="skipDraft" value="1" />
+            )}
             <s-button type="submit" variant="primary" {...(isGenerating ? { loading: true } : {})}>
               {latest.processingStatus === "error" ? t("inbox.retryAnalysis") : t("inbox.generateDraft")}
             </s-button>
@@ -1787,6 +1799,7 @@ function DraftBlock({ email, threadSenderEmail }: {
   threadSenderEmail: string;
 }) {
   const { t } = useTranslation();
+  const isMobile = useMobile();
   const allVersions = [...email.draftHistory, email.draftReply!];
   const [versionIndex, setVersionIndex] = useState(allVersions.length - 1);
   const currentVersion = allVersions[versionIndex] ?? email.draftReply!;
@@ -2019,7 +2032,7 @@ function DraftBlock({ email, threadSenderEmail }: {
             <input type="hidden" name="_action" value="refine" />
             <input type="hidden" name="emailId" value={email.id} />
             <input type="hidden" name="currentDraft" value={bodyText} />
-            <s-stack direction="inline" gap="small-300" blockAlign="end">
+            <s-stack direction={isMobile ? "block" : "inline"} gap="small-300" blockAlign="end">
               <div style={{ flex: 1 }}>
                 <s-text-field label={t("inbox.adjustDraft")} name="instructions"
                   placeholder="e.g. Be more formal, mention refund policy, shorten…" />
@@ -2221,12 +2234,12 @@ function ThreadDetailPanel({
 
         {/* Row 2 : sender + collapse button */}
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "12px", marginBottom: "4px" }}>
-          <div style={{ minWidth: 0, overflow: "hidden" }}>
-            <span style={{ fontWeight: 700, fontSize: "0.9375rem", color: "var(--ui-slate-900)" }}>
+          <div className="ui-sender-stack" style={{ minWidth: 0 }}>
+            <span className="ui-sender-stack__name" style={{ fontWeight: 700, fontSize: "0.9375rem", color: "var(--ui-slate-900)" }}>
               {latest.fromName || latest.fromAddress}
             </span>
             {latest.fromName && (
-              <span style={{ fontWeight: 400, fontSize: "0.8125rem", color: "var(--ui-slate-500)", marginLeft: "8px" }}>
+              <span className="ui-sender-stack__addr" style={{ fontWeight: 400, fontSize: "0.8125rem", color: "var(--ui-slate-500)" }}>
                 {latest.fromAddress}
               </span>
             )}
@@ -2255,7 +2268,7 @@ function ThreadDetailPanel({
         </div>
 
         {/* Row 4 : action buttons */}
-        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+        <div className="ui-thread-actions-row">
           {latest.canonicalThreadId && bucket !== "all" && (
             <MoveThreadControl
               canonicalThreadId={latest.canonicalThreadId}
@@ -2269,6 +2282,9 @@ function ThreadDetailPanel({
             <reanalyzeFetcher.Form method="post">
               <input type="hidden" name="_action" value="reanalyze" />
               <input type="hidden" name="emailId" value={latest.id} />
+              {!latest.draftReply && latest.processingStatus === "error" && (
+                <input type="hidden" name="skipDraft" value="1" />
+              )}
               <s-button type="submit" variant="primary" {...(isGenerating ? { loading: true } : {})}>
                 {latest.draftReply ? t("inbox.regenerateDraft") : latest.processingStatus === "error" ? t("inbox.retryAnalysis") : t("inbox.generateDraft")}
               </s-button>
@@ -2290,11 +2306,7 @@ function ThreadDetailPanel({
       </div>
 
       {/* ── 2-column body : order context | draft ── */}
-      <div style={{
-        display: "grid",
-        gridTemplateColumns: "minmax(160px, 220px) minmax(0, 1fr)",
-        borderBottom: "1px solid var(--ui-slate-100)",
-      }}>
+      <div className="ui-analysis-grid">
         {/* Left : order context */}
         <div style={{ padding: "16px 18px", borderRight: "1px solid var(--ui-slate-100)" }}>
           <div style={sectionLabel}>{t("inbox.sectionOrderContext")}</div>
@@ -2446,7 +2458,49 @@ export default function InboxPage() {
     nature: "all",
     intent: "",
   });
-  const [expandedThreadId, setExpandedThreadId] = useState<string | null>(null);
+  const isMobile = useMobile();
+
+  // The expanded thread id lives in the URL (?thread=<id>) so that the
+  // device/browser back button naturally closes the detail view on mobile
+  // and bookmarks/refreshes preserve the open thread on desktop.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const expandedThreadId = searchParams.get("thread");
+
+  const setExpandedThreadId = (threadId: string | null) => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (threadId === null) next.delete("thread");
+        else next.set("thread", threadId);
+        return next;
+      },
+      { preventScrollReset: true },
+    );
+  };
+
+  // Save list scroll on mobile when opening a thread, restore when closing.
+  const savedScrollRef = useRef(0);
+  const prevThreadIdRef = useRef<string | null>(expandedThreadId);
+  useEffect(() => {
+    if (!isMobile) {
+      prevThreadIdRef.current = expandedThreadId;
+      return;
+    }
+    const prev = prevThreadIdRef.current;
+    if (prev === null && expandedThreadId !== null) {
+      // Just opened on mobile: scroll to top so user sees the back button.
+      savedScrollRef.current = window.scrollY || document.documentElement.scrollTop || 0;
+      requestAnimationFrame(() => window.scrollTo(0, 0));
+    } else if (prev !== null && expandedThreadId === null && savedScrollRef.current > 0) {
+      // Just closed on mobile: restore the list scroll position.
+      const target = savedScrollRef.current;
+      savedScrollRef.current = 0;
+      requestAnimationFrame(() => window.scrollTo(0, target));
+    }
+    prevThreadIdRef.current = expandedThreadId;
+  }, [isMobile, expandedThreadId]);
+
+  const closeMobileThread = () => setExpandedThreadId(null);
 
   const emails: SerializedEmail[] =
     (actionData as { emails?: SerializedEmail[] })?.emails ?? loaderData.emails;
@@ -2509,6 +2563,43 @@ export default function InboxPage() {
   const selectedThreadMeta = expandedThreadId
     ? threadMeta.find((m) => m.thread.threadId === expandedThreadId) ?? null
     : null;
+
+  // On mobile: full-screen detail view replaces the list
+  if (isMobile && selectedThreadMeta) {
+    return (
+      <div className="ui-inbox-root">
+        <div style={{ marginBottom: "12px" }}>
+          <button
+            type="button"
+            onClick={closeMobileThread}
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              fontSize: "14px",
+              fontWeight: 500,
+              color: "var(--ui-slate-700)",
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              padding: "10px 4px",
+              minHeight: "44px",
+            }}
+          >
+            ← {t("inbox.backToList")}
+          </button>
+        </div>
+        <ThreadDetailPanel
+          thread={selectedThreadMeta.thread}
+          threadState={selectedThreadMeta.state}
+          connectedEmail={loaderData.connectedEmail}
+          bucket={selectedThreadMeta.bucket}
+          previousContact={selectedThreadMeta.previousContact}
+          onClose={closeMobileThread}
+        />
+      </div>
+    );
+  }
 
   const matchesFilters = (m: (typeof threadMeta)[number]): boolean => {
     if (filters.intent !== "") {
@@ -2712,7 +2803,7 @@ export default function InboxPage() {
 
                 {/* Right: thread detail panel (sticky) */}
                 {selectedThreadMeta && (
-                  <div style={{ position: "sticky", top: "16px", maxHeight: "calc(100vh - 120px)", overflowY: "auto", borderRadius: "var(--ui-radius-2xl)" }}>
+                  <div className="ui-detail-panel">
                     <ThreadDetailPanel
                       thread={selectedThreadMeta.thread}
                       threadState={selectedThreadMeta.state}

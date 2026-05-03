@@ -1249,6 +1249,7 @@ export async function reanalyzeEmail(
   emailId: string,
   admin: AdminGraphqlClient,
   shop: string,
+  options: { skipDraft?: boolean } = {},
 ) {
   const record = await prisma.incomingEmail.findUnique({ where: { id: emailId } });
   if (!record || record.shop !== shop) {
@@ -1327,7 +1328,7 @@ export async function reanalyzeEmail(
       lastAnalyzedAt: new Date(),
     },
   });
-  if (analysis.draftReply) {
+  if (analysis.draftReply && !options.skipDraft) {
     const { upsertReplyDraftBody } = await import("../support/reply-draft");
     await upsertReplyDraftBody(emailId, shop, analysis.draftReply);
   }
