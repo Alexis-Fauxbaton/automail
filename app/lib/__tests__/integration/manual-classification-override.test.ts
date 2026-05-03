@@ -183,11 +183,11 @@ describe("manual classification override survives auto-refresh", () => {
     const { email } = await seedThread(makeAnalysis("where_is_my_order"));
 
     // ── Step 1: apply manual override ────────────────────────────────────
-    const afterEdit = await persistClassificationEdit({
+    const afterEdit = (await persistClassificationEdit({
       shop: TEST_SHOP,
       threadId: email.canonicalThreadId!,
       edit: { intents: ["refund_request"] },
-    });
+    })).analysis;
 
     expect(afterEdit.intent).toBe("refund_request");
     expect(afterEdit.intents).toEqual(["refund_request"]);
@@ -219,11 +219,11 @@ describe("manual classification override survives auto-refresh", () => {
     expect(dbAfterRefresh.manualOverrides?.intents?.editedAt).toBeDefined();
 
     // ── Step 3: user resets the override ─────────────────────────────────
-    const afterReset = await persistClassificationEdit({
+    const afterReset = (await persistClassificationEdit({
       shop: TEST_SHOP,
       threadId: email.canonicalThreadId!,
       edit: { resetIntents: true },
-    });
+    })).analysis;
 
     expect(afterReset.intent).toBe("unknown");
     expect(afterReset.intents).toEqual([]);

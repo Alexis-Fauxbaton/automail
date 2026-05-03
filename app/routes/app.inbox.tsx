@@ -678,11 +678,36 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const { persistClassificationEdit } = await import(
         "../lib/support/manual-classification"
       );
-      const analysis = await persistClassificationEdit({
+      const persisted = await persistClassificationEdit({
         shop: session.shop,
         threadId,
         edit,
       });
+      let analysis = persisted.analysis;
+
+      // When the linked order has changed (new order or detach), the previous
+      // tracking facts no longer apply. Refresh tracking only — keep intent
+      // and order as the user just set them.
+      const orderTouched =
+        orderChangeType === "candidate" ||
+        orderChangeType === "search" ||
+        orderChangeType === "detach";
+      if (orderTouched) {
+        try {
+          const { refreshThreadAnalysis } = await import(
+            "../lib/support/refresh-thread-analysis"
+          );
+          analysis = await refreshThreadAnalysis(
+            persisted.emailId,
+            admin,
+            session.shop,
+            { reclassifyIntent: false, reSearchOrder: false, refreshTracking: true },
+          ) as typeof analysis;
+        } catch (err) {
+          console.error("[updateClassification] tracking refresh failed:", err);
+          // Persisted edit still stands; just return the un-refreshed analysis.
+        }
+      }
 
       return {
         classificationUpdated: analysis,
@@ -2294,6 +2319,7 @@ function ThreadDetailPanel({
 
   const [editingClassification, setEditingClassification] = useState(false);
   const classificationFetcher = useFetcher<typeof action>();
+  const classificationRevalidator = useRevalidator();
   const isSubmittingClassification = classificationFetcher.state !== "idle";
   const classificationErrorCode =
     classificationFetcher.data && "classificationError" in classificationFetcher.data
@@ -2326,8 +2352,11 @@ function ThreadDetailPanel({
       classificationFetcher.data.classificationUpdated
     ) {
       setEditingClassification(false);
+      // Force the loader to re-run so the open thread's emails / analysis /
+      // tracking shown in the detail panel reflect the just-saved edit.
+      classificationRevalidator.revalidate();
     }
-  }, [classificationFetcher.state, classificationFetcher.data]);
+  }, [classificationFetcher.state, classificationFetcher.data, classificationRevalidator]);
 
   const analysisEmail = [...emails].reverse().find((e) => e.analysisResult) ?? null;
   const draftEmail = latest.draftReply ? latest : (analysisEmail?.draftReply ? analysisEmail : null);

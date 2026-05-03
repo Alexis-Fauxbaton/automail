@@ -136,14 +136,14 @@ export interface PersistClassificationEditInput {
 
 /**
  * Load the anchor email for the thread, apply the edit to its analysis JSON,
- * and persist the result. Returns the updated analysis.
+ * and persist the result. Returns the anchor email id and the updated analysis.
  *
  * "Anchor" = the latest analyzed incoming email of the thread. This is the
  * email that holds the canonical analysisResult for the inbox UI.
  */
 export async function persistClassificationEdit(
   input: PersistClassificationEditInput,
-): Promise<SupportAnalysis> {
+): Promise<{ emailId: string; analysis: SupportAnalysis }> {
   const { shop, threadId, edit } = input;
 
   const anchor = await prisma.incomingEmail.findFirst({
@@ -174,5 +174,5 @@ export async function persistClassificationEdit(
     data,
   });
 
-  return next;
+  return { emailId: anchor.id, analysis: next };
 }
