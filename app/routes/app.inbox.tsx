@@ -1104,7 +1104,7 @@ function FiltersBar({
         flexWrap: "wrap",
       }}
     >
-      <label style={{ ...labelStyle, flex: "1 1 220px", minWidth: 180 }}>
+      <label style={{ ...labelStyle, flex: "1 1 180px", minWidth: 0 }}>
         {t("inbox.searchLabel")}
         <input
           type="search"
@@ -1619,7 +1619,7 @@ function ThreadCard({
       style={{ cursor: "pointer" }}
     >
       {/* Row 1 : badges */}
-      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px", marginBottom: "10px" }}>
+      <div className="ui-thread-row-tags">
         {cls === "uncertain" && <span className="ui-pill ui-pill--warning ui-pill--clickable" onClick={(e) => { e.stopPropagation(); onFilterClick({ nature: "uncertain" }); }}>{t("inbox.pillUncertain")}</span>}
         {/* Show "Non-support" badge for any thread in the "other" bucket:
             explicitly classified non_support (tier 1 or tier 2) AND outgoing-only
@@ -2291,11 +2291,7 @@ function ThreadDetailPanel({
       </div>
 
       {/* ── 2-column body : order context | draft ── */}
-      <div style={{
-        display: "grid",
-        gridTemplateColumns: "minmax(160px, 220px) minmax(0, 1fr)",
-        borderBottom: "1px solid var(--ui-slate-100)",
-      }}>
+      <div className="ui-analysis-grid">
         {/* Left : order context */}
         <div style={{ padding: "16px 18px", borderRight: "1px solid var(--ui-slate-100)" }}>
           <div style={sectionLabel}>{t("inbox.sectionOrderContext")}</div>
@@ -2751,7 +2747,7 @@ export default function InboxPage() {
 
                 {/* Right: thread detail panel (sticky) */}
                 {selectedThreadMeta && (
-                  <div style={{ position: "sticky", top: "16px", maxHeight: "calc(100vh - 120px)", overflowY: "auto", borderRadius: "var(--ui-radius-2xl)" }}>
+                  <div className="ui-detail-panel">
                     <ThreadDetailPanel
                       thread={selectedThreadMeta.thread}
                       threadState={selectedThreadMeta.state}
