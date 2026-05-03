@@ -2229,7 +2229,7 @@ function ThreadDetailPanel({
             <span style={{ fontWeight: 700, fontSize: "0.9375rem", color: "var(--ui-slate-900)" }}>
               {latest.fromName || latest.fromAddress}
             </span>
-            {latest.fromName && (
+            {latest.fromName && latest.fromName !== latest.fromAddress && (
               <span style={{ fontWeight: 400, fontSize: "0.8125rem", color: "var(--ui-slate-500)", marginLeft: "8px" }}>
                 {latest.fromAddress}
               </span>
