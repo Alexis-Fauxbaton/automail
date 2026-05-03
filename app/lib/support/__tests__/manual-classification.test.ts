@@ -109,3 +109,119 @@ describe("searchOrderByExactNumber", () => {
     await expect(searchOrderByExactNumber(admin, "")).rejects.toThrow(/empty/i);
   });
 });
+
+import { applyClassificationEditToAnalysis } from "../manual-classification";
+import type { SupportAnalysis } from "../types";
+
+const baseAnalysis = (overrides: Partial<SupportAnalysis> = {}): SupportAnalysis => ({
+  intent: "where_is_my_order",
+  intents: ["where_is_my_order"],
+  identifiers: {},
+  order: null,
+  orderCandidates: [],
+  trackings: [],
+  confidence: "low",
+  warnings: [],
+  draftReply: "",
+  conversation: {
+    messageCount: 1,
+    incomingCount: 1,
+    outgoingCount: 0,
+    lastMessageDirection: "incoming",
+    noReplyNeeded: false,
+  },
+  ...overrides,
+});
+
+describe("applyClassificationEditToAnalysis", () => {
+  test("setting intents updates intent + intents and adds override marker", () => {
+    const a = baseAnalysis();
+    const out = applyClassificationEditToAnalysis(a, {
+      intents: ["refund_request", "damaged_product"],
+      now: new Date("2026-05-03T10:00:00Z"),
+    });
+    expect(out.intent).toBe("refund_request");
+    expect(out.intents).toEqual(["refund_request", "damaged_product"]);
+    expect(out.manualOverrides?.intents?.editedAt).toBe("2026-05-03T10:00:00.000Z");
+  });
+
+  test("resetting intents clears value AND override", () => {
+    const a = baseAnalysis({
+      intent: "refund_request",
+      intents: ["refund_request"],
+      manualOverrides: { intents: { editedAt: "2026-05-02T00:00:00.000Z" } },
+    });
+    const out = applyClassificationEditToAnalysis(a, { resetIntents: true, now: new Date() });
+    expect(out.intent).toBe("unknown");
+    expect(out.intents).toEqual([]);
+    expect(out.manualOverrides?.intents).toBeUndefined();
+  });
+
+  test("setting order to a new value adds override marker", () => {
+    const a = baseAnalysis();
+    const newOrder: SupportAnalysis["order"] = {
+      id: "gid://Order/1",
+      name: "#1001",
+      createdAt: "2026-04-01T00:00:00Z",
+      customerName: "Jane",
+      customerEmail: "jane@example.com",
+      lineItems: [],
+      fulfillments: [],
+    };
+    const out = applyClassificationEditToAnalysis(a, {
+      order: newOrder,
+      now: new Date("2026-05-03T10:00:00Z"),
+    });
+    expect(out.order).toEqual(newOrder);
+    expect(out.manualOverrides?.order?.editedAt).toBe("2026-05-03T10:00:00.000Z");
+  });
+
+  test("detaching order sets it to null and adds override marker", () => {
+    const a = baseAnalysis({
+      order: {
+        id: "gid://Order/1",
+        name: "#1001",
+        createdAt: "2026-04-01T00:00:00Z",
+        customerName: "Jane",
+        customerEmail: null,
+        lineItems: [],
+        fulfillments: [],
+      },
+    });
+    const out = applyClassificationEditToAnalysis(a, { detachOrder: true, now: new Date() });
+    expect(out.order).toBeNull();
+    expect(out.manualOverrides?.order?.editedAt).toBeDefined();
+  });
+
+  test("resetting order clears value AND override", () => {
+    const a = baseAnalysis({
+      manualOverrides: { order: { editedAt: "2026-05-02T00:00:00.000Z" } },
+    });
+    const out = applyClassificationEditToAnalysis(a, { resetOrder: true, now: new Date() });
+    expect(out.order).toBeNull();
+    expect(out.manualOverrides?.order).toBeUndefined();
+  });
+
+  test("preserves unrelated fields (tracking, draft, candidates)", () => {
+    const a = baseAnalysis({
+      draftReply: "Hello",
+      orderCandidates: [
+        {
+          id: "gid://Order/9",
+          name: "#9",
+          createdAt: "2026-04-01T00:00:00Z",
+          customerName: null,
+          customerEmail: null,
+          lineItems: [],
+          fulfillments: [],
+        },
+      ],
+    });
+    const out = applyClassificationEditToAnalysis(a, {
+      intents: ["damaged_product"],
+      now: new Date(),
+    });
+    expect(out.draftReply).toBe("Hello");
+    expect(out.orderCandidates).toHaveLength(1);
+  });
+});
