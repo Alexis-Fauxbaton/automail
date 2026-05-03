@@ -1707,7 +1707,7 @@ function ThreadCard({
           <span style={{ fontWeight: 600, fontSize: "0.9375rem", color: "var(--ui-slate-900)" }}>
             {latest.fromName || latest.fromAddress}
           </span>
-          {latest.fromName && (
+          {latest.fromName && latest.fromName !== latest.fromAddress && (
             <span style={{ fontWeight: 400, fontSize: "0.8125rem", color: "var(--ui-slate-500)", marginLeft: "6px" }}>
               {latest.fromAddress}
             </span>
@@ -1743,6 +1743,8 @@ function ThreadCard({
           WebkitLineClamp: 2,
           WebkitBoxOrient: "vertical",
           marginBottom: "10px",
+          overflowWrap: "anywhere",
+          wordBreak: "break-word",
         }}>
           {reason || latest.snippet.slice(0, 140)}
           {!reason && latest.snippet.length > 140 ? "…" : ""}

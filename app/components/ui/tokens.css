@@ -523,7 +523,12 @@ s-page::part(header) {
   max-width: 100%;
 }
 
-/* Reduced padding on mobile */
+/* Reduced padding on mobile + clip any stray horizontal overflow */
+@media (max-width: 768px) {
+  .ui-inbox-root {
+    overflow-x: hidden;
+  }
+}
 @media (max-width: 640px) {
   .ui-inbox-root {
     padding: 0 12px 24px;
