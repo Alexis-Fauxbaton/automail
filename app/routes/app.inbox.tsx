@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useFetcher, useLoaderData, useNavigation, useRevalidator } from "react-router";
 import { useTranslation } from "react-i18next";
-import { useMobile } from "~/hooks/useMobile";
+import { useMobile } from "../hooks/useMobile";
 
 import { authenticate } from "../shopify.server";
 import { getAuthUrl as getGmailAuthUrl, getConnection, deleteConnection } from "../lib/gmail/auth";
