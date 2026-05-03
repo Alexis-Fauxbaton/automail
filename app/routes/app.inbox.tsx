@@ -338,14 +338,40 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "resync") {
+    // Capture threads where the agent has engaged BEFORE deleting emails
+    // (ReplyDraft cascades on IncomingEmail deletion, so we'd lose this
+    // signal otherwise). These are preserved as confirmed_support across
+    // the resync so user work isn't wiped.
+    const engagedThreads = await prisma.incomingEmail.findMany({
+      where: { shop: session.shop, replyDraft: { isNot: null } },
+      select: { canonicalThreadId: true },
+    });
+    const engagedThreadIds = Array.from(
+      new Set(
+        engagedThreads
+          .map((e) => e.canonicalThreadId)
+          .filter((id): id is string => id !== null),
+      ),
+    );
+
     await prisma.incomingEmail.deleteMany({ where: { shop: session.shop } });
-    // Reset needs_review threads to unknown so they are re-classified from
-    // scratch on the next sync. This fixes threads that were incorrectly
-    // upgraded from non_support to needs_review due to LLM inconsistency
-    // during a previous resync. non_support and confirmed_support threads
-    // keep their classification (protected by the mergeNature sticky rule).
+    // Reset all non-"non_support" natures to unknown so the next Tier 2 pass
+    // can re-classify from scratch. Without this, threads stuck in "to handle"
+    // due to a past LLM false-positive can never be downgraded:
+    //   - confirmed_support is sticky in mergeNature (never downgraded)
+    //   - probable_support outranks non_support (downgrade blocked by rank)
+    //   - needs_review is protected against non_support specifically
+    // A full resync is the user's escape hatch — it must give Tier 2 a clean
+    // slate. Threads where the agent manually resolved or drafted a reply
+    // are preserved (real engagement signal). non_support is kept to avoid
+    // burning LLM credits re-classifying already-known noise.
     await prisma.thread.updateMany({
-      where: { shop: session.shop, supportNature: "needs_review" },
+      where: {
+        shop: session.shop,
+        supportNature: { in: ["needs_review", "probable_support", "confirmed_support", "mixed"] },
+        previousOperationalState: null,
+        id: { notIn: engagedThreadIds },
+      },
       data: { supportNature: "unknown" },
     });
     await prisma.mailConnection.update({
