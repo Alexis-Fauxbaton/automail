@@ -174,5 +174,21 @@ export async function persistClassificationEdit(
     data,
   });
 
+  // Keep Thread.resolvedOrderNumber aligned with the manual edit so the
+  // inbox-list and detail-header badges reflect the new state. Only touch
+  // it when the order field was actually edited; intent-only edits leave
+  // the resolved order untouched.
+  const orderTouched =
+    edit.resetOrder === true || edit.detachOrder === true || edit.order !== undefined;
+  if (orderTouched) {
+    const newOrderNumber = next.order?.name?.replace(/^#/, "") ?? null;
+    await prisma.thread.update({
+      where: { id: threadId },
+      data: { resolvedOrderNumber: newOrderNumber },
+    }).catch((err) => {
+      console.error("[manual-classification] thread.update failed:", err);
+    });
+  }
+
   return { emailId: anchor.id, analysis: next };
 }
