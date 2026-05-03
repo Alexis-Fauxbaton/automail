@@ -12,7 +12,7 @@ import { reanalyzeEmail, redraftEmail, processNewEmails, getMailClient, persistE
 import { refineDraft } from "../lib/gmail/refine-draft";
 import { runDiagnosis, type DiagnosisReport } from "../lib/gmail/diagnose";
 import { enqueueJob } from "../lib/mail/job-queue";
-import { AnalysisDisplay } from "../components/SupportAnalysisDisplay";
+import { AnalysisDisplay, PencilButton } from "../components/SupportAnalysisDisplay";
 import { ClassificationEditModal, type ClassificationEditSubmit } from "../components/ClassificationEditModal";
 import type { SupportAnalysisExtended } from "../lib/support/orchestrator";
 import type { MailProvider } from "../lib/mail/types";
@@ -2379,7 +2379,7 @@ function ThreadDetailPanel({
           ))}
           {hasSignals && (
             <span
-              style={{ position: "relative", display: "inline-flex", alignItems: "center", marginLeft: "auto" }}
+              style={{ position: "relative", display: "inline-flex", alignItems: "center" }}
               onMouseEnter={() => setShowSignals(true)}
               onMouseLeave={() => setShowSignals(false)}
             >
@@ -2401,6 +2401,15 @@ function ThreadDetailPanel({
                 </div>
               )}
             </span>
+          )}
+          {analysisEmail?.analysisResult && (
+            <PencilButton
+              onClick={() => setEditingClassification(true)}
+              hasOverrides={
+                analysisEmail.analysisResult.manualOverrides?.intents !== undefined ||
+                analysisEmail.analysisResult.manualOverrides?.order !== undefined
+              }
+            />
           )}
         </div>
 
@@ -2532,7 +2541,6 @@ function ThreadDetailPanel({
               <AnalysisDisplay
                 analysis={analysisEmail.analysisResult}
                 lastAnalyzedAt={analysisEmail.lastAnalyzedAt}
-                onEdit={() => setEditingClassification(true)}
               />
             </div>
           )}

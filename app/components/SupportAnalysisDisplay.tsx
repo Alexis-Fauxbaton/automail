@@ -5,7 +5,7 @@ import type { FulfillmentTrackingFacts, TrackingFacts } from "../lib/support/typ
 
 // ─── Helper Components ───────────────────────────────────────────────────────────
 
-function PencilButton({ onClick, hasOverrides }: { onClick: () => void; hasOverrides: boolean }) {
+export function PencilButton({ onClick, hasOverrides }: { onClick: () => void; hasOverrides: boolean }) {
   return (
     <button
       type="button"
@@ -219,13 +219,10 @@ export function WarningsBlock({ warnings }: { warnings: SupportAnalysisExtended[
 export function AnalysisDisplay({
   analysis,
   lastAnalyzedAt,
-  onEdit,
 }: {
   analysis: SupportAnalysisExtended;
   /** ISO timestamp of the last full analysis (Shopify + tracking). */
   lastAnalyzedAt?: string | null;
-  /** Optional callback when user clicks the pencil button to edit intent/order classification. */
-  onEdit?: () => void;
 }) {
   const { t } = useTranslation();
 
@@ -262,10 +259,6 @@ export function AnalysisDisplay({
   const totalMessages = conversation.incomingCount + conversation.outgoingCount;
   const intents = (analysis.intents && analysis.intents.length > 0) ? analysis.intents : [analysis.intent];
 
-  const hasOverrides =
-    (analysis.manualOverrides?.intents !== undefined) ||
-    (analysis.manualOverrides?.order !== undefined);
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
 
@@ -274,7 +267,6 @@ export function AnalysisDisplay({
           <s-badge key={intent}>{t(`analysis.intent_${intent}`, { defaultValue: intent })}</s-badge>
         ))}
         {conversation.noReplyNeeded && <s-badge tone="success">{t("analysis.noReplyNeeded")}</s-badge>}
-        {onEdit && <PencilButton onClick={onEdit} hasOverrides={hasOverrides} />}
         <span style={{ color: "#6d7175", fontSize: "12px" }}>
           {directionLabel} · {totalMessages} {totalMessages > 1 ? t("analysis.msgPlural") : t("analysis.msgSingular")}
         </span>
