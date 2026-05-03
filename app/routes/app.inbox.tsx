@@ -2257,7 +2257,7 @@ function ThreadDetailPanel({
         </div>
 
         {/* Row 4 : action buttons */}
-        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+        <div className="ui-thread-actions-row">
           {latest.canonicalThreadId && bucket !== "all" && (
             <MoveThreadControl
               canonicalThreadId={latest.canonicalThreadId}
@@ -2458,6 +2458,28 @@ export default function InboxPage() {
     requestAnimationFrame(() => window.scrollTo(0, target));
   }, [isMobile, expandedThreadId]);
 
+  // Make the device/browser back button close the thread detail on mobile
+  // instead of leaving the app. We push a history entry on open and listen
+  // for popstate to clear state when the user navigates back.
+  const mobileHistoryPushedRef = useRef(false);
+  useEffect(() => {
+    if (!isMobile) return;
+    const handler = () => {
+      setExpandedThreadId(null);
+      mobileHistoryPushedRef.current = false;
+    };
+    window.addEventListener("popstate", handler);
+    return () => window.removeEventListener("popstate", handler);
+  }, [isMobile]);
+
+  const closeMobileThread = () => {
+    if (mobileHistoryPushedRef.current) {
+      window.history.back();
+    } else {
+      setExpandedThreadId(null);
+    }
+  };
+
   const emails: SerializedEmail[] =
     (actionData as { emails?: SerializedEmail[] })?.emails ?? loaderData.emails;
 
@@ -2527,7 +2549,7 @@ export default function InboxPage() {
         <div style={{ marginBottom: "12px" }}>
           <button
             type="button"
-            onClick={() => setExpandedThreadId(null)}
+            onClick={closeMobileThread}
             style={{
               background: "none",
               border: "none",
@@ -2551,7 +2573,7 @@ export default function InboxPage() {
           connectedEmail={loaderData.connectedEmail}
           bucket={selectedThreadMeta.bucket}
           previousContact={selectedThreadMeta.previousContact}
-          onClose={() => setExpandedThreadId(null)}
+          onClose={closeMobileThread}
         />
       </div>
     );
@@ -2743,10 +2765,18 @@ export default function InboxPage() {
                       previousContact={previousContact}
                       onSelect={() => {
                         const next = expandedThreadId === thread.threadId ? null : thread.threadId;
-                        if (isMobile && next !== null) {
+                        if (isMobile && next !== null && expandedThreadId === null) {
+                          // Opening on mobile: save scroll, push history so device back returns here
                           savedScrollRef.current = window.scrollY || document.documentElement.scrollTop || 0;
+                          window.history.pushState({ mobileThreadOpen: true }, "");
+                          mobileHistoryPushedRef.current = true;
+                          setExpandedThreadId(next);
+                        } else if (isMobile && next === null) {
+                          // Toggling closed via re-clicking same thread
+                          closeMobileThread();
+                        } else {
+                          setExpandedThreadId(next);
                         }
-                        setExpandedThreadId(next);
                       }}
                       onOrderClick={(orderNumber) =>
                         setFilters((prev) => ({ ...prev, search: orderNumber }))
