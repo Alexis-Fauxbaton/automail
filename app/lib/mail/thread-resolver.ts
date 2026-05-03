@@ -225,6 +225,18 @@ export async function getTrueLatestMessage(canonicalThreadId: string) {
   return prisma.incomingEmail.findFirst({
     where: { canonicalThreadId },
     orderBy: [{ receivedAt: "desc" }, { createdAt: "desc" }],
+    select: {
+      id: true,
+      externalMessageId: true,
+      canonicalThreadId: true,
+      shop: true,
+      fromAddress: true,
+      subject: true,
+      bodyText: true,
+      receivedAt: true,
+      processingStatus: true,
+      tier1Result: true,
+    },
   });
 }
 

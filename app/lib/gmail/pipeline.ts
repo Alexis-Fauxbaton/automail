@@ -536,9 +536,13 @@ export async function backfillResolvedIntents(
   // Step 1: collect thread IDs for both closed states.
   // The inbox "Résolu" bucket displays operationalState "resolved" AND
   // "no_reply_needed" together, so both must be backfilled.
+  // Exclude non_support threads: they land in no_reply_needed automatically
+  // (deriveOperationalState returns no_reply_needed when replyNeeded=false),
+  // but running the LLM on them wastes tokens and bypasses Tier 2 by setting
+  // processingStatus="analyzed" before classifyAndDraft can run.
   const [resolvedRows, noReplyRows] = await Promise.all([
-    prisma.thread.findMany({ where: { shop, operationalState: "resolved" }, select: { id: true } }),
-    prisma.thread.findMany({ where: { shop, operationalState: "no_reply_needed" }, select: { id: true } }),
+    prisma.thread.findMany({ where: { shop, operationalState: "resolved", supportNature: { not: "non_support" } }, select: { id: true } }),
+    prisma.thread.findMany({ where: { shop, operationalState: "no_reply_needed", supportNature: { not: "non_support" } }, select: { id: true } }),
   ]);
   const resolvedSet = new Set(resolvedRows.map((t) => t.id));
   const noReplySet = new Set(noReplyRows.map((t) => t.id));

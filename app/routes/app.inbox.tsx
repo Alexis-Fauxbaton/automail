@@ -1650,7 +1650,7 @@ function ThreadCard({
           </button>
         )}
 
-        {(() => {
+        {bucket !== "other" && (() => {
           const intents = analysisEmail?.analysisResult
             ? (analysisEmail.analysisResult.intents?.length ? analysisEmail.analysisResult.intents : [analysisEmail.analysisResult.intent])
             : [];
@@ -2147,7 +2147,7 @@ function ThreadDetailPanel({
   const analysisEmail = [...emails].reverse().find((e) => e.analysisResult) ?? null;
   const draftEmail = latest.draftReply ? latest : (analysisEmail?.draftReply ? analysisEmail : null);
   const order = analysisEmail?.analysisResult?.order;
-  const intents = analysisEmail?.analysisResult
+  const intents = bucket !== "other" && analysisEmail?.analysisResult
     ? (analysisEmail.analysisResult.intents?.length ? analysisEmail.analysisResult.intents : [analysisEmail.analysisResult.intent])
     : [];
 

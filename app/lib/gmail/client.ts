@@ -149,7 +149,8 @@ function walkPartsForAttachments(
     ? part.body.data
     : undefined;
   const providerAttachId = part.body?.attachmentId ?? undefined;
-  const disposition: MailAttachment["disposition"] = isInlineDisposition ? "inline" : "attachment";
+  // A Content-ID means the part is referenced inline in the HTML body regardless of Content-Disposition.
+  const disposition: MailAttachment["disposition"] = (isInlineDisposition || !!contentId) ? "inline" : "attachment";
 
   results.push({ fileName, mimeType, sizeBytes, contentId, disposition, inlineData, providerAttachId });
 }

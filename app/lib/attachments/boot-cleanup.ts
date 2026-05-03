@@ -13,9 +13,13 @@ export async function runBootCleanup(): Promise<void> {
   ran = true;
 
   try {
+    // Cross-shop intentionally: this is a global boot-time scan of the local
+    // uploads/ directory. storagePaths are globally unique UUIDs so there is
+    // no cross-shop collision risk. take=5000 guards against OOM on large deploys.
     const allAttachments = await prisma.draftAttachment.findMany({
       where: { source: "upload" },
       select: { id: true, storagePath: true, source: true, createdAt: true },
+      take: 5000,
     });
 
     const dbPaths = new Set(

@@ -218,7 +218,7 @@ export async function recomputeThreadState(
       targetMessageId = m.id;
       // Pull noReplyNeeded from the latest analysis.
       noReplyNeeded = false;
-      if (m.analysisResult) {
+      if (m.analysisResult?.trim()) {
         try {
           const parsed = JSON.parse(m.analysisResult) as {
             conversation?: { noReplyNeeded?: boolean };
@@ -438,32 +438,52 @@ export async function recomputeAllThreadsForShop(
   shop: string,
   opts: { mailboxAddress?: string } = {},
 ): Promise<{ processed: number; errors: number }> {
-  const threads = await prisma.thread.findMany({
-    where: {
-      shop,
-      // Don't disturb threads that were manually resolved by the agent.
-      // They have previousOperationalState set by the moveThread action.
-      NOT: {
-        operationalState: "resolved",
-        previousOperationalState: { not: null },
-      },
-    },
-    select: { id: true },
-  });
-
+  const PAGE_SIZE = 100;
+  const BATCH_CONCURRENCY = 5;
+  let cursor: string | undefined;
   let processed = 0;
   let errors = 0;
-  for (const thread of threads) {
-    try {
-      await recomputeThreadState(thread.id, opts);
-      processed++;
-    } catch (err) {
-      errors++;
-      console.error(`[reclassify] shop=${shop} thread=${thread.id} failed:`, err);
+
+  const where = {
+    shop,
+    // Don't disturb threads that were manually resolved by the agent.
+    // They have previousOperationalState set by the moveThread action.
+    NOT: {
+      operationalState: "resolved",
+      previousOperationalState: { not: null },
+    },
+  } as const;
+
+  for (;;) {
+    const page = await prisma.thread.findMany({
+      where,
+      select: { id: true },
+      orderBy: { id: "asc" },
+      take: PAGE_SIZE,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    });
+
+    if (page.length === 0) break;
+    cursor = page[page.length - 1].id;
+
+    // Process in parallel batches of BATCH_CONCURRENCY
+    for (let i = 0; i < page.length; i += BATCH_CONCURRENCY) {
+      const chunk = page.slice(i, i + BATCH_CONCURRENCY);
+      const results = await Promise.allSettled(
+        chunk.map((t) => recomputeThreadState(t.id, opts)),
+      );
+      for (const r of results) {
+        if (r.status === "fulfilled") processed++;
+        else {
+          errors++;
+          console.error(`[reclassify] shop=${shop} thread failed:`, r.reason);
+        }
+      }
     }
+
+    if (page.length < PAGE_SIZE) break;
   }
-  console.log(
-    `[reclassify] shop=${shop} done: processed=${processed} errors=${errors}`,
-  );
+
+  console.log(`[reclassify] shop=${shop} done: processed=${processed} errors=${errors}`);
   return { processed, errors };
 }

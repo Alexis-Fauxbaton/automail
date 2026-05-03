@@ -55,6 +55,12 @@ export function mailAuthPlugin(): Plugin {
               );
               const tokens = await exchangeZohoCode(code);
               await saveZohoConnection(shop, tokens);
+            } else if (provider === "outlook") {
+              const { exchangeCodeForTokens, saveConnection } = await import(
+                "./app/lib/outlook/auth"
+              );
+              const tokens = await exchangeCodeForTokens(code);
+              await saveConnection(shop, tokens);
             } else {
               const { exchangeCodeForTokens, saveConnection } = await import(
                 "./app/lib/gmail/auth"

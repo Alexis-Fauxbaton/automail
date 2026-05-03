@@ -12,8 +12,8 @@ import prisma from "../../db.server";
 import { reanalyzeEmail } from "../gmail/pipeline";
 import type { AdminGraphqlClient } from "./shopify/order-search";
 
+const TEN_MIN_MS = 10 * 60_000;
 const ONE_HOUR_MS = 60 * 60_000;
-const ONE_DAY_MS = 24 * ONE_HOUR_MS;
 
 /**
  * Returns true if the email's last analysis is older than `maxAgeMs`
@@ -28,8 +28,10 @@ export function isAnalysisStale(
 }
 
 export const ANALYSIS_FRESHNESS_MS = {
-  draftTrigger: ONE_HOUR_MS,
-  autoRefresh: ONE_DAY_MS,
+  // Refresh before a draft refinement if analysis is older than 10 minutes.
+  draftTrigger: TEN_MIN_MS,
+  // Background auto-refresh for active "to handle" threads every hour.
+  autoRefresh: ONE_HOUR_MS,
 } as const;
 
 /**

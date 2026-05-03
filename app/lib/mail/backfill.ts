@@ -19,6 +19,7 @@ import { createZohoClient } from "../zoho/client";
 import {
   resolveCanonicalThread,
   refreshThreadStats,
+  attachProviderMapping,
 } from "./thread-resolver";
 import { extractAndCache, mergeThreadIdentifiers } from "../support/thread-identifiers";
 import { recomputeThreadState } from "../support/thread-state";
@@ -177,12 +178,54 @@ export async function runOpportunisticThreadBackfill(
     }
   }
 
+  // Fallback for legacy threads (thr_* IDs) that predate the ThreadProviderId
+  // mapping table. In that schema the canonical ID was the raw Zoho thread ID,
+  // so we can use it directly as the provider thread ID.
+  if (thread.providerIds.length === 0) {
+    try {
+      // Create the mapping retroactively so resolveCanonicalThread inside
+      // ingestHistoricalMessage links new emails to this existing thread.
+      await attachProviderMapping(
+        prisma,
+        canonicalThreadId,
+        thread.shop,
+        conn.provider,
+        canonicalThreadId,
+      );
+      const remote = await client.getThreadMessages(canonicalThreadId);
+      const missing = remote.filter((m) => !localSet.has(m.id));
+      for (const m of missing) {
+        try {
+          await ingestHistoricalMessage(
+            thread.shop,
+            conn.provider,
+            client,
+            m.id,
+            conn.email,
+          );
+          added++;
+        } catch (err) {
+          console.error("[backfill/opportunistic] legacy message failed:", err);
+        }
+      }
+    } catch (err) {
+      // canonicalThreadId is not a valid provider thread ID — truly unrecoverable.
+      console.log(
+        `[backfill/opportunistic] legacy thread ${canonicalThreadId} has no provider mapping and ID is not a valid provider thread ID`,
+      );
+    }
+  }
+
   await prisma.thread.update({
     where: { id: canonicalThreadId },
     data: { backfillAttemptedAt: new Date() },
   });
-  // Re-evaluate after ingestion
-  await evaluateHistoryStatus(canonicalThreadId);
+  // Re-evaluate after ingestion — best-effort, don't abort if these fail.
+  try {
+    await evaluateHistoryStatus(canonicalThreadId);
+  } catch (err) {
+    console.error("[backfill] evaluateHistoryStatus failed:", canonicalThreadId, err);
+  }
   await recomputeThreadState(canonicalThreadId, { mailboxAddress: conn.email });
   return { added };
 }

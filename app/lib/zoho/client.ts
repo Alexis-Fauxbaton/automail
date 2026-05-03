@@ -499,23 +499,27 @@ async function fetchZohoAttachmentsMeta(
     if (!r.ok) return [];
     const json = await r.json() as {
       data?: {
-        attachments?: Array<{ attachmentId?: string; attachmentName?: string; mimeType?: string; attachmentSize?: number }>;
+        // Some Zoho responses place inline images in the attachments array with a cid field.
+        attachments?: Array<{ attachmentId?: string; attachmentName?: string; mimeType?: string; attachmentSize?: number; cid?: string }>;
         inline?: Array<{ attachmentId?: string; attachmentName?: string; mimeType?: string; attachmentSize?: number; cid?: string }>;
       };
     };
     const attachments = json.data?.attachments ?? [];
     const inline = json.data?.inline ?? [];
     return [
-      ...attachments.map((a) => ({
-        fileName: a.attachmentName ?? "attachment",
-        mimeType: a.mimeType ?? "application/octet-stream",
-        sizeBytes: a.attachmentSize ?? 0,
-        contentId: undefined,
-        disposition: "attachment" as const,
-        inlineData: undefined,
-        providerAttachId: a.attachmentId,
-        providerFolderId: folderId,
-      })),
+      ...attachments.map((a) => {
+        const contentId = a.cid ? a.cid.replace(/^<|>$/g, "") : undefined;
+        return {
+          fileName: a.attachmentName ?? "attachment",
+          mimeType: a.mimeType ?? "application/octet-stream",
+          sizeBytes: a.attachmentSize ?? 0,
+          contentId,
+          disposition: (contentId ? "inline" : "attachment") as "inline" | "attachment",
+          inlineData: undefined,
+          providerAttachId: a.attachmentId,
+          providerFolderId: folderId,
+        };
+      }),
       ...inline.map((a) => ({
         fileName: a.attachmentName ?? "attachment",
         mimeType: a.mimeType ?? "application/octet-stream",
