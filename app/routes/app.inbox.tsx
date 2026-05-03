@@ -2330,6 +2330,7 @@ function ThreadDetailPanel({
     (previousContact.recentReply || previousContact.byAddress || previousContact.byOrder);
 
   const [editingClassification, setEditingClassification] = useState(false);
+  const [showRegenToast, setShowRegenToast] = useState(false);
   const classificationFetcher = useFetcher<typeof action>();
   const classificationRevalidator = useRevalidator();
   const handledClassificationData = useRef<unknown>(null);
@@ -2367,11 +2368,27 @@ function ThreadDetailPanel({
     ) {
       handledClassificationData.current = classificationFetcher.data;
       setEditingClassification(false);
+      setShowRegenToast(true);
       // Force the loader to re-run so the open thread's emails / analysis /
       // tracking shown in the detail panel reflect the just-saved edit.
       classificationRevalidator.revalidate();
     }
   }, [classificationFetcher.state, classificationFetcher.data, classificationRevalidator]);
+
+  // Auto-dismiss the regen toast after 8 seconds.
+  useEffect(() => {
+    if (!showRegenToast) return;
+    const id = setTimeout(() => setShowRegenToast(false), 8000);
+    return () => clearTimeout(id);
+  }, [showRegenToast]);
+
+  const triggerRegenerateDraft = () => {
+    const fd = new FormData();
+    fd.set("_action", "reanalyze");
+    fd.set("emailId", latest.id);
+    reanalyzeFetcher.submit(fd, { method: "post" });
+    setShowRegenToast(false);
+  };
 
   const analysisEmail = [...emails].reverse().find((e) => e.analysisResult) ?? null;
   const draftEmail = latest.draftReply ? latest : (analysisEmail?.draftReply ? analysisEmail : null);
@@ -2606,6 +2623,81 @@ function ThreadDetailPanel({
           isSubmitting={isSubmittingClassification}
           errorCode={classificationErrorCode}
         />
+      )}
+
+      {showRegenToast && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: "fixed",
+            bottom: "24px",
+            right: "24px",
+            zIndex: 1100,
+            background: "#fff",
+            border: "1px solid var(--ui-slate-200)",
+            borderRadius: "12px",
+            boxShadow: "0 12px 32px rgba(15,23,42,0.18)",
+            padding: "14px 16px",
+            maxWidth: "380px",
+            display: "flex",
+            flexDirection: "column",
+            gap: "10px",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "flex-start", gap: "10px" }}>
+            <span style={{ color: "#15803d", fontSize: "16px", lineHeight: 1 }}>✓</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--ui-slate-900)" }}>
+                {t("classification.savedToast", "Classification enregistrée")}
+              </div>
+              <div style={{ fontSize: "12px", color: "var(--ui-slate-600)", marginTop: "2px" }}>
+                {t(
+                  "classification.regenerateDraftHint",
+                  "Pensez à régénérer le draft pour refléter les changements.",
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowRegenToast(false)}
+              aria-label={t("common.dismiss", "Fermer")}
+              style={{
+                background: "transparent",
+                border: "none",
+                cursor: "pointer",
+                color: "var(--ui-slate-400)",
+                fontSize: "18px",
+                lineHeight: 1,
+                padding: "0 4px",
+              }}
+            >
+              ×
+            </button>
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <button
+              type="button"
+              onClick={triggerRegenerateDraft}
+              disabled={isGenerating}
+              style={{
+                padding: "6px 12px",
+                fontSize: "12px",
+                fontWeight: 600,
+                border: "1px solid var(--ui-blue-700)",
+                borderRadius: "8px",
+                background: "var(--ui-blue-600)",
+                color: "#fff",
+                cursor: isGenerating ? "not-allowed" : "pointer",
+                opacity: isGenerating ? 0.6 : 1,
+              }}
+            >
+              {isGenerating
+                ? t("inbox.regenerating", "Régénération…")
+                : t("classification.regenerateNow", "Régénérer le draft")}
+            </button>
+          </div>
+        </div>
       )}
 
       {/* ── Thread complet (repliable) ── */}
