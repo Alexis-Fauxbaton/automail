@@ -512,14 +512,16 @@ s-page::part(header) {
   }
 }
 
-/* Thread row badge/pill container — prevents horizontal overflow */
+/* Thread row badge/pill container — prevents horizontal overflow.
+   `overflow-x: clip` (instead of hidden) lets vertically overflowing
+   children — like hover tooltips — remain visible. */
 .ui-thread-row-tags {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   margin-bottom: 10px;
-  overflow-x: hidden;
+  overflow-x: clip;
   max-width: 100%;
 }
 

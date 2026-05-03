@@ -13,7 +13,7 @@ import {
 } from "./shopify/order-search";
 import { normalizeOrder } from "./shopify/order-normalizer";
 import { getTrackingFacts } from "./tracking/tracking-service";
-import type { ConversationMessage, ConversationMeta, ExtractedIdentifiers, FulfillmentTrackingFacts, SupportAnalysis, Warning } from "./types";
+import type { ConversationMessage, ConversationMeta, ExtractedIdentifiers, FulfillmentTrackingFacts, OrderFacts, SupportAnalysis, SupportIntent, Warning } from "./types";
 
 export interface AnalyzeInput {
   subject: string;
@@ -50,6 +50,29 @@ export interface AnalyzeInput {
    * intent badges without hitting external APIs unnecessarily.
    */
   skipTracking?: boolean;
+  /**
+   * When provided, skip step 1 (llmParseEmail) and use these values
+   * instead. The supplied identifiers are used for any downstream steps
+   * (e.g. Shopify search) if reuseOrder is not also provided.
+   * Use this when the caller already has a valid intent classification
+   * and wants to avoid an unnecessary LLM call.
+   */
+  reuseIntents?: {
+    intent: SupportIntent;
+    intents: SupportIntent[];
+    identifiers: ExtractedIdentifiers;
+  };
+  /**
+   * When provided, skip step 2 (Shopify order search) and use these
+   * values instead. The supplied order is forwarded to the tracking
+   * step so tracking can still refresh.
+   * Use this when the caller already has a valid order match and wants
+   * to avoid an unnecessary Shopify API call.
+   */
+  reuseOrder?: {
+    order: OrderFacts | null;
+    orderCandidates: OrderFacts[];
+  };
 }
 
 export interface SupportAnalysisExtended extends SupportAnalysis {
@@ -92,30 +115,52 @@ export async function analyzeSupportEmail(
   const tctx: Partial<TrackedCallContext> = { shop: input.shop, ...input.trackedCallContext };
 
   // 1. Parse + LLM extraction (regex fallback built-in)
+  //    Skipped when reuseIntents is provided — the caller supplies intent,
+  //    intents, and identifiers from a previous analysis, avoiding the LLM call.
   const parsed = parseMessage(input.subject, input.body);
-  const { intent, intents, identifiers: parserIdentifiers, usedLLM } = await llmParseEmail(parsed, tctx);
+  let intent: SupportIntent;
+  let intents: SupportIntent[];
+  let identifiers: ExtractedIdentifiers;
 
-  // Merge thread-level resolved identifiers on top when confidence is
-  // strong. This implements spec §3C: prefer the thread's consolidated
-  // state over re-parsing the full thread body on every call.
-  const threadRes = input.threadResolution;
-  const strongThread =
-    threadRes && (threadRes.confidence === "medium" || threadRes.confidence === "high");
-  const identifiers: ExtractedIdentifiers = strongThread
-    ? { ...parserIdentifiers, ...pruneEmpty(threadRes.identifiers) }
-    : { ...pruneEmpty(threadRes?.identifiers ?? {}), ...parserIdentifiers };
+  if (input.reuseIntents) {
+    intent = input.reuseIntents.intent;
+    intents = input.reuseIntents.intents;
+    identifiers = input.reuseIntents.identifiers;
+  } else {
+    const { intent: llmIntent, intents: llmIntents, identifiers: parserIdentifiers, usedLLM } =
+      await llmParseEmail(parsed, tctx);
 
-  if (!usedLLM) {
-    warnings.push({
-      code: "llm_fallback",
-      message: "OpenAI key not set — using regex parser as fallback.",
-    });
+    // Merge thread-level resolved identifiers on top when confidence is
+    // strong. This implements spec §3C: prefer the thread's consolidated
+    // state over re-parsing the full thread body on every call.
+    const threadRes = input.threadResolution;
+    const strongThread =
+      threadRes && (threadRes.confidence === "medium" || threadRes.confidence === "high");
+    identifiers = strongThread
+      ? { ...parserIdentifiers, ...pruneEmpty(threadRes.identifiers) }
+      : { ...pruneEmpty(threadRes?.identifiers ?? {}), ...parserIdentifiers };
+
+    if (!usedLLM) {
+      warnings.push({
+        code: "llm_fallback",
+        message: "OpenAI key not set — using regex parser as fallback.",
+      });
+    }
+
+    intent = llmIntent;
+    intents = llmIntents;
   }
 
   // 2. Shopify order search
+  //    Skipped when reuseOrder is provided — the caller supplies the previous
+  //    order and candidates to avoid an unnecessary Shopify API call.
   let matchedBy: Awaited<ReturnType<typeof searchOrders>>["matchedBy"] = null;
   let candidates: ReturnType<typeof normalizeOrder>[] = [];
-  if (!input.skipTracking) {
+  if (input.reuseOrder) {
+    candidates = input.reuseOrder.orderCandidates;
+    // matchedBy stays null — we don't know the original match method,
+    // but confidence scoring handles null matchedBy gracefully.
+  } else if (!input.skipTracking) {
     try {
       const result = await searchOrders(input.admin, identifiers);
       matchedBy = result.matchedBy;
@@ -129,7 +174,7 @@ export async function analyzeSupportEmail(
     }
   }
 
-  const order = candidates[0] ?? null;
+  const order = input.reuseOrder ? input.reuseOrder.order : (candidates[0] ?? null);
 
   // 3. Tracking facts — one entry per fulfillment, 17track first
   let trackings: FulfillmentTrackingFacts[] = [];

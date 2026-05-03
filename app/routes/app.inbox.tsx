@@ -12,7 +12,8 @@ import { reanalyzeEmail, redraftEmail, processNewEmails, getMailClient, persistE
 import { refineDraft } from "../lib/gmail/refine-draft";
 import { runDiagnosis, type DiagnosisReport } from "../lib/gmail/diagnose";
 import { enqueueJob } from "../lib/mail/job-queue";
-import { AnalysisDisplay } from "../components/SupportAnalysisDisplay";
+import { AnalysisDisplay, PencilButton } from "../components/SupportAnalysisDisplay";
+import { ClassificationEditModal, type ClassificationEditSubmit } from "../components/ClassificationEditModal";
 import type { SupportAnalysisExtended } from "../lib/support/orchestrator";
 import type { MailProvider } from "../lib/mail/types";
 import { decodeHtmlEntities } from "../lib/gmail/client";
@@ -337,14 +338,40 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "resync") {
+    // Capture threads where the agent has engaged BEFORE deleting emails
+    // (ReplyDraft cascades on IncomingEmail deletion, so we'd lose this
+    // signal otherwise). These are preserved as confirmed_support across
+    // the resync so user work isn't wiped.
+    const engagedThreads = await prisma.incomingEmail.findMany({
+      where: { shop: session.shop, replyDraft: { isNot: null } },
+      select: { canonicalThreadId: true },
+    });
+    const engagedThreadIds = Array.from(
+      new Set(
+        engagedThreads
+          .map((e) => e.canonicalThreadId)
+          .filter((id): id is string => id !== null),
+      ),
+    );
+
     await prisma.incomingEmail.deleteMany({ where: { shop: session.shop } });
-    // Reset needs_review threads to unknown so they are re-classified from
-    // scratch on the next sync. This fixes threads that were incorrectly
-    // upgraded from non_support to needs_review due to LLM inconsistency
-    // during a previous resync. non_support and confirmed_support threads
-    // keep their classification (protected by the mergeNature sticky rule).
+    // Reset all non-"non_support" natures to unknown so the next Tier 2 pass
+    // can re-classify from scratch. Without this, threads stuck in "to handle"
+    // due to a past LLM false-positive can never be downgraded:
+    //   - confirmed_support is sticky in mergeNature (never downgraded)
+    //   - probable_support outranks non_support (downgrade blocked by rank)
+    //   - needs_review is protected against non_support specifically
+    // A full resync is the user's escape hatch — it must give Tier 2 a clean
+    // slate. Threads where the agent manually resolved or drafted a reply
+    // are preserved (real engagement signal). non_support is kept to avoid
+    // burning LLM credits re-classifying already-known noise.
     await prisma.thread.updateMany({
-      where: { shop: session.shop, supportNature: "needs_review" },
+      where: {
+        shop: session.shop,
+        supportNature: { in: ["needs_review", "probable_support", "confirmed_support", "mixed"] },
+        previousOperationalState: null,
+        id: { notIn: engagedThreadIds },
+      },
       data: { supportNature: "unknown" },
     });
     await prisma.mailConnection.update({
@@ -566,6 +593,151 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
     return { editedThread: { canonicalThreadId }, report: null, disconnected: false, reanalyzed: null, refined: null };
+  }
+
+  if (intent === "updateClassification") {
+    const threadId = String(formData.get("threadId") ?? "");
+    if (!threadId) {
+      return {
+        classificationError: "missing_thread_id",
+        report: null,
+        disconnected: false,
+        reanalyzed: null,
+        refined: null,
+      };
+    }
+
+    const rawIntents = formData.get("intents");
+    const resetIntents = formData.get("resetIntents") === "1";
+    const orderChangeType = String(formData.get("orderChangeType") ?? "");
+
+    const edit: import("../lib/support/manual-classification").ClassificationEdit = {};
+
+    if (resetIntents) {
+      edit.resetIntents = true;
+    } else if (typeof rawIntents === "string" && rawIntents.length > 0) {
+      try {
+        edit.intents = JSON.parse(rawIntents);
+      } catch {
+        return {
+          classificationError: "invalid_intents_payload",
+          report: null,
+          disconnected: false,
+          reanalyzed: null,
+          refined: null,
+        };
+      }
+    }
+
+    try {
+      if (orderChangeType === "candidate") {
+        const orderId = String(formData.get("orderId") ?? "");
+        const candidateJson = String(formData.get("candidate") ?? "");
+        const candidate = candidateJson ? JSON.parse(candidateJson) : null;
+        if (!candidate || candidate.id !== orderId) {
+          return {
+            classificationError: "candidate_mismatch",
+            report: null,
+            disconnected: false,
+            reanalyzed: null,
+            refined: null,
+          };
+        }
+        edit.order = candidate;
+      } else if (orderChangeType === "search") {
+        const { searchOrderByExactNumber } = await import(
+          "../lib/support/manual-classification"
+        );
+        const number = String(formData.get("orderNumber") ?? "");
+        const result = await searchOrderByExactNumber(admin, number);
+        if (result.kind === "not_found") {
+          return {
+            classificationError: "order_not_found",
+            report: null,
+            disconnected: false,
+            reanalyzed: null,
+            refined: null,
+          };
+        }
+        if (result.kind === "ambiguous") {
+          return {
+            classificationError: "order_ambiguous",
+            report: null,
+            disconnected: false,
+            reanalyzed: null,
+            refined: null,
+          };
+        }
+        edit.order = result.order;
+      } else if (orderChangeType === "detach") {
+        edit.detachOrder = true;
+      } else if (orderChangeType === "reset") {
+        edit.resetOrder = true;
+      }
+
+      const { persistClassificationEdit } = await import(
+        "../lib/support/manual-classification"
+      );
+      const persisted = await persistClassificationEdit({
+        shop: session.shop,
+        threadId,
+        edit,
+      });
+      let analysis = persisted.analysis;
+
+      // When the linked order has changed (new order or detach), the previous
+      // tracking facts no longer apply. Refresh tracking only — keep intent
+      // and order as the user just set them.
+      const orderTouched =
+        orderChangeType === "candidate" ||
+        orderChangeType === "search" ||
+        orderChangeType === "detach";
+      if (orderTouched) {
+        try {
+          const { refreshThreadAnalysis } = await import(
+            "../lib/support/refresh-thread-analysis"
+          );
+          analysis = await refreshThreadAnalysis(
+            persisted.emailId,
+            admin,
+            session.shop,
+            { reclassifyIntent: false, reSearchOrder: false, refreshTracking: true },
+          ) as typeof analysis;
+        } catch (err) {
+          console.error("[updateClassification] tracking refresh failed:", err);
+          // Persisted edit still stands; just return the un-refreshed analysis.
+        }
+
+        // refreshThreadAnalysis re-runs mergeThreadIdentifiers which re-extracts
+        // the order number from the email body and overwrites the manual choice
+        // we just made. Re-write Thread.resolvedOrderNumber AFTER the refresh
+        // so the user's edit wins.
+        const finalOrderNumber = analysis.order?.name?.replace(/^#/, "") ?? null;
+        await prisma.thread.update({
+          where: { id: threadId },
+          data: { resolvedOrderNumber: finalOrderNumber },
+        }).catch((err) => {
+          console.error("[updateClassification] thread sync after refresh failed:", err);
+        });
+      }
+
+      return {
+        classificationUpdated: analysis,
+        report: null,
+        disconnected: false,
+        reanalyzed: null,
+        refined: null,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "unknown";
+      return {
+        classificationError: message,
+        report: null,
+        disconnected: false,
+        reanalyzed: null,
+        refined: null,
+      };
+    }
   }
 
   return { report: null, disconnected: false, reanalyzed: null, refined: null };
@@ -2157,6 +2329,67 @@ function ThreadDetailPanel({
     (bucket === "to_process" || bucket === "waiting_merchant" || bucket === "waiting_customer") &&
     (previousContact.recentReply || previousContact.byAddress || previousContact.byOrder);
 
+  const [editingClassification, setEditingClassification] = useState(false);
+  const [showRegenToast, setShowRegenToast] = useState(false);
+  const classificationFetcher = useFetcher<typeof action>();
+  const classificationRevalidator = useRevalidator();
+  const handledClassificationData = useRef<unknown>(null);
+  const isSubmittingClassification = classificationFetcher.state !== "idle";
+  const classificationErrorCode =
+    classificationFetcher.data && "classificationError" in classificationFetcher.data
+      ? (classificationFetcher.data.classificationError as string | undefined)
+      : undefined;
+
+  const submitClassificationEdit = (edit: ClassificationEditSubmit) => {
+    const fd = new FormData();
+    fd.set("_action", "updateClassification");
+    fd.set("threadId", latest.canonicalThreadId ?? "");
+    if (edit.resetIntents) fd.set("resetIntents", "1");
+    if (edit.intents) fd.set("intents", JSON.stringify(edit.intents));
+    if (edit.orderChange) {
+      fd.set("orderChangeType", edit.orderChange.type);
+      if (edit.orderChange.type === "candidate") {
+        fd.set("orderId", edit.orderChange.orderId);
+        fd.set("candidate", JSON.stringify(edit.orderChange.candidate));
+      } else if (edit.orderChange.type === "search") {
+        fd.set("orderNumber", edit.orderChange.orderNumber);
+      }
+    }
+    classificationFetcher.submit(fd, { method: "post" });
+  };
+
+  useEffect(() => {
+    if (
+      classificationFetcher.state === "idle" &&
+      classificationFetcher.data &&
+      "classificationUpdated" in classificationFetcher.data &&
+      classificationFetcher.data.classificationUpdated &&
+      handledClassificationData.current !== classificationFetcher.data
+    ) {
+      handledClassificationData.current = classificationFetcher.data;
+      setEditingClassification(false);
+      setShowRegenToast(true);
+      // Force the loader to re-run so the open thread's emails / analysis /
+      // tracking shown in the detail panel reflect the just-saved edit.
+      classificationRevalidator.revalidate();
+    }
+  }, [classificationFetcher.state, classificationFetcher.data, classificationRevalidator]);
+
+  // Auto-dismiss the regen toast after 8 seconds.
+  useEffect(() => {
+    if (!showRegenToast) return;
+    const id = setTimeout(() => setShowRegenToast(false), 8000);
+    return () => clearTimeout(id);
+  }, [showRegenToast]);
+
+  const triggerRegenerateDraft = () => {
+    const fd = new FormData();
+    fd.set("_action", "reanalyze");
+    fd.set("emailId", latest.id);
+    reanalyzeFetcher.submit(fd, { method: "post" });
+    setShowRegenToast(false);
+  };
+
   const analysisEmail = [...emails].reverse().find((e) => e.analysisResult) ?? null;
   const draftEmail = latest.draftReply ? latest : (analysisEmail?.draftReply ? analysisEmail : null);
   const order = analysisEmail?.analysisResult?.order;
@@ -2207,14 +2440,14 @@ function ThreadDetailPanel({
           ))}
           {hasSignals && (
             <span
-              style={{ position: "relative", display: "inline-flex", alignItems: "center", marginLeft: "auto" }}
+              style={{ position: "relative", display: "inline-flex", alignItems: "center" }}
               onMouseEnter={() => setShowSignals(true)}
               onMouseLeave={() => setShowSignals(false)}
             >
               <span style={{ color: "var(--ui-amber-700)", fontSize: "14px", cursor: "help" }}>⚠</span>
               {showSignals && (
                 <div style={{
-                  position: "absolute", bottom: "calc(100% + 6px)", right: 0,
+                  position: "absolute", top: "calc(100% + 6px)", left: 0,
                   background: "#fff", border: "1px solid var(--ui-slate-200)",
                   borderRadius: "8px", padding: "8px 12px",
                   boxShadow: "0 4px 16px rgba(0,0,0,0.10)",
@@ -2229,6 +2462,15 @@ function ThreadDetailPanel({
                 </div>
               )}
             </span>
+          )}
+          {analysisEmail?.analysisResult && (
+            <PencilButton
+              onClick={() => setEditingClassification(true)}
+              hasOverrides={
+                analysisEmail.analysisResult.manualOverrides?.intents !== undefined ||
+                analysisEmail.analysisResult.manualOverrides?.order !== undefined
+              }
+            />
           )}
         </div>
 
@@ -2352,16 +2594,111 @@ function ThreadDetailPanel({
           {analysisEmail?.analysisResult && (
             <div>
               <div style={{ ...sectionLabel, display: "flex", gap: "8px", alignItems: "center", marginBottom: "14px" }}>
-                {t("inbox.sectionAnalysis")}
+                <span>{t("inbox.sectionAnalysis")}</span>
                 {analysisEmail !== latest && (
                   <span className="ui-pill ui-pill--warning" style={{ fontSize: "10px" }}>{t("inbox.pillBasedOnPrevious")}</span>
                 )}
+                <PencilButton
+                  onClick={() => setEditingClassification(true)}
+                  hasOverrides={
+                    analysisEmail.analysisResult.manualOverrides?.intents !== undefined ||
+                    analysisEmail.analysisResult.manualOverrides?.order !== undefined
+                  }
+                />
               </div>
-              <AnalysisDisplay analysis={analysisEmail.analysisResult} lastAnalyzedAt={analysisEmail.lastAnalyzedAt} />
+              <AnalysisDisplay
+                analysis={analysisEmail.analysisResult}
+                lastAnalyzedAt={analysisEmail.lastAnalyzedAt}
+              />
             </div>
           )}
         </div>
       </div>
+
+      {editingClassification && analysisEmail?.analysisResult && (
+        <ClassificationEditModal
+          analysis={analysisEmail.analysisResult}
+          onSubmit={submitClassificationEdit}
+          onClose={() => setEditingClassification(false)}
+          isSubmitting={isSubmittingClassification}
+          errorCode={classificationErrorCode}
+        />
+      )}
+
+      {showRegenToast && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: "fixed",
+            bottom: "24px",
+            right: "24px",
+            zIndex: 1100,
+            background: "#fff",
+            border: "1px solid var(--ui-slate-200)",
+            borderRadius: "12px",
+            boxShadow: "0 12px 32px rgba(15,23,42,0.18)",
+            padding: "14px 16px",
+            maxWidth: "380px",
+            display: "flex",
+            flexDirection: "column",
+            gap: "10px",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "flex-start", gap: "10px" }}>
+            <span style={{ color: "#15803d", fontSize: "16px", lineHeight: 1 }}>✓</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--ui-slate-900)" }}>
+                {t("classification.savedToast", "Classification enregistrée")}
+              </div>
+              <div style={{ fontSize: "12px", color: "var(--ui-slate-600)", marginTop: "2px" }}>
+                {t(
+                  "classification.regenerateDraftHint",
+                  "Pensez à régénérer le draft pour refléter les changements.",
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowRegenToast(false)}
+              aria-label={t("common.dismiss", "Fermer")}
+              style={{
+                background: "transparent",
+                border: "none",
+                cursor: "pointer",
+                color: "var(--ui-slate-400)",
+                fontSize: "18px",
+                lineHeight: 1,
+                padding: "0 4px",
+              }}
+            >
+              ×
+            </button>
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <button
+              type="button"
+              onClick={triggerRegenerateDraft}
+              disabled={isGenerating}
+              style={{
+                padding: "6px 12px",
+                fontSize: "12px",
+                fontWeight: 600,
+                border: "1px solid var(--ui-blue-700)",
+                borderRadius: "8px",
+                background: "var(--ui-blue-600)",
+                color: "#fff",
+                cursor: isGenerating ? "not-allowed" : "pointer",
+                opacity: isGenerating ? 0.6 : 1,
+              }}
+            >
+              {isGenerating
+                ? t("inbox.regenerating", "Régénération…")
+                : t("classification.regenerateNow", "Régénérer le draft")}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── Thread complet (repliable) ── */}
       <div>

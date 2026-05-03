@@ -295,5 +295,27 @@
   "privacy": {
     "title": "Privacy Policy",
     "lastUpdated": "Last updated: April 2026"
+  },
+  "common": {
+    "cancel": "Cancel",
+    "save": "Save"
+  },
+  "classification": {
+    "editTitle": "Edit classification",
+    "intents": "Intents",
+    "addIntent": "Add an intent",
+    "resetIntents": "Reset intents",
+    "linkedOrder": "Linked order",
+    "otherOrderNumber": "Other order number",
+    "detach": "No order (detach)",
+    "resetOrder": "Reset (let the app search)",
+    "manuallyEdited": "Manually edited",
+    "errors": {
+      "missing_thread_id": "Internal error: missing thread id.",
+      "invalid_intents_payload": "Invalid intents payload.",
+      "candidate_mismatch": "The selected order no longer exists.",
+      "order_not_found": "No order found for this number.",
+      "order_ambiguous": "Multiple orders match — please be more specific."
+    }
   }
 }

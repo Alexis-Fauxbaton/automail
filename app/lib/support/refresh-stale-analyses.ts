@@ -9,8 +9,9 @@
 // never stall another shop.
 
 import prisma from "../../db.server";
-import { reanalyzeEmail } from "../gmail/pipeline";
+import { refreshThreadAnalysis } from "./refresh-thread-analysis";
 import type { AdminGraphqlClient } from "./shopify/order-search";
+import type { SupportAnalysis } from "./types";
 
 const TEN_MIN_MS = 10 * 60_000;
 const ONE_HOUR_MS = 60 * 60_000;
@@ -77,7 +78,7 @@ export async function refreshStaleAnalysesForShop(
     },
     orderBy: { receivedAt: "desc" },
     distinct: ["canonicalThreadId"],
-    select: { id: true },
+    select: { id: true, analysisResult: true },
   });
 
   let refreshed = 0;
@@ -87,7 +88,23 @@ export async function refreshStaleAnalysesForShop(
   }
   for (const c of candidates) {
     try {
-      await reanalyzeEmail(c.id, admin, shop);
+      const previous: SupportAnalysis | null = c.analysisResult
+        ? (JSON.parse(c.analysisResult) as SupportAnalysis)
+        : null;
+
+      const reclassifyIntent =
+        !previous ||
+        !previous.intent ||
+        previous.intent === "unknown" ||
+        !previous.intents ||
+        previous.intents.length === 0;
+      const reSearchOrder = !previous || !previous.order;
+
+      await refreshThreadAnalysis(c.id, admin, shop, {
+        reclassifyIntent,
+        reSearchOrder,
+        refreshTracking: true,
+      });
       refreshed++;
     } catch (err) {
       errors++;

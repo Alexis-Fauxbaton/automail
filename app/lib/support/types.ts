@@ -121,6 +121,16 @@ export interface Warning {
   message: string;
 }
 
+export interface ManualOverrideMarker {
+  /** ISO-8601 timestamp of when the user last edited this field. */
+  editedAt: string;
+}
+
+export interface ManualOverrides {
+  intents?: ManualOverrideMarker;
+  order?: ManualOverrideMarker;
+}
+
 export interface SupportAnalysis {
   /** Primary intent used for prioritization, filters, and draft generation. */
   intent: SupportIntent;
@@ -136,4 +146,11 @@ export interface SupportAnalysis {
   warnings: Warning[];
   draftReply: string;
   conversation: ConversationMeta;
+  /**
+   * Per-field markers indicating that the user manually set this field.
+   * Used by the UI ("modified manually" badge) and by the auto-refresh
+   * to skip recomputation. The value itself lives in the canonical field
+   * (intent / intents / order) — this struct only records the edit.
+   */
+  manualOverrides?: ManualOverrides;
 }

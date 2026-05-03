@@ -295,5 +295,27 @@
   "privacy": {
     "title": "Politique de confidentialité",
     "lastUpdated": "Dernière mise à jour : avril 2026"
+  },
+  "common": {
+    "cancel": "Annuler",
+    "save": "Enregistrer"
+  },
+  "classification": {
+    "editTitle": "Modifier la classification",
+    "intents": "Intentions",
+    "addIntent": "Ajouter une intention",
+    "resetIntents": "Réinitialiser les intentions",
+    "linkedOrder": "Commande liée",
+    "otherOrderNumber": "Autre numéro de commande",
+    "detach": "Aucune commande (détacher)",
+    "resetOrder": "Réinitialiser (laisser l'app rechercher)",
+    "manuallyEdited": "Modifié manuellement",
+    "errors": {
+      "missing_thread_id": "Erreur interne : identifiant de fil manquant.",
+      "invalid_intents_payload": "Données d'intentions invalides.",
+      "candidate_mismatch": "La commande sélectionnée n'existe plus.",
+      "order_not_found": "Aucune commande trouvée pour ce numéro.",
+      "order_ambiguous": "Plusieurs commandes correspondent — précisez le numéro."
+    }
   }
 }
