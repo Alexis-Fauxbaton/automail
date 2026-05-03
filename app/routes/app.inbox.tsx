@@ -707,6 +707,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           console.error("[updateClassification] tracking refresh failed:", err);
           // Persisted edit still stands; just return the un-refreshed analysis.
         }
+
+        // refreshThreadAnalysis re-runs mergeThreadIdentifiers which re-extracts
+        // the order number from the email body and overwrites the manual choice
+        // we just made. Re-write Thread.resolvedOrderNumber AFTER the refresh
+        // so the user's edit wins.
+        const finalOrderNumber = analysis.order?.name?.replace(/^#/, "") ?? null;
+        await prisma.thread.update({
+          where: { id: threadId },
+          data: { resolvedOrderNumber: finalOrderNumber },
+        }).catch((err) => {
+          console.error("[updateClassification] thread sync after refresh failed:", err);
+        });
       }
 
       return {
