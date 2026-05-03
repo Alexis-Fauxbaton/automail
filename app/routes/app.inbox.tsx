@@ -568,6 +568,114 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return { editedThread: { canonicalThreadId }, report: null, disconnected: false, reanalyzed: null, refined: null };
   }
 
+  if (intent === "updateClassification") {
+    const threadId = String(formData.get("threadId") ?? "");
+    if (!threadId) {
+      return {
+        classificationError: "missing_thread_id",
+        report: null,
+        disconnected: false,
+        reanalyzed: null,
+        refined: null,
+      };
+    }
+
+    const rawIntents = formData.get("intents");
+    const resetIntents = formData.get("resetIntents") === "1";
+    const orderChangeType = String(formData.get("orderChangeType") ?? "");
+
+    const edit: import("../lib/support/manual-classification").ClassificationEdit = {};
+
+    if (resetIntents) {
+      edit.resetIntents = true;
+    } else if (typeof rawIntents === "string" && rawIntents.length > 0) {
+      try {
+        edit.intents = JSON.parse(rawIntents);
+      } catch {
+        return {
+          classificationError: "invalid_intents_payload",
+          report: null,
+          disconnected: false,
+          reanalyzed: null,
+          refined: null,
+        };
+      }
+    }
+
+    try {
+      if (orderChangeType === "candidate") {
+        const orderId = String(formData.get("orderId") ?? "");
+        const candidateJson = String(formData.get("candidate") ?? "");
+        const candidate = candidateJson ? JSON.parse(candidateJson) : null;
+        if (!candidate || candidate.id !== orderId) {
+          return {
+            classificationError: "candidate_mismatch",
+            report: null,
+            disconnected: false,
+            reanalyzed: null,
+            refined: null,
+          };
+        }
+        edit.order = candidate;
+      } else if (orderChangeType === "search") {
+        const { searchOrderByExactNumber } = await import(
+          "../lib/support/manual-classification"
+        );
+        const number = String(formData.get("orderNumber") ?? "");
+        const result = await searchOrderByExactNumber(admin, number);
+        if (result.kind === "not_found") {
+          return {
+            classificationError: "order_not_found",
+            report: null,
+            disconnected: false,
+            reanalyzed: null,
+            refined: null,
+          };
+        }
+        if (result.kind === "ambiguous") {
+          return {
+            classificationError: "order_ambiguous",
+            report: null,
+            disconnected: false,
+            reanalyzed: null,
+            refined: null,
+          };
+        }
+        edit.order = result.order;
+      } else if (orderChangeType === "detach") {
+        edit.detachOrder = true;
+      } else if (orderChangeType === "reset") {
+        edit.resetOrder = true;
+      }
+
+      const { persistClassificationEdit } = await import(
+        "../lib/support/manual-classification"
+      );
+      const analysis = await persistClassificationEdit({
+        shop: session.shop,
+        threadId,
+        edit,
+      });
+
+      return {
+        classificationUpdated: analysis,
+        report: null,
+        disconnected: false,
+        reanalyzed: null,
+        refined: null,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "unknown";
+      return {
+        classificationError: message,
+        report: null,
+        disconnected: false,
+        reanalyzed: null,
+        refined: null,
+      };
+    }
+  }
+
   return { report: null, disconnected: false, reanalyzed: null, refined: null };
 };
 
