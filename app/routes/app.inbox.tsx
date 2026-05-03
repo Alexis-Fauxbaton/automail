@@ -2320,6 +2320,7 @@ function ThreadDetailPanel({
   const [editingClassification, setEditingClassification] = useState(false);
   const classificationFetcher = useFetcher<typeof action>();
   const classificationRevalidator = useRevalidator();
+  const handledClassificationData = useRef<unknown>(null);
   const isSubmittingClassification = classificationFetcher.state !== "idle";
   const classificationErrorCode =
     classificationFetcher.data && "classificationError" in classificationFetcher.data
@@ -2349,8 +2350,10 @@ function ThreadDetailPanel({
       classificationFetcher.state === "idle" &&
       classificationFetcher.data &&
       "classificationUpdated" in classificationFetcher.data &&
-      classificationFetcher.data.classificationUpdated
+      classificationFetcher.data.classificationUpdated &&
+      handledClassificationData.current !== classificationFetcher.data
     ) {
+      handledClassificationData.current = classificationFetcher.data;
       setEditingClassification(false);
       // Force the loader to re-run so the open thread's emails / analysis /
       // tracking shown in the detail panel reflect the just-saved edit.
