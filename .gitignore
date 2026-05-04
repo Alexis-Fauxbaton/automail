@@ -38,6 +38,7 @@ database.sqlite
 
 # Claude Code working directory (worktrees, session state)
 .claude/
+.worktrees/
 
 # Playwright
 test-results/
