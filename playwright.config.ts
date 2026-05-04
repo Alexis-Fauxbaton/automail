@@ -14,5 +14,7 @@ export default defineConfig({
   globalSetup: './tests/e2e/global-setup.ts',
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    { name: 'mobile-webkit-iphone', use: { ...devices['iPhone 14'] } },
+    { name: 'mobile-chromium-android', use: { ...devices['Pixel 7'] } },
   ],
 });
