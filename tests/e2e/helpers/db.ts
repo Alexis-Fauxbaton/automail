@@ -10,6 +10,7 @@ export const db = new PrismaClient({
 /** Cleans E2E test data. Does NOT touch the session row (needed for auth). */
 export async function cleanE2EData() {
   await db.$transaction(async (tx) => {
+    await tx.mailConnection.deleteMany({ where: { shop: E2E_SHOP } });
     await tx.llmCallLog.deleteMany({ where: { shop: E2E_SHOP } });
     await tx.draftAttachment.deleteMany({ where: { shop: E2E_SHOP } });
     await tx.replyDraft.deleteMany({ where: { shop: E2E_SHOP } });
@@ -74,4 +75,25 @@ export async function seedSupportThread(overrides: Partial<{
   }
 
   return { thread, email };
+}
+
+/**
+ * Seed a Gmail MailConnection so the inbox loader's `if (connection) { fetch
+ * emails }` branch is taken in e2e tests. Token strings are intentionally
+ * fake — getConnection() doesn't decrypt them and we never call out to
+ * Google in the layout-capture flow.
+ */
+export async function seedMailConnection(shop: string = E2E_SHOP) {
+  return db.mailConnection.upsert({
+    where: { shop },
+    update: {},
+    create: {
+      shop,
+      provider: 'gmail',
+      email: 'support@e2e-test.example',
+      accessToken: 'e2e-fake-access-token',
+      refreshToken: 'e2e-fake-refresh-token',
+      tokenExpiry: new Date(Date.now() + 60 * 60 * 1000), // 1h from now
+    },
+  });
 }

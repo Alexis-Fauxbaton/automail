@@ -11,7 +11,7 @@
 //   npm run test:e2e -- --project=mobile-chromium-android tests/e2e/iphone-layout-capture.spec.ts
 import { test } from '@playwright/test';
 import path from 'node:path';
-import { cleanE2EData, seedSupportThread, db } from './helpers/db';
+import { cleanE2EData, seedSupportThread, seedMailConnection, db } from './helpers/db';
 
 const SCREENSHOT_DIR = 'tests/e2e/screenshots';
 
@@ -32,6 +32,26 @@ test('capture: inbox empty', async ({ page }, testInfo) => {
   await page.waitForLoadState('networkidle');
   await page.screenshot({
     path: shotPath(testInfo.project.name, 'inbox-empty'),
+    fullPage: true,
+  });
+});
+
+test('capture: inbox with thread list', async ({ page }, testInfo) => {
+  await seedMailConnection();
+  await seedSupportThread({ operationalState: 'waiting_merchant' });
+
+  await page.goto('/app/inbox');
+  // Wait for the "To handle" tab to appear (assertion-based wait — more
+  // reliable than networkidle in a Shopify-embedded App Bridge iframe).
+  const toHandleTab = page.getByRole('button', { name: /to handle/i });
+  await toHandleTab.waitFor({ state: 'visible' });
+  await toHandleTab.click();
+
+  // Wait for the seeded thread to render before capturing.
+  await page.getByText('Où est ma commande #TEST-001').waitFor({ state: 'visible' });
+
+  await page.screenshot({
+    path: shotPath(testInfo.project.name, 'inbox-with-thread-list'),
     fullPage: true,
   });
 });
