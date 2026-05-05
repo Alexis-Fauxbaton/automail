@@ -3098,11 +3098,21 @@ export default function InboxPage() {
                 }
               />
 
-              {/* Thread list + detail split */}
+              {/* Thread list + detail split.
+                  IMPORTANT: use `minmax(0, 1fr)` instead of `1fr` even in the
+                  single-column branch — bare `1fr` resolves to
+                  `minmax(auto, 1fr)`, and a track's `auto` minimum is the
+                  intrinsic min-content of its items. The thread cards contain
+                  a `white-space: nowrap` subject line whose min-content is the
+                  full subject width, which would blow the column out past the
+                  viewport on narrow mobile screens (the original "cards
+                  overflow horizontally on mobile" bug). */}
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: selectedThreadMeta ? "minmax(0, 1fr) minmax(0, 2fr)" : "1fr",
+                  gridTemplateColumns: selectedThreadMeta
+                    ? "minmax(0, 1fr) minmax(0, 2fr)"
+                    : "minmax(0, 1fr)",
                   gap: "16px",
                   alignItems: "start",
                 }}

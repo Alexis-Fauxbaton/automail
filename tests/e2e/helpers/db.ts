@@ -10,6 +10,7 @@ export const db = new PrismaClient({
 /** Cleans E2E test data. Does NOT touch the session row (needed for auth). */
 export async function cleanE2EData() {
   await db.$transaction(async (tx) => {
+    await tx.mailConnection.deleteMany({ where: { shop: E2E_SHOP } });
     await tx.llmCallLog.deleteMany({ where: { shop: E2E_SHOP } });
     await tx.draftAttachment.deleteMany({ where: { shop: E2E_SHOP } });
     await tx.replyDraft.deleteMany({ where: { shop: E2E_SHOP } });
@@ -28,6 +29,7 @@ export async function seedSupportThread(overrides: Partial<{
   body: string;
   draftBody: string;
   orderNumber: string;
+  intents: string[];
 }> = {}) {
   const thread = await db.thread.create({
     data: {
@@ -44,6 +46,7 @@ export async function seedSupportThread(overrides: Partial<{
     },
   });
 
+  const intents = overrides.intents ?? ['where_is_my_order'];
   const email = await db.incomingEmail.create({
     data: {
       shop: E2E_SHOP,
@@ -56,7 +59,14 @@ export async function seedSupportThread(overrides: Partial<{
       processingStatus: 'analyzed',
       tier1Result: 'passed',
       tier2Result: 'support_client',
-      detectedIntent: 'where_is_my_order',
+      detectedIntent: intents[0],
+      // analysisResult drives the intent pills in the inbox row (see
+      // app.inbox.tsx ~1832: pills come from analysisResult.intents).
+      // Stored as a JSON-encoded string per the schema (String?, // JSON blob).
+      analysisResult: JSON.stringify({
+        intent: intents[0],
+        intents,
+      }),
       analysisConfidence: 'high',
     },
   });
@@ -74,4 +84,25 @@ export async function seedSupportThread(overrides: Partial<{
   }
 
   return { thread, email };
+}
+
+/**
+ * Seed a Gmail MailConnection so the inbox loader's `if (connection) { fetch
+ * emails }` branch is taken in e2e tests. Token strings are intentionally
+ * fake — getConnection() doesn't decrypt them and we never call out to
+ * Google in the layout-capture flow.
+ */
+export async function seedMailConnection(shop: string = E2E_SHOP) {
+  return db.mailConnection.upsert({
+    where: { shop },
+    update: {},
+    create: {
+      shop,
+      provider: 'gmail',
+      email: 'support@e2e-test.example',
+      accessToken: 'e2e-fake-access-token',
+      refreshToken: 'e2e-fake-refresh-token',
+      tokenExpiry: new Date(Date.now() + 60 * 60 * 1000), // 1h from now
+    },
+  });
 }

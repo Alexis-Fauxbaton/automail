@@ -1,4 +1,21 @@
 // tests/e2e/global-setup.ts
+//
+// Setup that runs once before all e2e specs. Two artifacts are produced:
+//
+// 1. A `Session` row in Prisma for the e2e shop. Used by code paths that
+//    read sessions via `sessionStorage.findSessionsByShop(shop)` — these
+//    are NOT covered by E2E_AUTH_BYPASS in app/shopify.server.ts (which
+//    only overrides authenticate.admin). Keep this even when running in
+//    bypass mode.
+//
+// 2. A storageState cookie file (tests/e2e/.auth/session.json) referenced
+//    by playwright.config.ts. The cookie itself was insufficient to
+//    authenticate against real Shopify OAuth, which is why E2E_AUTH_BYPASS
+//    was added — but the file must still exist for Playwright to start.
+//
+// In short: bypass-mode tests need (1) for sessionStorage lookups and need
+// (2) only as a Playwright bootstrap requirement. Removing either breaks
+// something — leave both.
 import { PrismaClient } from '@prisma/client';
 import fs from 'node:fs/promises';
 import path from 'node:path';
