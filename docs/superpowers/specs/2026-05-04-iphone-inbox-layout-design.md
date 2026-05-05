@@ -160,3 +160,78 @@ committed baselines.)
    visible iOS-only divergences ready for a follow-up fix plan.
 4. No regression in existing e2e tests (they run on the unchanged `chromium`
    project).
+
+---
+
+## Diagnosis (filled after first capture run, 2026-05-04)
+
+### Methodology
+
+Captured `tests/e2e/iphone-layout-capture.spec.ts` against:
+- `mobile-webkit-iphone` — `devices['iPhone 14']` (390×844, DPR 3, WebKit)
+- `mobile-chromium-android` — `devices['Pixel 7']` (412×915, DPR 2.625, Chromium)
+
+Three states each: empty (no Gmail connection), thread-list (one seeded
+support thread), thread-detail (mobile full-screen view).
+
+Required infra add-ons that surfaced during the run, not in the original spec:
+1. **`E2E_AUTH_BYPASS` in `app/shopify.server.ts`** — without it, the cookie
+   pre-seed in `global-setup.ts` is rejected by `authenticate.admin()` and all
+   captures rendered the Shopify *login* fallback. The existing `mobile.spec.ts`
+   tests had been silently passing against the login page because they only
+   asserted geometry (`scrollWidth <= clientWidth`) — a separate finding worth
+   flagging to the team.
+2. **`seedMailConnection` helper in `tests/e2e/helpers/db.ts`** — without it,
+   `getConnection(shop)` returned null and the inbox showed the "Connect your
+   email" empty state instead of the seeded thread.
+
+### iOS-only divergences observed
+
+| State | Symptom (visible in iPhone PNG, absent on Pixel) | Suspected cause | Confidence |
+|-------|--------------------------------------------------|-----------------|------------|
+| empty | "Connect Gmail" + "Connect Zoho Mail" stack **vertically** on iPhone, but render **side-by-side** on Pixel — even though Pixel is the *wider* viewport (412 vs 390) where you'd expect them to fit more easily, not less. Suggests a WebKit-specific min-width / flex-basis interaction inside the Polaris `<s-stack direction="inline">` component. | Polaris `<s-stack>` web component's flex behavior under WebKit, possibly minimum content sizing on `<s-button>`. | medium |
+| detail | The thread-detail card fills nearly the full visible height on iPhone, leaving very little breathing room. On Pixel the same card is short and there is a large empty area below it (the page extends to 100vh = ~1500px while content is ~700px). | `.ui-inbox-root { min-height: 100vh }` produces different "empty void below content" behaviors due to WebKit's address-bar-aware viewport vs Blink's stable viewport. Cosmetic, not broken — but explains why the detail view "feels right" on iPhone and "feels weirdly tall" on Pixel. | high |
+
+### Issues present on **both** iPhone and Pixel (not iOS-only — out of scope of this investigation)
+
+1. **Top app nav rendered as one concatenated string**: `HomeEmail inboxDashboardSettings` with no spacing or separators between links. This is the Shopify App Bridge `<s-app-nav>` web component rendering without its visual styles when the app is hit *outside* the Shopify Admin iframe (which is what the e2e bypass mode does). In production inside Shopify Mobile, this nav is replaced by the host app's navigation, so end-users do *not* see this. Filed as a finding-of-method, not a bug to fix here.
+2. **Badge shows `##TEST-001` (double hash)**: pre-existing data display issue; the seed already has `#TEST-001` in `resolvedOrderNumber` and the UI prepends another `#`. Not iOS-related, separate fix.
+3. **Filter tabs "Resolved" is truncated to "Res…"** on iPhone (390px) but fully visible on Pixel (412px). This is a narrow-viewport edge case (the tabs row barely fits at 412 and overflows by ~20px at 390), not iOS-specific — would also appear on a Chromium browser at the same width. The horizontal-scroll fallback in `tokens.css:360` works (the user can scroll to reveal the rest), but no scroll affordance is shown so it's not obvious there's more content.
+
+### Hypotheses from the spec — verdict
+
+| Hypothesis | Verdict |
+|------------|---------|
+| `100vh` vs `100dvh` on `.ui-inbox-root` | **Partially confirmed.** Causes the cosmetic "empty void below content" on Pixel but not iPhone (the address bar makes iPhone's 100vh effectively equal to the visible viewport). The opposite of the original prediction — but still a real cross-platform inconsistency. |
+| Missing `viewport-fit=cover` | **Not confirmed by these captures.** Playwright runs without the device's actual notch/Dynamic Island chrome, so safe-area issues won't show up in this tooling. Still worth fixing for real-device parity. |
+| Missing `env(safe-area-inset-*)` | Same as above — not visible in Playwright captures. Still worth doing. |
+| Polaris web component layout drift | **Confirmed** for `<s-stack direction="inline">` in the empty-state buttons. Different flex behavior on WebKit vs Blink at narrow widths. |
+| Other | The "tabs row truncation at 390px" is real but cross-platform, not iOS-only. `min-height: 100vh` actually behaves *better* on iPhone than Pixel for this layout (opposite of the typical iOS gripe). |
+
+### Honest caveat
+
+The captures **do not include the Shopify Mobile app's WebView wrapper**.
+Real merchants on iPhone use Automail through the Shopify Mobile app, which
+embeds the app in its own WebView with its own chrome (status bar handling,
+safe-area, navigation gesture). That layer is not reproducible in Playwright.
+If the user's reports persist after the fixes below, the next step is to
+test on a real iPhone via the existing Cloudflare tunnel
+(`annual-stadium-lab-and.trycloudflare.com`) inside the Shopify Mobile app.
+
+### Recommended next plan (priority-ordered)
+
+1. **Polaris `<s-stack>` behavior** in the empty-state and the thread action
+   row — pin it with explicit CSS (e.g. `.ui-thread-actions-row` already does
+   this; apply the same pattern to the Connect-email card). Highest visible
+   payoff for the iPhone-specific complaint.
+2. **`viewport-fit=cover` + `env(safe-area-inset-*)`** — real-device polish
+   that this tooling cannot validate but which costs ~10 lines and fixes the
+   classic notch/Dynamic Island letterboxing issue.
+3. **Replace `min-height: 100vh` with `100dvh` (with `100vh` fallback)** on
+   `.ui-inbox-root` — fixes the Pixel/Chromium "weird empty space below" and
+   makes mobile Safari's behavior more predictable across browsers.
+4. **Filter tabs visual scroll affordance at narrow widths** — small
+   gradient/shadow on the right edge so users know more tabs are reachable.
+   Not iOS-specific but the truncation surfaced in this investigation.
+5. **Out-of-scope but worth filing**: the `##TEST-001` double-hash, and the
+   silent-pass behavior of geometry-only e2e assertions in `mobile.spec.ts`.
