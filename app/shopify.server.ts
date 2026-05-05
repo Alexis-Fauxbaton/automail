@@ -45,32 +45,46 @@ export const registerWebhooks = shopify.registerWebhooks;
 export const sessionStorage = shopify.sessionStorage;
 
 // ---------------------------------------------------------------------------
-// E2E auth bypass — opt-in, double-gated, NEVER active in production.
+// E2E auth bypass — opt-in, triple-gated, NEVER active in production.
 //
-// Set E2E_AUTH_BYPASS=true in the dev server's environment to activate.
-// authenticate.admin() will return a fake offline session for
-// e2e-test.myshopify.com so Playwright layout-capture tests can render the
-// inbox without going through the real Shopify OAuth flow.
+// Activation requires ALL THREE of:
+//   1. E2E_AUTH_BYPASS = "true"
+//   2. NODE_ENV != "production"
+//   3. ALLOW_E2E_AUTH_BYPASS = "yes-i-know"
 //
-// The Admin GraphQL client is intentionally NOT mocked — any loader that
-// calls admin.graphql() will fail loudly (by design).
+// The third gate is intentionally awkward to type so it can't be set by
+// accident — the only valid usage is in the Playwright layout-capture
+// flow where you're knowingly opting in.
+//
+// When active, authenticate.admin() returns a fake offline session for
+// e2e-test.myshopify.com so the inbox loader can render against seeded
+// Prisma data without going through real Shopify OAuth.
+//
+// HARD LIMITS (by design, not bugs):
+// - Loader paths only. Action handlers that call `admin.graphql(...)` will
+//   crash with "Cannot read properties of undefined" because admin is
+//   intentionally undefined. The capture spec only does GETs — if the spec
+//   is ever extended to click "Mark as resolved" or send a draft, that
+//   action will break in bypass mode.
+// - Webhook / public / unauthenticated routes are untouched (we spread the
+//   real authenticate object and only override .admin).
+// - billing and redirect are stubs that throw if used.
 // ---------------------------------------------------------------------------
 const E2E_AUTH_BYPASS_ACTIVE =
   process.env.E2E_AUTH_BYPASS === "true" &&
-  process.env.NODE_ENV !== "production";
+  process.env.NODE_ENV !== "production" &&
+  process.env.ALLOW_E2E_AUTH_BYPASS === "yes-i-know";
 
 const E2E_BYPASS_SHOP = "e2e-test.myshopify.com";
 
-let _e2eWarningLogged = false;
-
-function logE2eWarningOnce() {
-  if (_e2eWarningLogged) return;
-  _e2eWarningLogged = true;
+if (E2E_AUTH_BYPASS_ACTIVE) {
+  // Module-load banner so a developer who set E2E_AUTH_BYPASS=true in their
+  // .env sees feedback even if no auth route is hit during the session.
   // eslint-disable-next-line no-console
   console.warn(
-    "[E2E_AUTH_BYPASS] Active — authenticate.admin() returns a fake session for " +
-      E2E_BYPASS_SHOP +
-      ". NEVER set E2E_AUTH_BYPASS=true in production."
+    `\n[E2E_AUTH_BYPASS] ⚠️  ACTIVE at module load — authenticate.admin() will return a fake session for ${E2E_BYPASS_SHOP}.\n` +
+      "   Loader paths only; action handlers that call admin.graphql will crash.\n" +
+      "   NEVER set E2E_AUTH_BYPASS=true in production.\n"
   );
 }
 
@@ -80,7 +94,6 @@ export const authenticate = E2E_AUTH_BYPASS_ACTIVE
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ...(shopify.authenticate as any),
       admin: async (_request: Request) => {
-        logE2eWarningOnce();
         const session = {
           id: `offline_${E2E_BYPASS_SHOP}`,
           shop: E2E_BYPASS_SHOP,
