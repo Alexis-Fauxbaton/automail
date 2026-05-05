@@ -56,6 +56,32 @@ test('capture: inbox with thread list', async ({ page }, testInfo) => {
   });
 });
 
+// "Realistic" variant: long subject, 9-digit order number, and 2 intent pills
+// (refund_request + delivery_delay) — matches the kind of production data
+// that surfaced the horizontal-overflow report on Android. Produces
+// `inbox-realistic-thread.png`.
+test('capture: inbox realistic thread (long subject + multiple pills)', async ({ page }, testInfo) => {
+  await seedMailConnection();
+  await seedSupportThread({
+    operationalState: 'waiting_merchant',
+    orderNumber: '257371279',
+    subject: 'Re: Re :Nouveau message de client le 28 avril 2026 à 09h12',
+    intents: ['refund_request', 'delivery_delay'],
+  });
+
+  await page.goto('/app/inbox');
+  const toHandleTab = page.getByRole('button', { name: /to handle/i });
+  await toHandleTab.waitFor({ state: 'visible' });
+  await toHandleTab.click();
+
+  await page.getByText(/Nouveau message de client le 28 avril/).waitFor({ state: 'visible' });
+
+  await page.screenshot({
+    path: shotPath(testInfo.project.name, 'inbox-realistic-thread'),
+    fullPage: true,
+  });
+});
+
 test('capture: inbox thread detail (mobile full-screen view)', async ({ page }, testInfo) => {
   await seedMailConnection();
   await seedSupportThread({ operationalState: 'waiting_merchant' });

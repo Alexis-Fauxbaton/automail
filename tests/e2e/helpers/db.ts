@@ -29,6 +29,7 @@ export async function seedSupportThread(overrides: Partial<{
   body: string;
   draftBody: string;
   orderNumber: string;
+  intents: string[];
 }> = {}) {
   const thread = await db.thread.create({
     data: {
@@ -45,6 +46,7 @@ export async function seedSupportThread(overrides: Partial<{
     },
   });
 
+  const intents = overrides.intents ?? ['where_is_my_order'];
   const email = await db.incomingEmail.create({
     data: {
       shop: E2E_SHOP,
@@ -57,7 +59,14 @@ export async function seedSupportThread(overrides: Partial<{
       processingStatus: 'analyzed',
       tier1Result: 'passed',
       tier2Result: 'support_client',
-      detectedIntent: 'where_is_my_order',
+      detectedIntent: intents[0],
+      // analysisResult drives the intent pills in the inbox row (see
+      // app.inbox.tsx ~1832: pills come from analysisResult.intents).
+      // Stored as a JSON-encoded string per the schema (String?, // JSON blob).
+      analysisResult: JSON.stringify({
+        intent: intents[0],
+        intents,
+      }),
       analysisConfidence: 'high',
     },
   });
