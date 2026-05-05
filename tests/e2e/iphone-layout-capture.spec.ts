@@ -55,3 +55,33 @@ test('capture: inbox with thread list', async ({ page }, testInfo) => {
     fullPage: true,
   });
 });
+
+test('capture: inbox thread detail (mobile full-screen view)', async ({ page }, testInfo) => {
+  await seedMailConnection();
+  await seedSupportThread({ operationalState: 'waiting_merchant' });
+
+  await page.goto('/app/inbox');
+  // Open the "To handle" tab and wait for the seeded thread to appear.
+  const toHandleTab = page.getByRole('button', { name: /to handle/i });
+  await toHandleTab.waitFor({ state: 'visible' });
+  await toHandleTab.click();
+
+  const threadRow = page.getByText('Où est ma commande #TEST-001');
+  await threadRow.waitFor({ state: 'visible' });
+  await threadRow.click();
+
+  // On mobile (≤768px) the inbox renders a full-screen detail view with a
+  // back button. On desktop (chromium project) it shows a sticky side panel
+  // — both are valid layouts to capture.
+  // Wait for either the mobile back button OR a desktop-only marker so we
+  // can capture once the detail view has rendered in either layout.
+  await Promise.race([
+    page.getByRole('button', { name: /back to (?:inbox|list)/i }).waitFor({ state: 'visible' }),
+    page.locator('.ui-detail-panel').waitFor({ state: 'visible' }),
+  ]);
+
+  await page.screenshot({
+    path: shotPath(testInfo.project.name, 'inbox-thread-detail'),
+    fullPage: true,
+  });
+});
