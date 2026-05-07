@@ -383,3 +383,21 @@ model SyncJob {
   @@index([shop, status])
   @@index([status, nextRetryAt])
 }
+
+// Sliding-window rate-limit counters. One row per (key, kind) — the
+// rate-limit module increments `count` and resets when `windowStart` is
+// older than the window. Cheap because all access goes through one upsert
+// + at most one delete-old-rows housekeeping query.
+model RateLimitBucket {
+  // Logical key, e.g. shop domain for per-shop limits, or IP address for
+  // per-IP limits on public routes.
+  key         String
+  // Free-form identifier for what's being rate-limited
+  // (e.g. "reply-draft", "mail-auth").
+  kind        String
+  count       Int       @default(0)
+  windowStart DateTime  @default(now())
+
+  @@id([key, kind])
+  @@index([windowStart])
+}

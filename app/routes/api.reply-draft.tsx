@@ -2,8 +2,15 @@ import { data } from "react-router";
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+import { checkRateLimit } from "../lib/rate-limit";
 
 const VALID_REPLY_MODES = ["thread", "new_thread"] as const;
+
+// Per-shop rate limit. Caps draft mutation churn from a single shop to
+// guard against accidental loops or session-replay abuse on a hot path
+// (each save can trigger an LLM redraft downstream).
+const REPLY_DRAFT_LIMIT = 120; // events per window
+const REPLY_DRAFT_WINDOW_MS = 60_000; // 1 minute
 
 /**
  * CSRF model: this endpoint is only callable from inside the embedded
@@ -22,6 +29,25 @@ export async function action({ request }: ActionFunctionArgs) {
 
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
+
+  const limit = await checkRateLimit({
+    key: shop,
+    kind: "reply-draft",
+    limit: REPLY_DRAFT_LIMIT,
+    windowMs: REPLY_DRAFT_WINDOW_MS,
+  });
+  if (!limit.ok) {
+    return data(
+      { error: "Too many draft updates — slow down and retry shortly." },
+      {
+        status: 429,
+        headers: {
+          "Retry-After": String(Math.ceil(limit.resetMs / 1000)),
+          "X-RateLimit-Remaining": String(limit.remaining),
+        },
+      },
+    );
+  }
 
   const body = await request.json() as {
     emailId?: string;
