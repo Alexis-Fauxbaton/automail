@@ -46,6 +46,7 @@ export async function createTestThread(overrides: Partial<{
   previousOperationalState: string;
   supportNature: string;
   lastMessageAt: Date;
+  firstMessageAt: Date;
   operationalStateUpdatedAt: Date;
 }> = {}) {
   return testDb.thread.create({
