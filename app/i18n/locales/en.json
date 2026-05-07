@@ -210,6 +210,7 @@
     "hideAdvanced": "Hide advanced",
     "backfill": "Backfill 60 days",
     "resyncAll": "Re-sync all",
+    "resyncConfirm": "This will delete all ingested emails for this shop and re-fetch them from your mailbox. Drafts you've already started are preserved. Continue?",
     "reclassify": "Re-classify",
     "diagnose": "Diagnose",
     "searchLabel": "Search",

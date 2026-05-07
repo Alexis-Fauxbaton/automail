@@ -101,6 +101,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         },
         orderBy: { receivedAt: "desc" },
         distinct: ["canonicalThreadId"],
+        // Hard cap as a defence-in-depth: distinct + canonicalIds already
+        // bounds this to the page size, but a future refactor that drops
+        // distinct shouldn't suddenly fetch the whole table.
+        take: canonicalIds.length,
         include: {
           replyDraft: { include: { attachments: true } },
           incomingAttachments: {
@@ -749,7 +753,16 @@ function ConnectionCard({
                 {t("inbox.backfill")}
               </s-button>
             </Form>
-            <Form method="post">
+            <Form
+              method="post"
+              onSubmit={(e) => {
+                // Resync wipes ALL ingested email rows for the shop. Make
+                // sure a misclick doesn't destroy the merchant's history.
+                if (!window.confirm(t("inbox.resyncConfirm"))) {
+                  e.preventDefault();
+                }
+              }}
+            >
               <input type="hidden" name="_action" value="resync" />
               <s-button variant="tertiary" type="submit" {...(isSyncing ? { loading: true } : {})}>
                 {t("inbox.resyncAll")}

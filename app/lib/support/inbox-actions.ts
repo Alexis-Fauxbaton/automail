@@ -50,6 +50,15 @@ export async function handleStop(params: { shop: string }) {
 
 export async function handleResync(params: { shop: string }) {
   const { shop } = params;
+  // Audit log — destructive operation. We capture every resync so a
+  // misclick that wipes ingested email history can be traced. The log is
+  // intentionally a structured `console.warn` so it ships to whatever log
+  // sink is wired in production (Render, Datadog, etc.) without requiring
+  // a new DB table.
+  const startedAt = new Date().toISOString();
+  console.warn(
+    `[audit] resync shop=${shop} startedAt=${startedAt} action=delete-all-incoming-emails`,
+  );
   const engagedThreads = await prisma.incomingEmail.findMany({
     where: { shop, replyDraft: { isNot: null } },
     select: { canonicalThreadId: true },

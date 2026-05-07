@@ -54,7 +54,7 @@ describe("scoreConfidence", () => {
   // --- No order scenarios ---
   it("returns low + no_identifiers when no identifiers and no order", () => {
     const result = scoreConfidence(
-      makeInput({ identifiers: {}, matchedBy: null, order: null, trackings: [] }),
+      makeInput({ identifiers: {}, matchedBy: null, order: null, candidatesCount: 0, trackings: [] }),
     );
     expect(result.confidence).toBe("low");
     expect(result.warnings.map((w) => w.code)).toContain("no_identifiers");
@@ -62,10 +62,18 @@ describe("scoreConfidence", () => {
 
   it("returns low + no_order_match when identifiers present but no order found", () => {
     const result = scoreConfidence(
-      makeInput({ order: null, trackings: [] }),
+      makeInput({ order: null, candidatesCount: 0, trackings: [] }),
     );
     expect(result.confidence).toBe("low");
     expect(result.warnings.map((w) => w.code)).toContain("no_order_match");
+  });
+
+  it("returns low + ambiguous_match when order left unselected but candidates exist", () => {
+    const result = scoreConfidence(
+      makeInput({ order: null, matchedBy: "email", candidatesCount: 3, trackings: [] }),
+    );
+    expect(result.confidence).toBe("low");
+    expect(result.warnings.map((w) => w.code)).toContain("ambiguous_match");
   });
 
   // --- High confidence ---

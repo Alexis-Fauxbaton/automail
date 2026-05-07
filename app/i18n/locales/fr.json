@@ -210,6 +210,7 @@
     "hideAdvanced": "Masquer avancé",
     "backfill": "Récupérer 60 jours",
     "resyncAll": "Re-synchroniser tout",
+    "resyncConfirm": "Cette action va supprimer tous les emails ingérés pour cette boutique et les re-récupérer depuis votre boîte mail. Les brouillons déjà commencés sont conservés. Continuer ?",
     "reclassify": "Re-classer",
     "diagnose": "Diagnostiquer",
     "searchLabel": "Recherche",

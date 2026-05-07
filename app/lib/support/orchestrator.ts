@@ -165,7 +165,24 @@ export async function analyzeSupportEmail(
     }
   }
 
-  const order = input.reuseOrder ? input.reuseOrder.order : (candidates[0] ?? null);
+  // Auto-select the matched order only when we're confident it's the right
+  // one. When the match is weak (multiple email candidates, or any name-only
+  // match — names can collide between distinct customers), leave `order =
+  // null` and force the agent to pick manually from `orderCandidates`.
+  let order: ReturnType<typeof normalizeOrder> | null;
+  if (input.reuseOrder) {
+    order = input.reuseOrder.order;
+  } else if (candidates.length === 0) {
+    order = null;
+  } else if (matchedBy === "orderNumber" || matchedBy === "trackingNumber") {
+    order = candidates[0];
+  } else if (matchedBy === "email" && candidates.length === 1) {
+    order = candidates[0];
+  } else {
+    // matchedBy === "customerName" (always manual) or
+    // matchedBy === "email" with >1 candidate (ambiguous).
+    order = null;
+  }
 
   // 3. Tracking facts — one entry per fulfillment, 17track first
   let trackings: FulfillmentTrackingFacts[] = [];
