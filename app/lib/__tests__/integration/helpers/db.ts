@@ -1,5 +1,5 @@
 // app/lib/__tests__/integration/helpers/db.ts
-import { PrismaClient } from '@prisma/client';
+import prisma from '../../../../db.server';
 
 if (process.env.NODE_ENV !== 'test') {
   throw new Error('Integration tests must run with NODE_ENV=test');
@@ -8,19 +8,11 @@ if (process.env.NODE_ENV !== 'test') {
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error('DATABASE_URL must be set for integration tests');
 
-// Prefer the direct (non-pooler) URL when available. Using the pooler URL for
-// testDb while the production prisma singleton also uses the pooler can cause
-// PgBouncer prepared-statement conflicts in transaction-pooling mode, which
-// makes read-after-write invisible across the two clients.
-const directUrl = process.env.DIRECT_URL;
-
-export const testDb = new PrismaClient({
-  datasources: {
-    db: {
-      url: directUrl ?? databaseUrl,
-    },
-  },
-});
+// Use the same prisma instance the production code uses. This guarantees
+// read-after-write consistency: dashboard helpers (which import prisma from
+// db.server) see writes made via testDb because both go through the same
+// connection pool.
+export const testDb = prisma;
 
 export const TEST_SHOP = 'integration-test.myshopify.com';
 
