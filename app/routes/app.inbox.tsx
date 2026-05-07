@@ -1,17 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useFetcher, useLoaderData, useNavigation, useRevalidator, useSearchParams } from "react-router";
 import { useTranslation } from "react-i18next";
 import { useMobile } from "../hooks/useMobile";
 
 import { authenticate } from "../shopify.server";
-import { getAuthUrl as getGmailAuthUrl, getConnection, deleteConnection } from "../lib/gmail/auth";
+import { getAuthUrl as getGmailAuthUrl, getConnection } from "../lib/gmail/auth";
 import { getZohoAuthUrl } from "../lib/zoho/auth";
 import { getAuthUrl as getOutlookAuthUrl } from "../lib/outlook/auth";
-import { reanalyzeEmail, redraftEmail, processNewEmails, getMailClient, persistEmailAttachments, type ProcessingReport } from "../lib/gmail/pipeline";
-import { refineDraft } from "../lib/gmail/refine-draft";
-import { runDiagnosis, type DiagnosisReport } from "../lib/gmail/diagnose";
-import { enqueueJob } from "../lib/mail/job-queue";
+import type { ProcessingReport } from "../lib/gmail/pipeline";
+import type { DiagnosisReport } from "../lib/gmail/diagnose";
 import { AnalysisDisplay, PencilButton } from "../components/SupportAnalysisDisplay";
 import { ClassificationEditModal, type ClassificationEditSubmit } from "../components/ClassificationEditModal";
 import type { SupportAnalysisExtended } from "../lib/support/orchestrator";
@@ -20,9 +18,25 @@ import { decodeHtmlEntities } from "../lib/gmail/client";
 import { sanitizeEmailHtml, buildCidMap } from "../lib/mail/sanitize-html";
 import { buildReplySubject } from "../lib/support/draft-subject";
 import prisma from "../db.server";
-import { recordStateTransition } from "../lib/support/thread-state-history";
-import { isAnalysisStale, ANALYSIS_FRESHNESS_MS, refreshStaleAnalysesForShop } from "../lib/support/refresh-stale-analyses";
-import type { AdminGraphqlClient } from "../lib/support/shopify/order-search";
+import { computePriorContact } from "../lib/support/prior-contact";
+import {
+  handleDisconnect,
+  handleStop,
+  handleResync,
+  handleReclassify,
+  handleSync,
+  handleBackfill,
+  handleToggleAutoSync,
+  handleDiagnose,
+  handleReanalyze,
+  handleRedraft,
+  handleRefreshEmailHtml,
+  handleRefine,
+  handleMoveThread,
+  handleEditThreadIdentifiers,
+  handleUpdateClassification,
+} from "../lib/support/inbox-actions";
+import type { ClassificationEdit } from "../lib/support/manual-classification";
 import {
   MetricCard,
   SegmentedTabs,
@@ -36,9 +50,6 @@ import {
 // Tracks email IDs for which an HTML body refresh was already submitted
 // this browser session, so we don't re-fetch on every remount.
 const _refreshedEmailIds = new Set<string>();
-
-const GRID_COLS_WITH_PANEL = "minmax(0, 1fr) minmax(0, 2fr)";
-const GRID_COLS_LIST_ONLY = "minmax(0, 1fr)";
 
 // ---------------------------------------------------------------------------
 // Loader
@@ -79,181 +90,52 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     // customer complaint) are invisible and the analysis + draft blocks
     // never render for long threads.
     const existingIds = new Set(rows.map((r) => r.id));
-
-    const [analyzedPerThreadRaw, threadRows, outgoingRows] = await Promise.all([
-      canonicalIds.length > 0
-        ? prisma.incomingEmail.findMany({
-            where: {
-              shop,
-              canonicalThreadId: { in: canonicalIds },
-              analysisResult: { not: null },
-            },
-            orderBy: { receivedAt: "desc" },
-            distinct: ["canonicalThreadId"],
-            include: {
-              replyDraft: { include: { attachments: true } },
-              incomingAttachments: {
-                select: { id: true, fileName: true, mimeType: true, sizeBytes: true, disposition: true, contentId: true, inlineData: true },
-              },
-            },
-          })
-        : Promise.resolve([] as typeof rows),
-      canonicalIds.length > 0
-        ? prisma.thread.findMany({
-            where: { id: { in: canonicalIds } },
-            select: {
-              id: true,
-              createdAt: true,
-              supportNature: true,
-              operationalState: true,
-              previousOperationalState: true,
-              historyStatus: true,
-              resolvedOrderNumber: true,
-              resolvedTrackingNumber: true,
-              resolvedEmail: true,
-              resolvedCustomerName: true,
-              resolutionConfidence: true,
-            },
-          })
-        : Promise.resolve([] as Array<{ id: string; createdAt: Date; supportNature: string; operationalState: string; previousOperationalState: string | null; historyStatus: string; resolvedOrderNumber: string | null; resolvedTrackingNumber: string | null; resolvedEmail: string | null; resolvedCustomerName: string | null; resolutionConfidence: string }>),
-      prisma.incomingEmail.findMany({
-        where: { shop, processingStatus: "outgoing" },
-        select: { canonicalThreadId: true, receivedAt: true },
-      }),
-    ]);
-
-    const extraRows = analyzedPerThreadRaw.filter((r) => !existingIds.has(r.id));
-    emails = [...rows, ...extraRows].map(serializeEmail);
-
-    let threadCreatedAt = new Map<string, Date>();
-    threadStates = Object.fromEntries(
-      threadRows.map((t) => [t.id, serializeThreadState(t)]),
-    );
-    threadCreatedAt = new Map(threadRows.map((t) => [t.id, t.createdAt]));
-
-    // Cross-thread prior contact: find customer addresses and order numbers
-    // that the shop has already replied to in OTHER threads (outgoing present).
-    // Done in DB so it covers all history, not just the 500-email window.
-    //
-    // Badge condition: the OTHER thread has an outgoing message sent BEFORE
-    // the current thread was created — i.e. we had already been in contact
-    // before this thread even started.
-    // Map: threadId → earliest AND latest outgoing date in that thread
-    const earliestOutgoingByThread = new Map<string, number>();
-    const latestOutgoingByThread = new Map<string, number>();
-    for (const r of outgoingRows) {
-      if (!r.canonicalThreadId) continue;
-      const t = r.receivedAt.getTime();
-      const prevEarliest = earliestOutgoingByThread.get(r.canonicalThreadId) ?? Infinity;
-      if (t < prevEarliest) earliestOutgoingByThread.set(r.canonicalThreadId, t);
-      const prevLatest = latestOutgoingByThread.get(r.canonicalThreadId) ?? -Infinity;
-      if (t > prevLatest) latestOutgoingByThread.set(r.canonicalThreadId, t);
-    }
-    const repliedCanonicalIds = [...earliestOutgoingByThread.keys()];
-
-    const [repliedAddressRows, repliedThreadMetaRows] = await Promise.all([
-      repliedCanonicalIds.length > 0
-        ? prisma.incomingEmail.findMany({
-            where: {
-              shop,
-              canonicalThreadId: { in: repliedCanonicalIds },
-              processingStatus: { not: "outgoing" },
-            },
-            select: { fromAddress: true, canonicalThreadId: true },
-          })
-        : Promise.resolve([] as Array<{ fromAddress: string; canonicalThreadId: string | null }>),
-      repliedCanonicalIds.length > 0
-        ? prisma.thread.findMany({
-            where: { id: { in: repliedCanonicalIds } },
-            select: { id: true, resolvedOrderNumber: true },
-          })
-        : Promise.resolve([] as Array<{ id: string; resolvedOrderNumber: string | null }>),
-    ]);
-
-    // Map: lowercase address → set of threadIds where we replied.
-    // Shared system sender addresses (Shopify contact form forwards, etc.)
-    // are excluded: they're not real customer identities and would match
-    // every forwarded message, making the "same address" signal noise.
-    const SHARED_SYSTEM_ADDRESSES = new Set([
-      "mailer@shopify.com",
-      "noreply@shopify.com",
-      "no-reply@shopify.com",
-    ]);
-    const addressRepliedIn = new Map<string, Set<string>>();
-    for (const r of repliedAddressRows) {
-      if (!r.canonicalThreadId) continue;
-      const addr = r.fromAddress.toLowerCase();
-      if (SHARED_SYSTEM_ADDRESSES.has(addr)) continue;
-      if (!addressRepliedIn.has(addr)) addressRepliedIn.set(addr, new Set());
-      addressRepliedIn.get(addr)!.add(r.canonicalThreadId);
-    }
-    // Map: orderNumber → set of threadIds where we replied
-    const orderRepliedIn = new Map<string, Set<string>>();
-    for (const r of repliedThreadMetaRows) {
-      if (!r.resolvedOrderNumber) continue;
-      if (!orderRepliedIn.has(r.resolvedOrderNumber)) orderRepliedIn.set(r.resolvedOrderNumber, new Set());
-      orderRepliedIn.get(r.resolvedOrderNumber)!.add(r.id);
-    }
-    // Build lookup: canonicalThreadId → { byAddress, byOrder, recentReply }
-    // - byAddress / byOrder: other thread had an outgoing BEFORE this thread was created
-    // - recentReply: other thread had an outgoing AFTER the latest incoming of this
-    //   thread (relevant for to_process threads: we may have already replied elsewhere
-    //   after the customer sent this message)
-    const priorContactByThread: Record<string, { byAddress: boolean; byOrder: boolean; recentReply: boolean; matchedAddress: string | null }> = {};
-    for (const id of canonicalIds) {
-      const state = threadStates[id];
-      const currentCreatedAt = threadCreatedAt.get(id);
-      if (!currentCreatedAt) continue;
-      const incomingMsgs = rows.filter(
-        (r) => r.canonicalThreadId === id && r.processingStatus !== "outgoing",
-      );
-      const latestIncomingAt = incomingMsgs.reduce(
-        (max, r) => (r.receivedAt.getTime() > max ? r.receivedAt.getTime() : max),
-        0,
-      );
-      // Use the earliest real incoming message date as the reference point for "prior contact".
-      // thread.createdAt reflects the DB insertion time (backfill date), not the actual first
-      // customer message — using it would cause false positives for backfilled threads.
-      const earliestIncomingAt = incomingMsgs.reduce(
-        (min, r) => (r.receivedAt.getTime() < min ? r.receivedAt.getTime() : min),
-        Infinity,
-      );
-      const threadStartedAt = earliestIncomingAt < Infinity ? earliestIncomingAt : currentCreatedAt.getTime();
-      // Filter out shared system sender addresses: matching on them is noise,
-      // not a real customer-identity signal.
-      const addrs = incomingMsgs
-        .map((r) => r.fromAddress.toLowerCase())
-        .filter((a) => !SHARED_SYSTEM_ADDRESSES.has(a));
-      // Other thread sent outgoing BEFORE the first real message of this thread
-      const hadEarlierReply = (tid: string) =>
-        tid !== id && (earliestOutgoingByThread.get(tid) ?? Infinity) < threadStartedAt;
-      // Other thread sent outgoing AFTER latest incoming of this thread
-      const hasRecentReply = (tid: string) =>
-        tid !== id && latestIncomingAt > 0 &&
-        (latestOutgoingByThread.get(tid) ?? -Infinity) > latestIncomingAt;
-      let matchedAddress: string | null = null;
-      const byAddress = addrs.some((addr) => {
-        const ids = addressRepliedIn.get(addr);
-        const hit = ids ? [...ids].some(hadEarlierReply) : false;
-        if (hit && !matchedAddress) matchedAddress = addr;
-        return hit;
+    let extraRows: typeof rows = [];
+    if (canonicalIds.length > 0) {
+      const analyzedPerThread = await prisma.incomingEmail.findMany({
+        where: {
+          shop,
+          canonicalThreadId: { in: canonicalIds },
+          analysisResult: { not: null },
+        },
+        orderBy: { receivedAt: "desc" },
+        distinct: ["canonicalThreadId"],
+        include: {
+          replyDraft: { include: { attachments: true } },
+          incomingAttachments: {
+            select: { id: true, fileName: true, mimeType: true, sizeBytes: true, disposition: true, contentId: true, inlineData: true },
+          },
+        },
       });
-      const byOrder = !!state?.resolvedOrderNumber && (() => {
-        const ids = orderRepliedIn.get(state.resolvedOrderNumber!);
-        return ids ? [...ids].some(hadEarlierReply) : false;
-      })();
-      const recentReply =
-        addrs.some((addr) => {
-          const ids = addressRepliedIn.get(addr);
-          return ids ? [...ids].some(hasRecentReply) : false;
-        }) ||
-        (!!state?.resolvedOrderNumber && (() => {
-          const ids = orderRepliedIn.get(state.resolvedOrderNumber!);
-          return ids ? [...ids].some(hasRecentReply) : false;
-        })());
-      if (byAddress || byOrder || recentReply) priorContactByThread[id] = { byAddress, byOrder, recentReply, matchedAddress };
+      extraRows = analyzedPerThread.filter((r) => !existingIds.has(r.id));
     }
-    priorContact = priorContactByThread;
+
+    emails = [...rows, ...extraRows].map(serializeEmail);
+    let threadCreatedAt = new Map<string, Date>();
+    if (canonicalIds.length > 0) {
+      const threads = await prisma.thread.findMany({
+        where: { id: { in: canonicalIds } },
+        select: {
+          id: true,
+          createdAt: true,
+          supportNature: true,
+          operationalState: true,
+          previousOperationalState: true,
+          historyStatus: true,
+          resolvedOrderNumber: true,
+          resolvedTrackingNumber: true,
+          resolvedEmail: true,
+          resolvedCustomerName: true,
+          resolutionConfidence: true,
+        },
+      });
+      threadStates = Object.fromEntries(
+        threads.map((t) => [t.id, serializeThreadState(t)]),
+      );
+      threadCreatedAt = new Map(threads.map((t) => [t.id, t.createdAt]));
+    }
+
+    priorContact = await computePriorContact(shop, canonicalIds, rows, threadStates, threadCreatedAt);
   }
 
   // Build auth URLs for both providers (only shown when not connected)
@@ -268,7 +150,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   // Check if a heavy background job is still pending or running for this shop.
   // This lets the UI warn the user that badges / states may not yet be final.
-  // Run in parallel with the connection block above (only depends on shop).
   const activeHeavyJob = await prisma.syncJob.findFirst({
     where: {
       shop,
@@ -301,274 +182,77 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 // Action
 // ---------------------------------------------------------------------------
 
-/**
- * Reanalyze the email if its last analysis is older than 1h (or never ran).
- * Used right before draft regeneration / refinement so the draft is built
- * from fresh tracking + Shopify data without forcing the merchant to click.
- * Failures are logged but never block the originating action.
- */
-async function maybeRefreshAnalysis(
-  emailId: string,
-  admin: AdminGraphqlClient,
-  shop: string,
-): Promise<void> {
-  if (!emailId) return;
-  const record = await prisma.incomingEmail.findUnique({
-    where: { id: emailId },
-    select: { shop: true, lastAnalyzedAt: true, processingStatus: true },
-  });
-  if (!record || record.shop !== shop) return;
-  // Only refresh emails that have already been analyzed at least once.
-  if (record.processingStatus !== "analyzed") return;
-  if (!isAnalysisStale(record.lastAnalyzedAt, ANALYSIS_FRESHNESS_MS.draftTrigger)) return;
-  try {
-    await reanalyzeEmail(emailId, admin, shop);
-  } catch (err) {
-    console.error(`[inbox] auto-reanalyze before draft failed for email=${emailId}:`, err);
-  }
-}
-
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
+  const shop = session.shop;
   const formData = await request.formData();
   const intent = String(formData.get("_action") ?? "");
 
   if (intent === "disconnect") {
-    await deleteConnection(session.shop);
-    return { disconnected: true, report: null, reanalyzed: null, refined: null, stopped: false };
+    return handleDisconnect({ shop });
   }
 
   if (intent === "stop") {
-    await prisma.mailConnection.update({
-      where: { shop: session.shop },
-      data: { syncCancelledAt: new Date() },
-    });
-    return { stopped: true, report: null, disconnected: false, reanalyzed: null, refined: null };
+    return handleStop({ shop });
   }
 
   if (intent === "resync") {
-    // Capture threads where the agent has engaged BEFORE deleting emails
-    // (ReplyDraft cascades on IncomingEmail deletion, so we'd lose this
-    // signal otherwise). These are preserved as confirmed_support across
-    // the resync so user work isn't wiped.
-    const engagedThreads = await prisma.incomingEmail.findMany({
-      where: { shop: session.shop, replyDraft: { isNot: null } },
-      select: { canonicalThreadId: true },
-    });
-    const engagedThreadIds = Array.from(
-      new Set(
-        engagedThreads
-          .map((e) => e.canonicalThreadId)
-          .filter((id): id is string => id !== null),
-      ),
-    );
-
-    await prisma.$transaction([
-      prisma.incomingEmail.deleteMany({ where: { shop: session.shop } }),
-      prisma.thread.updateMany({
-        where: {
-          shop: session.shop,
-          supportNature: { in: ["needs_review", "probable_support", "confirmed_support", "mixed"] },
-          previousOperationalState: null,
-          id: { notIn: engagedThreadIds },
-        },
-        data: { supportNature: "unknown" },
-      }),
-      prisma.mailConnection.update({
-        where: { shop: session.shop },
-        data: { historyId: null, lastSyncAt: null, onboardingBackfillDoneAt: null },
-      }),
-    ]);
-    await enqueueJob(session.shop, "resync");
-    return { syncStarted: true, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
+    return handleResync({ shop });
   }
 
   if (intent === "reclassify") {
-    await enqueueJob(session.shop, "reclassify");
-    return { syncStarted: true, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
+    return handleReclassify({ shop });
   }
 
   if (intent === "sync") {
-    // Run inline — incremental sync with cursor is fast (seconds, not minutes).
-    // enqueueJob is reserved for heavy backfill/resync operations. A manual
-    // sync should also refresh stale Shopify/tracking facts, otherwise the
-    // mailbox timestamp can update while the visible tracking stays stale.
-    const report = await processNewEmails(session.shop, admin);
-    const staleRefresh = await refreshStaleAnalysesForShop(session.shop, admin, {
-      maxAgeMs: ANALYSIS_FRESHNESS_MS.autoRefresh,
-    });
-    return { report, syncCompleted: true, disconnected: false, reanalyzed: null, refined: null, stopped: false, staleRefresh };
+    return handleSync({ shop, admin });
   }
 
   if (intent === "backfill") {
     const days = Number(formData.get("days") ?? "60");
-    const afterDate = new Date(Date.now() - Math.max(1, days) * 24 * 3600_000);
-    await enqueueJob(session.shop, "backfill", {
-      afterDateIso: afterDate.toISOString(),
-    });
-    return {
-      syncStarted: true,
-      report: null,
-      disconnected: false,
-      reanalyzed: null,
-      refined: null,
-      stopped: false,
-    };
+    return handleBackfill({ shop, days });
   }
 
   if (intent === "toggleAutoSync") {
     const enable = formData.get("enable") === "1";
-    await prisma.mailConnection.update({
-      where: { shop: session.shop },
-      data: { autoSyncEnabled: enable },
-    });
-    return { report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
+    return handleToggleAutoSync({ shop, enable });
   }
 
   if (intent === "diagnose") {
-    const diagnosis = await runDiagnosis(session.shop);
-    return { diagnosis, report: null, disconnected: false, reanalyzed: null, refined: null };
+    return handleDiagnose({ shop });
   }
 
   if (intent === "reanalyze") {
     const emailId = String(formData.get("emailId") ?? "");
     const skipDraft = formData.get("skipDraft") === "1";
-    const analysis = await reanalyzeEmail(emailId, admin, session.shop, { skipDraft });
-    // When skipDraft, hide the LLM-generated draft from the client so the
-    // user's existing draftReply is preserved in the UI.
-    if (skipDraft && analysis) {
-      analysis.draftReply = undefined;
-    }
-    return { reanalyzed: { emailId, analysis }, report: null, disconnected: false, refined: null };
+    return handleReanalyze({ shop, admin, emailId, skipDraft });
   }
 
   if (intent === "redraft") {
     const emailId = String(formData.get("emailId") ?? "");
-    await maybeRefreshAnalysis(emailId, admin, session.shop);
-    await redraftEmail(emailId, session.shop);
-    return { reanalyzed: null, report: null, disconnected: false, refined: null };
+    return handleRedraft({ shop, admin, emailId });
   }
 
   if (intent === "refresh_email_html") {
     const emailId = String(formData.get("emailId") ?? "");
-    const record = await prisma.incomingEmail.findUnique({
-      where: { id: emailId },
-      select: { shop: true, externalMessageId: true },
-    });
-    if (!record || record.shop !== session.shop) {
-      return { report: null, disconnected: false, reanalyzed: null, refined: null };
-    }
-    const conn = await prisma.mailConnection.findUnique({ where: { shop: session.shop } });
-    if (!conn) return { report: null, disconnected: false, reanalyzed: null, refined: null };
-    try {
-      const client = await getMailClient(session.shop, conn.provider);
-      const msg = await client.getMessage(record.externalMessageId);
-      const msgAttachments = msg.attachments ?? [];
-      console.log(`[refresh_email_html] email=${emailId} hasHtml=${!!msg.bodyHtml} attachments=${msgAttachments.length}`);
-      await prisma.incomingEmail.update({
-        where: { id: emailId },
-        data: {
-          ...(msg.bodyHtml !== undefined ? { bodyHtml: msg.bodyHtml } : {}),
-          hasAttachments: msgAttachments.length > 0,
-        },
-      });
-      if (msgAttachments.length > 0) {
-        await persistEmailAttachments(emailId, session.shop, conn.provider, record.externalMessageId, msgAttachments);
-      }
-      console.log(`[refresh_email_html] done email=${emailId}`);
-    } catch (err) {
-      console.error("[refresh_email_html] failed:", err);
-    }
-    return { report: null, disconnected: false, reanalyzed: null, refined: null };
+    return handleRefreshEmailHtml({ shop, emailId });
   }
 
   if (intent === "refine") {
     const emailId = String(formData.get("emailId") ?? "");
     const instructions = String(formData.get("instructions") ?? "");
     const currentDraft = String(formData.get("currentDraft") ?? "");
-    const record = await prisma.incomingEmail.findUnique({ where: { id: emailId } });
-    if (!record || record.shop !== session.shop || !currentDraft || !instructions) {
-      return { report: null, disconnected: false, reanalyzed: null, refined: null };
-    }
-    await maybeRefreshAnalysis(emailId, admin, session.shop);
-    const newDraft = await refineDraft(currentDraft, instructions, {
-      subject: record.subject,
-      body: record.bodyText,
-    }, {
-      shop: session.shop,
-      emailId: emailId,
-      threadId: record.threadId,
-    });
-    const { upsertReplyDraftBody } = await import("../lib/support/reply-draft");
-    await upsertReplyDraftBody(emailId, session.shop, newDraft);
-    const updatedRD = await prisma.replyDraft.findUnique({
-      where: { emailId },
-      select: { bodyHistory: true },
-    });
-    const history = Array.isArray(updatedRD?.bodyHistory)
-      ? (updatedRD!.bodyHistory as string[])
-      : [];
-    return { refined: { emailId, newDraft, draftHistory: history }, report: null, disconnected: false, reanalyzed: null };
+    return handleRefine({ shop, admin, emailId, instructions, currentDraft });
   }
 
   if (intent === "moveThread") {
     const canonicalThreadId = String(formData.get("canonicalThreadId") ?? "");
     const target = String(formData.get("target") ?? "");
-    // Allowed operational states for manual override
-    const ALLOWED_STATES = new Set([
-      "waiting_merchant",
-      "waiting_customer",
-      "resolved",
-    ]);
-    if (!canonicalThreadId || !ALLOWED_STATES.has(target)) {
-      return { report: null, disconnected: false, reanalyzed: null, refined: null };
-    }
-    // When reopening (moving to waiting_merchant), ensure the thread is
-    // considered support so it doesn't fall into "other".
-    const forceSupport = target === "waiting_merchant" || target === "waiting_customer";
-    const thread = await prisma.thread.findUnique({
-      where: { id: canonicalThreadId },
-      select: { shop: true, supportNature: true, operationalState: true },
-    });
-    if (!thread || thread.shop !== session.shop) {
-      return { report: null, disconnected: false, reanalyzed: null, refined: null };
-    }
-    // When manually resolving, remember where the thread came from.
-    const previousOperationalState =
-      target === "resolved" ? (thread.operationalState ?? null) : null;
-    await prisma.thread.update({
-      where: { id: canonicalThreadId },
-      data: {
-        operationalState: target,
-        previousOperationalState,
-        operationalStateUpdatedAt: new Date(),
-        ...(forceSupport && thread.supportNature !== "confirmed_support"
-          ? { supportNature: "confirmed_support", supportNatureUpdatedAt: new Date() }
-          : {}),
-      },
-    });
-    await recordStateTransition(prisma, {
-      shop: session.shop,
-      threadId: canonicalThreadId,
-      fromState: thread.operationalState ?? null,
-      toState: target,
-    });
-    return { movedThread: { canonicalThreadId, target }, report: null, disconnected: false, reanalyzed: null, refined: null };
+    return handleMoveThread({ shop, canonicalThreadId, target });
   }
 
   if (intent === "editThreadIdentifiers") {
     const canonicalThreadId = String(formData.get("canonicalThreadId") ?? "");
-    if (!canonicalThreadId) {
-      return { report: null, disconnected: false, reanalyzed: null, refined: null };
-    }
-    const thread = await prisma.thread.findUnique({
-      where: { id: canonicalThreadId },
-      select: { shop: true },
-    });
-    if (!thread || thread.shop !== session.shop) {
-      return { report: null, disconnected: false, reanalyzed: null, refined: null };
-    }
-    // Normalize: empty string → null. Strip leading '#' on order number.
     const norm = (v: FormDataEntryValue | null): string | null => {
       const s = (v == null ? "" : String(v)).trim();
       return s === "" ? null : s;
@@ -578,18 +262,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const resolvedTrackingNumber = norm(formData.get("resolvedTrackingNumber"));
     const resolvedEmail = norm(formData.get("resolvedEmail"))?.toLowerCase() ?? null;
     const resolvedCustomerName = norm(formData.get("resolvedCustomerName"));
-    await prisma.thread.update({
-      where: { id: canonicalThreadId },
-      data: {
-        resolvedOrderNumber,
-        resolvedTrackingNumber,
-        resolvedEmail,
-        resolvedCustomerName,
-        // Merchant-provided values are ground truth.
-        resolutionConfidence: "high",
-      },
-    });
-    return { editedThread: { canonicalThreadId }, report: null, disconnected: false, reanalyzed: null, refined: null };
+    return handleEditThreadIdentifiers({ shop, canonicalThreadId, resolvedOrderNumber, resolvedTrackingNumber, resolvedEmail, resolvedCustomerName });
   }
 
   if (intent === "updateClassification") {
@@ -603,13 +276,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         refined: null,
       };
     }
-
     const rawIntents = formData.get("intents");
     const resetIntents = formData.get("resetIntents") === "1";
     const orderChangeType = String(formData.get("orderChangeType") ?? "");
-
-    const edit: import("../lib/support/manual-classification").ClassificationEdit = {};
-
+    const edit: ClassificationEdit = {};
     if (resetIntents) {
       edit.resetIntents = true;
     } else if (typeof rawIntents === "string" && rawIntents.length > 0) {
@@ -625,128 +295,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         };
       }
     }
-
-    const threadOwner = await prisma.thread.findUnique({ where: { id: threadId } });
-    if (!threadOwner || threadOwner.shop !== session.shop) {
-      return { error: "Not found", report: null, disconnected: false, reanalyzed: null, refined: null };
-    }
-
-    try {
-      if (orderChangeType === "candidate") {
-        const orderId = String(formData.get("orderId") ?? "");
-        const candidateJson = String(formData.get("candidate") ?? "");
-        let candidate: ReturnType<typeof JSON.parse> | null = null;
-        if (candidateJson) {
-          try {
-            candidate = JSON.parse(candidateJson);
-          } catch {
-            return { classificationError: "Invalid candidate payload", report: null, disconnected: false, reanalyzed: null, refined: null };
-          }
-        }
-        if (!candidate || candidate.id !== orderId) {
-          return {
-            classificationError: "candidate_mismatch",
-            report: null,
-            disconnected: false,
-            reanalyzed: null,
-            refined: null,
-          };
-        }
-        edit.order = candidate;
-      } else if (orderChangeType === "search") {
-        const { searchOrderByExactNumber } = await import(
-          "../lib/support/manual-classification"
-        );
-        const number = String(formData.get("orderNumber") ?? "");
-        const result = await searchOrderByExactNumber(admin, number);
-        if (result.kind === "not_found") {
-          return {
-            classificationError: "order_not_found",
-            report: null,
-            disconnected: false,
-            reanalyzed: null,
-            refined: null,
-          };
-        }
-        if (result.kind === "ambiguous") {
-          return {
-            classificationError: "order_ambiguous",
-            report: null,
-            disconnected: false,
-            reanalyzed: null,
-            refined: null,
-          };
-        }
-        edit.order = result.order;
-      } else if (orderChangeType === "detach") {
-        edit.detachOrder = true;
-      } else if (orderChangeType === "reset") {
-        edit.resetOrder = true;
-      }
-
-      const { persistClassificationEdit } = await import(
-        "../lib/support/manual-classification"
-      );
-      const persisted = await persistClassificationEdit({
-        shop: session.shop,
-        threadId,
-        edit,
-      });
-      let analysis = persisted.analysis;
-
-      // When the linked order has changed (new order or detach), the previous
-      // tracking facts no longer apply. Refresh tracking only — keep intent
-      // and order as the user just set them.
-      const orderTouched =
-        orderChangeType === "candidate" ||
-        orderChangeType === "search" ||
-        orderChangeType === "detach";
-      if (orderTouched) {
-        try {
-          const { refreshThreadAnalysis } = await import(
-            "../lib/support/refresh-thread-analysis"
-          );
-          analysis = await refreshThreadAnalysis(
-            persisted.emailId,
-            admin,
-            session.shop,
-            { reclassifyIntent: false, reSearchOrder: false, refreshTracking: true },
-          ) as typeof analysis;
-        } catch (err) {
-          console.error("[updateClassification] tracking refresh failed:", err);
-          // Persisted edit still stands; just return the un-refreshed analysis.
-        }
-
-        // refreshThreadAnalysis re-runs mergeThreadIdentifiers which re-extracts
-        // the order number from the email body and overwrites the manual choice
-        // we just made. Re-write Thread.resolvedOrderNumber AFTER the refresh
-        // so the user's edit wins.
-        const finalOrderNumber = analysis.order?.name?.replace(/^#/, "") ?? null;
-        await prisma.thread.update({
-          where: { id: threadId },
-          data: { resolvedOrderNumber: finalOrderNumber },
-        }).catch((err) => {
-          console.error("[updateClassification] thread sync after refresh failed:", err);
-        });
-      }
-
-      return {
-        classificationUpdated: analysis,
-        report: null,
-        disconnected: false,
-        reanalyzed: null,
-        refined: null,
-      };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "unknown";
-      return {
-        classificationError: message,
-        report: null,
-        disconnected: false,
-        reanalyzed: null,
-        refined: null,
-      };
-    }
+    const orderId = String(formData.get("orderId") ?? "");
+    const candidateJson = String(formData.get("candidate") ?? "");
+    const orderNumber = String(formData.get("orderNumber") ?? "");
+    return handleUpdateClassification({ shop, admin, threadId, edit, orderChangeType, orderId, candidateJson, orderNumber });
   }
 
   return { report: null, disconnected: false, reanalyzed: null, refined: null };
@@ -1651,10 +1203,8 @@ function EmailMessageBlock({
   const body = normalizeEmailBody(email.bodyText);
   const PREVIEW_LENGTH = 300;
 
-  const sanitizedHtml = useMemo(
-    () => email.bodyHtml ? sanitizeEmailHtml(email.bodyHtml, buildCidMap(email.incomingAttachments)) : null,
-    [email.id, email.bodyHtml, email.incomingAttachments],
-  );
+  const cidMap = buildCidMap(email.incomingAttachments);
+  const sanitizedHtml = email.bodyHtml ? sanitizeEmailHtml(email.bodyHtml, cidMap) : null;
   const hasHtmlBody = !!sanitizedHtml;
   const hasUnresolvedZohoImages = !!email.bodyHtml?.includes("/mail/ImageDisplay?");
 
@@ -1666,9 +1216,8 @@ function EmailMessageBlock({
   const refreshPending = refreshFetcher.state !== "idle";
   useEffect(() => {
     const needsRefresh = !email.bodyHtml || hasUnresolvedZohoImages;
-    const refreshKey = `${connectedEmail}:${email.id}`;
-    if (needsRefresh && !_refreshedEmailIds.has(refreshKey) && refreshFetcher.state === "idle") {
-      _refreshedEmailIds.add(refreshKey);
+    if (needsRefresh && !_refreshedEmailIds.has(email.id) && refreshFetcher.state === "idle") {
+      _refreshedEmailIds.add(email.id);
       refreshFetcher.submit(
         { _action: "refresh_email_html", emailId: email.id },
         { method: "post" },
@@ -2036,11 +1585,11 @@ function DraftBlock({ email, threadSenderEmail }: {
     }, 800);
   };
 
-  // Clear pending debounce timers on unmount or email switch
+  // Clear pending debounce timers on unmount
   useEffect(() => () => {
     if (metaSaveTimer.current) clearTimeout(metaSaveTimer.current);
     if (bodySaveTimer.current) clearTimeout(bodySaveTimer.current);
-  }, [email.id]);
+  }, []);
 
   // Attach input listener to the s-text-area web component
   useEffect(() => {
@@ -2590,7 +2139,7 @@ function ThreadDetailPanel({
           <div>
             <div style={sectionLabel}>{t("inbox.sectionSuggestedDraft")}</div>
             {draftEmail && !noReplyNeeded ? (
-              <DraftBlock key={draftEmail.id} email={draftEmail} threadSenderEmail={latest.fromAddress} />
+              <DraftBlock email={draftEmail} threadSenderEmail={latest.fromAddress} />
             ) : noReplyNeeded ? (
               <div style={{ fontSize: "0.8125rem", color: "var(--ui-slate-500)", fontStyle: "italic" }}>
                 {t("inbox.noReplyNeededMsg")}
@@ -2856,7 +2405,7 @@ export default function InboxPage() {
 
   const reanalyzed = actionData?.reanalyzed;
   const refined = (actionData as { refined?: { emailId: string; newDraft: string; draftHistory?: string[] } | null })?.refined;
-  const displayEmails = useMemo(() => emails.map((e) => {
+  const displayEmails = emails.map((e) => {
     if (reanalyzed && e.id === reanalyzed.emailId) {
       return {
         ...e,
@@ -2870,11 +2419,13 @@ export default function InboxPage() {
       return { ...e, draftReply: refined.newDraft, draftHistory: refined.draftHistory ?? e.draftHistory };
     }
     return e;
-  }), [emails, reanalyzed, refined]);
+  });
 
-  const threads = useMemo(() => groupByThread(displayEmails), [displayEmails]);
+  const threads = groupByThread(displayEmails);
 
-  const threadMeta = useMemo(() => threads.map((t) => {
+  // Precompute each thread's bucket + classification once for reuse in
+  // counts and filtering. Cheaper than calling the helpers repeatedly.
+  const threadMeta = threads.map((t) => {
     const state =
       (t.latest.canonicalThreadId &&
         loaderData.threadStates?.[t.latest.canonicalThreadId]) ||
@@ -2893,9 +2444,9 @@ export default function InboxPage() {
         matchedAddress: (pc as { matchedAddress?: string | null } | null)?.matchedAddress ?? null,
       },
     };
-  }), [threads, loaderData.threadStates, loaderData.priorContact, loaderData.connectedEmail]);
+  });
 
-  const bucketCounts: Record<OpsBucket | "all" | "to_handle", number> = useMemo(() => ({
+  const bucketCounts: Record<OpsBucket | "all" | "to_handle", number> = {
     all: threadMeta.length,
     to_handle: threadMeta.filter((m) => m.bucket === "to_process" || m.bucket === "waiting_merchant").length,
     to_process: threadMeta.filter((m) => m.bucket === "to_process").length,
@@ -2903,7 +2454,7 @@ export default function InboxPage() {
     waiting_merchant: threadMeta.filter((m) => m.bucket === "waiting_merchant").length,
     resolved: threadMeta.filter((m) => m.bucket === "resolved").length,
     other: threadMeta.filter((m) => m.bucket === "other").length,
-  }), [threadMeta]);
+  };
 
   // Selected thread for the right-side detail panel (searched across ALL threads,
   // not just filtered, so the panel stays open when filters change).
@@ -3120,7 +2671,9 @@ export default function InboxPage() {
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: selectedThreadMeta ? GRID_COLS_WITH_PANEL : GRID_COLS_LIST_ONLY,
+                  gridTemplateColumns: selectedThreadMeta
+                    ? "minmax(0, 1fr) minmax(0, 2fr)"
+                    : "minmax(0, 1fr)",
                   gap: "16px",
                   alignItems: "start",
                 }}
