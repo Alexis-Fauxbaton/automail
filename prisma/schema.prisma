@@ -265,7 +265,14 @@ model ReplyDraft {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  /// Retrospective draft-usage bucket. null = pending (no outgoing synced yet).
+  /// Values: "as_is" | "edited" | "ignored"
+  heuristicBucket      String?
+  /// Timestamp of last heuristic computation.
+  heuristicComputedAt  DateTime?
+
   @@index([shop])
+  @@index([shop, heuristicBucket, createdAt])
 }
 
 model DraftAttachment {
