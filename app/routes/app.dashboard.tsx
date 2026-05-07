@@ -197,6 +197,7 @@ const ResponseTimeBarChart = lazy(() =>
 function QualityChartClient({ data }: { data: ResponseTimeDailyPoint[] }) {
   const [mounted, setMounted] = useState(false);
   const [tab, setTab] = useState<"volume" | "time">("volume");
+  const { t } = useTranslation();
   useEffect(() => setMounted(true), []);
 
   const tabStyle = (active: boolean): React.CSSProperties => ({
@@ -215,10 +216,10 @@ function QualityChartClient({ data }: { data: ResponseTimeDailyPoint[] }) {
     <div>
       <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
         <button style={tabStyle(tab === "volume")} onClick={() => setTab("volume")}>
-          Emails support par jour
+          {t("dashboard.qualityTabVolume")}
         </button>
         <button style={tabStyle(tab === "time")} onClick={() => setTab("time")}>
-          Délai médian de 1re réponse
+          {t("dashboard.qualityTabTime")}
         </button>
       </div>
       {!mounted ? (
@@ -240,9 +241,11 @@ function QualityChartClient({ data }: { data: ResponseTimeDailyPoint[] }) {
 // Productivity chart (stacked bars by bucket) — SSR-safe lazy
 // ---------------------------------------------------------------------------
 
+type BucketLabels = { as_is: string; edited: string; ignored: string };
+
 const StackedDailyBars = lazy(() =>
   import("recharts").then((mod) => ({
-    default: function StackedBarsInner({ data }: { data: ProductivityDailyPoint[] }) {
+    default: function StackedBarsInner({ data, labels }: { data: ProductivityDailyPoint[]; labels: BucketLabels }) {
       const {
         BarChart, Bar, XAxis, YAxis, Tooltip,
         ResponsiveContainer, CartesianGrid, Legend,
@@ -268,13 +271,13 @@ const StackedDailyBars = lazy(() =>
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               formatter={(value: any, name: any) => [
                 value,
-                name === "as_is" ? "Envoyé tel quel" : name === "edited" ? "Modifié" : "Ignoré",
+                name === "as_is" ? labels.as_is : name === "edited" ? labels.edited : labels.ignored,
               ]}
               contentStyle={{ fontSize: 12, borderRadius: 12, border: "1px solid #e2e8f0" }}
             />
             <Legend
               formatter={(v: string) =>
-                v === "as_is" ? "Tel quel" : v === "edited" ? "Modifié" : "Ignoré"
+                v === "as_is" ? labels.as_is : v === "edited" ? labels.edited : labels.ignored
               }
               iconSize={10}
               wrapperStyle={{ fontSize: 12 }}
@@ -291,11 +294,17 @@ const StackedDailyBars = lazy(() =>
 
 function ProductivityChartClient({ data }: { data: ProductivityDailyPoint[] }) {
   const [mounted, setMounted] = useState(false);
+  const { t } = useTranslation();
   useEffect(() => setMounted(true), []);
+  const labels: BucketLabels = {
+    as_is: t("dashboard.draftAsIsLabel"),
+    edited: t("dashboard.draftEditedLabel"),
+    ignored: t("dashboard.draftIgnoredLabel"),
+  };
   if (!mounted) return <div style={{ height: 260 }} />;
   return (
     <Suspense fallback={<div style={{ height: 260 }} />}>
-      <StackedDailyBars data={data} />
+      <StackedDailyBars data={data} labels={labels} />
     </Suspense>
   );
 }
@@ -473,9 +482,9 @@ export default function Dashboard() {
           value={kpis.draftUsage.sentPct !== null ? `${kpis.draftUsage.sentPct}%` : "—"}
           helper={
             draftVariation
-              ? `${draftVariation} · ${kpis.draftUsage.asIs} tel quel · ${kpis.draftUsage.edited} modifié · ${kpis.draftUsage.ignored} ignoré`
+              ? `${draftVariation} · ${kpis.draftUsage.asIs} ${t("dashboard.draftAsIs")} · ${kpis.draftUsage.edited} ${t("dashboard.draftEdited")} · ${kpis.draftUsage.ignored} ${t("dashboard.draftIgnored")}`
               : kpis.draftUsage.sentPct !== null
-                ? `${kpis.draftUsage.asIs} tel quel · ${kpis.draftUsage.edited} modifié · ${kpis.draftUsage.ignored} ignoré`
+                ? `${kpis.draftUsage.asIs} ${t("dashboard.draftAsIs")} · ${kpis.draftUsage.edited} ${t("dashboard.draftEdited")} · ${kpis.draftUsage.ignored} ${t("dashboard.draftIgnored")}`
                 : t("dashboard.noData", { defaultValue: "Pas encore de données" })
           }
           helperTone={draftTone}
