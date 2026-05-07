@@ -143,10 +143,13 @@ const QualityCombinedChart = lazy(() =>
             <YAxis
               yAxisId="time"
               orientation="right"
+              domain={["auto", "auto"]}
               tickFormatter={(v: number) =>
                 v >= 3_600_000
                   ? `${(v / 3_600_000).toFixed(0)}h`
-                  : `${Math.round(v / 60_000)}m`
+                  : v >= 60_000
+                    ? `${Math.round(v / 60_000)}m`
+                    : "0"
               }
               tick={{ fontSize: 11, fill: "#64748b" }}
               axisLine={false}
