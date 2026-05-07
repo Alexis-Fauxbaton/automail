@@ -335,7 +335,7 @@ async function isCancelled(shop: string, syncStartedAt: Date): Promise<boolean> 
  * Pass 1: fetch the remote message, store it in DB, and run the free
  * regex prefilter. LLM-based tiers are deferred to Pass 2.
  */
-async function ingestAndPrefilter(
+export async function ingestAndPrefilter(
   shop: string,
   provider: string,
   client: MailClient,
@@ -892,7 +892,7 @@ async function pickThreadsForClassification(
  * analysis + draft) on the given record. Thread context (incoming AND
  * outgoing) is pulled from DB — it was fully populated in Pass 1.
  */
-async function classifyAndDraft(
+export async function classifyAndDraft(
   shop: string,
   admin: AdminGraphqlClient,
   client: MailClient,

@@ -1,12 +1,8 @@
 import prisma from "../app/db.server.js";
 
 const rows = await prisma.incomingEmail.findMany({
-  where: {
-    shop: "2ed20e.myshopify.com",
-    receivedAt: { gte: new Date(Date.now() - 6 * 60 * 60 * 1000) },
-  },
-  orderBy: { receivedAt: "desc" },
-  take: 10,
+  where: { id: "cmovjufso000k784ozkxj94p6" },
+  take: 1,
   select: {
     id: true,
     shop: true,
@@ -22,6 +18,13 @@ const rows = await prisma.incomingEmail.findMany({
     lastAnalyzedAt: true,
     analysisResult: true,
     bodyText: true,
+    bodyHtml: true,
+    snippet: true,
+    externalMessageId: true,
+    errorMessage: true,
+    rfcMessageId: true,
+    inReplyTo: true,
+    rfcReferences: true,
   },
 });
 
