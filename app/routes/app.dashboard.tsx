@@ -215,10 +215,10 @@ function QualityChartClient({ data }: { data: ResponseTimeDailyPoint[] }) {
     <div>
       <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
         <button style={tabStyle(tab === "volume")} onClick={() => setTab("volume")}>
-          Volume
+          Emails support par jour
         </button>
         <button style={tabStyle(tab === "time")} onClick={() => setTab("time")}>
-          Délai médian
+          Délai médian de 1re réponse
         </button>
       </div>
       {!mounted ? (
