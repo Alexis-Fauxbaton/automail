@@ -225,49 +225,67 @@ export async function getResponseTimeDailyBreakdown(
   start: Date,
   end: Date,
 ): Promise<ResponseTimeDailyPoint[]> {
-  type Row = { day: Date; support: bigint; median_ms: number | null };
-  const rows = await prisma.$queryRaw<Row[]>`
-    WITH threads AS (
-      SELECT
-        t.id,
-        t."firstMessageAt",
-        DATE_TRUNC('day', t."firstMessageAt" AT TIME ZONE ${TZ})::date AS day,
-        MIN(e."receivedAt") AS first_outgoing_at
-      FROM "Thread" t
-      LEFT JOIN "IncomingEmail" e
-        ON e."canonicalThreadId" = t.id
-        AND e."processingStatus" = 'outgoing'
-        AND e."receivedAt" > t."firstMessageAt"
-      WHERE t.shop = ${shop}
-        AND t."firstMessageAt" >= ${start}
-        AND t."firstMessageAt" < ${end}
-        AND t."supportNature" IN ('confirmed_support', 'probable_support')
-        AND NOT EXISTS (
-          SELECT 1 FROM "IncomingEmail" fe
-          WHERE fe."canonicalThreadId" = t.id
-            AND fe."processingStatus" = 'outgoing'
-            AND fe."receivedAt" <= t."firstMessageAt"
-        )
-      GROUP BY t.id, t."firstMessageAt"
-    )
-    SELECT
-      day,
-      COUNT(*)::bigint AS support,
-      PERCENTILE_CONT(0.5) WITHIN GROUP (
-        ORDER BY EXTRACT(EPOCH FROM (first_outgoing_at - "firstMessageAt")) * 1000
-      ) FILTER (WHERE first_outgoing_at IS NOT NULL) AS median_ms
-    FROM threads
-    GROUP BY day
-    ORDER BY day
-  `;
+  // Two aggregations on different time fields:
+  //  - support: emails received per day (consistent with Volume KPI)
+  //  - medianMs: median first-response time for threads STARTED that day
+  //              (re-opened threads don't have a "first response" — they had it earlier)
+  type EmailRow = { day: Date; count: bigint };
+  type MedianRow = { day: Date; median_ms: number | null };
 
-  const byDay = new Map<string, { support: number; medianMs: number | null }>();
-  for (const row of rows) {
-    byDay.set(toLocalDay(row.day), {
-      support: Number(row.support),
-      medianMs: row.median_ms != null ? Number(row.median_ms) : null,
-    });
-  }
+  const [emailRows, medianRows] = await Promise.all([
+    prisma.$queryRaw<EmailRow[]>`
+      SELECT DATE_TRUNC('day', e."receivedAt" AT TIME ZONE ${TZ})::date AS day,
+             COUNT(*)::bigint AS count
+      FROM "IncomingEmail" e
+      LEFT JOIN "Thread" t ON t.id = e."canonicalThreadId"
+      WHERE e.shop = ${shop}
+        AND e."receivedAt" >= ${start}
+        AND e."receivedAt" < ${end}
+        AND e."processingStatus" != 'outgoing'
+        AND (e."tier2Result" = 'support_client'
+             OR t."supportNature" IN ('confirmed_support', 'probable_support'))
+      GROUP BY 1
+      ORDER BY 1
+    `,
+    prisma.$queryRaw<MedianRow[]>`
+      WITH threads AS (
+        SELECT
+          t.id,
+          t."firstMessageAt",
+          DATE_TRUNC('day', t."firstMessageAt" AT TIME ZONE ${TZ})::date AS day,
+          MIN(e."receivedAt") AS first_outgoing_at
+        FROM "Thread" t
+        LEFT JOIN "IncomingEmail" e
+          ON e."canonicalThreadId" = t.id
+          AND e."processingStatus" = 'outgoing'
+          AND e."receivedAt" > t."firstMessageAt"
+        WHERE t.shop = ${shop}
+          AND t."firstMessageAt" >= ${start}
+          AND t."firstMessageAt" < ${end}
+          AND t."supportNature" IN ('confirmed_support', 'probable_support')
+          AND NOT EXISTS (
+            SELECT 1 FROM "IncomingEmail" fe
+            WHERE fe."canonicalThreadId" = t.id
+              AND fe."processingStatus" = 'outgoing'
+              AND fe."receivedAt" <= t."firstMessageAt"
+          )
+        GROUP BY t.id, t."firstMessageAt"
+      )
+      SELECT
+        day,
+        PERCENTILE_CONT(0.5) WITHIN GROUP (
+          ORDER BY EXTRACT(EPOCH FROM (first_outgoing_at - "firstMessageAt")) * 1000
+        ) FILTER (WHERE first_outgoing_at IS NOT NULL) AS median_ms
+      FROM threads
+      GROUP BY day
+      ORDER BY day
+    `,
+  ]);
+
+  const supportByDay = new Map<string, number>();
+  for (const row of emailRows) supportByDay.set(toLocalDay(row.day), Number(row.count));
+  const medianByDay = new Map<string, number | null>();
+  for (const row of medianRows) medianByDay.set(toLocalDay(row.day), row.median_ms != null ? Number(row.median_ms) : null);
 
   const points: ResponseTimeDailyPoint[] = [];
   const cursor = new Date(start);
@@ -275,8 +293,11 @@ export async function getResponseTimeDailyBreakdown(
   const endDay = toLocalDay(end);
   while (toLocalDay(cursor) <= endDay) {
     const day = toLocalDay(cursor);
-    const data = byDay.get(day) ?? { support: 0, medianMs: null };
-    points.push({ date: day, ...data });
+    points.push({
+      date: day,
+      support: supportByDay.get(day) ?? 0,
+      medianMs: medianByDay.get(day) ?? null,
+    });
     cursor.setUTCDate(cursor.getUTCDate() + 1);
   }
   return points;
@@ -571,39 +592,6 @@ export async function getReopenedThreads(
 // Baseline helpers (rolling average over prior windows)
 // ---------------------------------------------------------------------------
 
-async function _baselineThreadCount(
-  shop: string,
-  range: string,
-  currentStart: Date,
-  where: Prisma.ThreadWhereInput,
-): Promise<number | null> {
-  if (range === "90d" || range === "custom") return null;
-
-  const durationMs =
-    range === "24h" ? 24 * 60 * 60 * 1000
-    : range === "7d" ? 7 * 24 * 60 * 60 * 1000
-    : 30 * 24 * 60 * 60 * 1000;
-  const windowCount = range === "24h" ? 4 : range === "7d" ? 4 : 3;
-
-  const counts = await Promise.all(
-    Array.from({ length: windowCount }, (_, i) => {
-      let s: Date, e: Date;
-      if (range === "24h") {
-        // Same DOW baseline: step back by 1 week per window
-        s = new Date(currentStart.getTime() - (i + 1) * 7 * 24 * 60 * 60 * 1000);
-        e = new Date(s.getTime() + durationMs);
-      } else {
-        e = new Date(currentStart.getTime() - i * durationMs);
-        s = new Date(e.getTime() - durationMs);
-      }
-      return prisma.thread.count({
-        where: { ...where, firstMessageAt: { gte: s, lt: e } },
-      });
-    }),
-  );
-  return counts.reduce((a, b) => a + b, 0) / counts.length;
-}
-
 async function _baselineEventCount(
   shop: string,
   range: string,
@@ -652,10 +640,24 @@ export async function getAlerts(
     supportNature: { in: ["confirmed_support", "probable_support"] as string[] },
   };
 
+  // Volume = emails received (consistent with the KPI "Emails support")
+  const countSupportEmails = (s: Date, e: Date) =>
+    prisma.incomingEmail.count({
+      where: {
+        shop,
+        receivedAt: { gte: s, lt: e },
+        processingStatus: { not: "outgoing" },
+        OR: [
+          { tier2Result: "support_client" },
+          { thread: { supportNature: { in: ["confirmed_support", "probable_support"] } } },
+        ],
+      },
+    });
+
   const [currentVolume, baselineVolume, reopened, baselineReopened] =
     await Promise.all([
-      prisma.thread.count({ where: { ...supportWhere, firstMessageAt: { gte: start, lt: end } } }),
-      _baselineThreadCount(shop, range, start, supportWhere),
+      countSupportEmails(start, end),
+      _baselineEventCount(shop, range, start, countSupportEmails),
       prisma.threadStateHistory.count({
         where: {
           shop,
