@@ -47,8 +47,8 @@ export async function action({ request }: ActionFunctionArgs) {
   if (replyMode !== undefined) updateData.replyMode = replyMode;
 
   if (draftBody !== undefined) {
-    const { upsertReplyDraftBody } = await import("../lib/support/reply-draft");
-    await upsertReplyDraftBody(emailId, shop, draftBody);
+    const { updateReplyDraftBody } = await import("../lib/support/reply-draft");
+    await updateReplyDraftBody(emailId, shop, draftBody);
     if (Object.keys(updateData).length > 0) {
       await prisma.replyDraft.upsert({
         where: { emailId },
