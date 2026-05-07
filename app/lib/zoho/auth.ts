@@ -14,7 +14,7 @@ function getZohoAccountsDomain(): string {
 
 const SCOPES = "ZohoMail.messages.ALL,ZohoMail.accounts.READ,ZohoMail.folders.READ";
 
-function getZohoApiDomain(): string {
+export function getZohoApiDomain(): string {
   return process.env.ZOHO_API_DOMAIN || "mail.zoho.com";
 }
 
