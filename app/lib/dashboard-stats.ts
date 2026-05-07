@@ -701,3 +701,307 @@ export async function getDashboardKpis(
     volume: { count: volume, prevCount: prevVolume },
   };
 }
+
+// ---------------------------------------------------------------------------
+// Heatmap (volume by day-of-week × hour)
+// ---------------------------------------------------------------------------
+
+export async function getHeatmap(
+  shop: string,
+  start: Date,
+  end: Date,
+): Promise<HeatmapCell[]> {
+  type Row = { dow: number; hour: number; count: bigint };
+  const rows = await prisma.$queryRaw<Row[]>`
+    SELECT
+      EXTRACT(DOW  FROM e."receivedAt" AT TIME ZONE 'Europe/Paris')::int AS dow,
+      EXTRACT(HOUR FROM e."receivedAt" AT TIME ZONE 'Europe/Paris')::int AS hour,
+      COUNT(*)::bigint AS count
+    FROM "IncomingEmail" e
+    LEFT JOIN "Thread" t ON t.id = e."canonicalThreadId"
+    WHERE e.shop = ${shop}
+      AND e."receivedAt" >= ${start}
+      AND e."receivedAt" < ${end}
+      AND e."processingStatus" != 'outgoing'
+      AND (
+        e."tier2Result" = 'support_client'
+        OR t."supportNature" IN ('confirmed_support', 'probable_support')
+      )
+    GROUP BY 1, 2
+    ORDER BY 1, 2
+  `;
+  return rows.map((r) => ({
+    dow: Number(r.dow),
+    hour: Number(r.hour),
+    count: Number(r.count),
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Top intents with median response time
+// ---------------------------------------------------------------------------
+
+export async function getTopIntentsWithPerf(
+  shop: string,
+  start: Date,
+  end: Date,
+  limit = 5,
+): Promise<IntentPerf[]> {
+  type Row = { intent: string; count: bigint; median_ms: number | null };
+  const rows = await prisma.$queryRaw<Row[]>`
+    WITH latest_intent AS (
+      SELECT DISTINCT ON (e."canonicalThreadId")
+        e."canonicalThreadId",
+        e."detectedIntent"
+      FROM "IncomingEmail" e
+      WHERE e.shop = ${shop}
+        AND e."detectedIntent" IS NOT NULL
+        AND e."canonicalThreadId" IS NOT NULL
+      ORDER BY e."canonicalThreadId", e."receivedAt" DESC
+    ),
+    thread_response AS (
+      SELECT
+        t.id,
+        EXTRACT(EPOCH FROM (MIN(oe."receivedAt") - t."firstMessageAt")) * 1000 AS resp_ms
+      FROM "Thread" t
+      JOIN "IncomingEmail" oe
+        ON oe."canonicalThreadId" = t.id
+        AND oe."processingStatus" = 'outgoing'
+        AND oe."receivedAt" > t."firstMessageAt"
+      WHERE t.shop = ${shop}
+        AND t."firstMessageAt" >= ${start}
+        AND t."firstMessageAt" < ${end}
+        AND t."supportNature" IN ('confirmed_support', 'probable_support')
+      GROUP BY t.id, t."firstMessageAt"
+    )
+    SELECT
+      li."detectedIntent" AS intent,
+      COUNT(*)::bigint AS count,
+      PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY tr.resp_ms) AS median_ms
+    FROM "Thread" t
+    JOIN latest_intent li ON li."canonicalThreadId" = t.id
+    LEFT JOIN thread_response tr ON tr.id = t.id
+    WHERE t.shop = ${shop}
+      AND t."firstMessageAt" >= ${start}
+      AND t."firstMessageAt" < ${end}
+      AND t."supportNature" IN ('confirmed_support', 'probable_support')
+    GROUP BY li."detectedIntent"
+    ORDER BY count DESC
+    LIMIT ${limit}
+  `;
+  return rows.map((r) => ({
+    intent: r.intent,
+    count: Number(r.count),
+    medianMs: r.median_ms != null ? Number(r.median_ms) : null,
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Reopened threads (most re-opened in period)
+// ---------------------------------------------------------------------------
+
+export async function getReopenedThreads(
+  shop: string,
+  start: Date,
+  end: Date,
+  limit = 10,
+): Promise<ReopenedThread[]> {
+  const rows = await prisma.threadStateHistory.groupBy({
+    by: ["threadId"],
+    where: {
+      shop,
+      fromState: "resolved",
+      NOT: { toState: "resolved" },
+      changedAt: { gte: start, lt: end },
+    },
+    _count: { _all: true },
+    _max: { changedAt: true },
+    orderBy: [
+      { _count: { threadId: "desc" } },
+      { _max: { changedAt: "desc" } },
+    ],
+    take: limit,
+  });
+  return rows.map((r) => ({
+    threadId: r.threadId,
+    reopenCount: r._count._all,
+    lastReopenedAt: r._max.changedAt!,
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Baseline helpers (rolling average over prior windows)
+// ---------------------------------------------------------------------------
+
+async function _baselineThreadCount(
+  shop: string,
+  range: string,
+  currentStart: Date,
+  where: Parameters<typeof prisma.thread.count>[0]["where"],
+): Promise<number | null> {
+  if (range === "90d" || range === "custom") return null;
+
+  const durationMs =
+    range === "24h" ? 24 * 60 * 60 * 1000
+    : range === "7d" ? 7 * 24 * 60 * 60 * 1000
+    : 30 * 24 * 60 * 60 * 1000;
+  const windowCount = range === "24h" ? 4 : range === "7d" ? 4 : 3;
+
+  const counts = await Promise.all(
+    Array.from({ length: windowCount }, (_, i) => {
+      let s: Date, e: Date;
+      if (range === "24h") {
+        // Same DOW baseline: step back by 1 week per window
+        s = new Date(currentStart.getTime() - (i + 1) * 7 * 24 * 60 * 60 * 1000);
+        e = new Date(s.getTime() + durationMs);
+      } else {
+        e = new Date(currentStart.getTime() - i * durationMs);
+        s = new Date(e.getTime() - durationMs);
+      }
+      return prisma.thread.count({
+        where: { ...where, firstMessageAt: { gte: s, lt: e } },
+      });
+    }),
+  );
+  return counts.reduce((a, b) => a + b, 0) / counts.length;
+}
+
+async function _baselineEventCount(
+  shop: string,
+  range: string,
+  currentStart: Date,
+  countFn: (start: Date, end: Date) => Promise<number>,
+): Promise<number | null> {
+  if (range === "90d" || range === "custom") return null;
+
+  const durationMs =
+    range === "24h" ? 24 * 60 * 60 * 1000
+    : range === "7d" ? 7 * 24 * 60 * 60 * 1000
+    : 30 * 24 * 60 * 60 * 1000;
+  const windowCount = range === "24h" ? 4 : range === "7d" ? 4 : 3;
+
+  const counts = await Promise.all(
+    Array.from({ length: windowCount }, (_, i) => {
+      let s: Date, e: Date;
+      if (range === "24h") {
+        s = new Date(currentStart.getTime() - (i + 1) * 7 * 24 * 60 * 60 * 1000);
+        e = new Date(s.getTime() + durationMs);
+      } else {
+        e = new Date(currentStart.getTime() - i * durationMs);
+        s = new Date(e.getTime() - durationMs);
+      }
+      return countFn(s, e);
+    }),
+  );
+  return counts.reduce((a, b) => a + b, 0) / counts.length;
+}
+
+// ---------------------------------------------------------------------------
+// Alerts
+// ---------------------------------------------------------------------------
+
+export async function getAlerts(
+  shop: string,
+  range: string,
+  start: Date,
+  end: Date,
+): Promise<Alert[]> {
+  if (range === "90d" || range === "custom") return [];
+
+  const supportWhere = {
+    shop,
+    supportNature: { in: ["confirmed_support", "probable_support"] },
+  } as const;
+
+  const [currentVolume, baselineVolume, reopened, baselineReopened, topIntents] =
+    await Promise.all([
+      prisma.thread.count({ where: { ...supportWhere, firstMessageAt: { gte: start, lt: end } } }),
+      _baselineThreadCount(shop, range, start, supportWhere),
+      prisma.threadStateHistory.count({
+        where: {
+          shop,
+          fromState: "resolved",
+          NOT: { toState: "resolved" },
+          changedAt: { gte: start, lt: end },
+        },
+      }),
+      _baselineEventCount(shop, range, start, (s, e) =>
+        prisma.threadStateHistory.count({
+          where: {
+            shop,
+            fromState: "resolved",
+            NOT: { toState: "resolved" },
+            changedAt: { gte: s, lt: e },
+          },
+        }),
+      ),
+      getTopIntentsWithPerf(shop, start, end, 8),
+    ]);
+
+  const alerts: Alert[] = [];
+
+  // Volume surge: >= 2x baseline AND absolute >= 20 threads
+  if (
+    baselineVolume !== null &&
+    baselineVolume > 0 &&
+    currentVolume >= 20 &&
+    currentVolume >= 2 * baselineVolume
+  ) {
+    alerts.push({
+      type: "volume_surge",
+      label: `Volume ×${(currentVolume / baselineVolume).toFixed(1)} vs habituel (${currentVolume} vs ${Math.round(baselineVolume)} attendus)`,
+      magnitude: currentVolume / baselineVolume,
+      current: currentVolume,
+      baseline: baselineVolume,
+      inboxFilterParam: "",
+    });
+  }
+
+  // Reopened spike: >= 2x baseline AND absolute >= 3
+  if (
+    baselineReopened !== null &&
+    baselineReopened > 0 &&
+    reopened >= 3 &&
+    reopened >= 2 * baselineReopened
+  ) {
+    alerts.push({
+      type: "reopened_spike",
+      label: `Ré-ouvertures ×${(reopened / baselineReopened).toFixed(1)} vs habituel (${reopened} vs ${Math.round(baselineReopened)} attendus)`,
+      magnitude: reopened / baselineReopened,
+      current: reopened,
+      baseline: baselineReopened,
+      inboxFilterParam: "state=reopened",
+    });
+  }
+
+  // Intent surges: per-intent >= 2x baseline AND absolute >= 5
+  for (const item of topIntents) {
+    if (item.count < 5) continue;
+    const baselineIntent = await _baselineEventCount(shop, range, start, (s, e) =>
+      prisma.incomingEmail.count({
+        where: {
+          shop,
+          detectedIntent: item.intent,
+          receivedAt: { gte: s, lt: e },
+          processingStatus: { not: "outgoing" },
+        },
+      }),
+    );
+    if (
+      baselineIntent !== null &&
+      baselineIntent > 0 &&
+      item.count >= 2 * baselineIntent
+    ) {
+      alerts.push({
+        type: "intent_surge",
+        label: `${item.intent} ×${(item.count / baselineIntent).toFixed(1)} vs habituel (${item.count} vs ${Math.round(baselineIntent)} attendus)`,
+        magnitude: item.count / baselineIntent,
+        current: item.count,
+        baseline: baselineIntent,
+        inboxFilterParam: `intent=${item.intent}`,
+      });
+    }
+  }
+
+  return alerts.sort((a, b) => b.magnitude - a.magnitude);
+}
