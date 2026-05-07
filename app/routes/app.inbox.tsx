@@ -1540,10 +1540,11 @@ function DraftBlock({ email, threadSenderEmail }: {
   const isLatest = versionIndex === allVersions.length - 1;
   const total = allVersions.length;
 
-  // Local editable body state (only applies to the latest version)
-  const [bodyText, setBodyText] = useState(currentVersion);
-  // Sync bodyText when switching versions or when a new draft arrives
-  useEffect(() => { setBodyText(currentVersion); }, [currentVersion]);
+  // Local editable body state — holds the user's working copy of the latest
+  // version. Only reset when a new draft arrives from the server (AI regen,
+  // refine, reanalyze), not when navigating between existing versions.
+  const [bodyText, setBodyText] = useState(email.draftReply ?? "");
+  useEffect(() => { setBodyText(email.draftReply ?? ""); }, [email.draftReply]);
 
   // Auto-save debounce for body text
   const bodySaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
