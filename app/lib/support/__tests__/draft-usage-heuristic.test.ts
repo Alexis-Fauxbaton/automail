@@ -71,4 +71,18 @@ describe("classifyDraft", () => {
     const text = "Bonjour, votre commande est en cours.";
     expect(classifyDraft(text, text)).toBe("as_is");
   });
+
+  it("returns edited when similarity is between 0.30 and 0.85", () => {
+    // Draft: 60-char message; outgoing keeps the opening but replaces most of the body.
+    const draft = "Bonjour, nous avons bien reçu votre demande et nous allons y répondre.";
+    const outgoing = "Bonjour, votre commande a été expédiée hier. Vous recevrez un email de suivi.";
+    const result = classifyDraft(draft, outgoing);
+    expect(result).toBe("edited");
+  });
+
+  it("returns pending-safe result when computeSimilarity truncates long strings", () => {
+    // Both strings > MAX_COMPARE_LEN; identical past truncation point → should be as_is
+    const base = "a".repeat(4000);
+    expect(classifyDraft(base, base)).toBe("as_is");
+  });
 });

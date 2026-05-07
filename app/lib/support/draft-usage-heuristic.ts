@@ -56,11 +56,17 @@ export function normalizeBody(input: string): string {
  * Compute a normalised similarity score in [0, 1] between two strings.
  * Uses Levenshtein edit distance relative to the longer string.
  */
+// Cap at 3 000 chars to bound Levenshtein O(m×n) CPU cost.
+// Support emails are repetitive — classification is stable past this length.
+const MAX_COMPARE_LEN = 3_000;
+
 export function computeSimilarity(a: string, b: string): number {
   if (a.length === 0 && b.length === 0) return 1;
   if (a.length === 0 || b.length === 0) return 0;
-  const maxLen = Math.max(a.length, b.length);
-  return 1 - levenshtein(a, b) / maxLen;
+  const aTrunc = a.slice(0, MAX_COMPARE_LEN);
+  const bTrunc = b.slice(0, MAX_COMPARE_LEN);
+  const maxLen = Math.max(aTrunc.length, bTrunc.length);
+  return 1 - levenshtein(aTrunc, bTrunc) / maxLen;
 }
 
 /**
@@ -115,6 +121,9 @@ export async function evaluateThread(
   for (const draft of drafts) {
     const firstOutgoing = outgoings.find((o) => o.receivedAt > draft.createdAt);
     if (!firstOutgoing) continue;
+    // Skip if the outgoing body is empty (e.g. HTML-only email where text extraction failed).
+    // Writing `ignored` in that case would be incorrect — leave heuristicBucket as null (pending).
+    if (!firstOutgoing.bodyText) continue;
 
     // Skip if already evaluated against a current or later outgoing
     if (draft.heuristicComputedAt && draft.heuristicComputedAt >= firstOutgoing.receivedAt) {

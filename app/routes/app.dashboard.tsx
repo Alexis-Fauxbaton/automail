@@ -52,16 +52,28 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const bounds = getPeriodBounds(range, from, to);
   const { start, end, prevStart, prevEnd } = bounds;
 
-  const [kpis, qualityChart, productivityChart, heatmap, topIntents, threadStates, reopened, alerts] =
+  // Fetch top intents first (limit=8): first 5 go to UI, all 8 passed to alerts.
+  const topIntentsAll = await getTopIntentsWithPerf(shop, start, end, 8).catch(() => [] as IntentPerf[]);
+
+  const zeroedKpis: DashboardKpis = {
+    responseTime: { medianMs: null, p90Ms: null, prevMedianMs: null },
+    draftUsage: { asIs: 0, edited: 0, ignored: 0, pending: 0, sentPct: null, prevSentPct: null },
+    reopened: { count: 0, prevCount: 0 },
+    volume: { count: 0, prevCount: 0 },
+  };
+  const zeroedStates: ThreadStateCounts = {
+    open: 0, waiting_customer: 0, waiting_merchant: 0, resolved: 0, no_reply_needed: 0,
+  };
+
+  const [kpis, qualityChart, productivityChart, heatmap, threadStates, reopened, alerts] =
     await Promise.all([
-      getDashboardKpis(shop, start, end, prevStart, prevEnd),
-      getResponseTimeDailyBreakdown(shop, start, end),
-      getDraftUsageDailyBreakdown(shop, start, end),
-      getHeatmap(shop, start, end),
-      getTopIntentsWithPerf(shop, start, end, 5),
-      getCurrentThreadStates(shop),
-      getReopenedThreads(shop, start, end, 10),
-      getAlerts(shop, range, start, end),
+      getDashboardKpis(shop, start, end, prevStart, prevEnd).catch(() => zeroedKpis),
+      getResponseTimeDailyBreakdown(shop, start, end).catch(() => [] as ResponseTimeDailyPoint[]),
+      getDraftUsageDailyBreakdown(shop, start, end).catch(() => [] as ProductivityDailyPoint[]),
+      getHeatmap(shop, start, end).catch(() => [] as HeatmapCell[]),
+      getCurrentThreadStates(shop).catch(() => zeroedStates),
+      getReopenedThreads(shop, start, end, 10).catch(() => [] as ReopenedThread[]),
+      getAlerts(shop, range, start, end, topIntentsAll).catch(() => [] as Alert[]),
     ]);
 
   return {
@@ -72,7 +84,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     qualityChart,
     productivityChart,
     heatmap,
-    topIntents,
+    topIntents: topIntentsAll.slice(0, 5),
     threadStates,
     reopened,
     alerts,
@@ -291,10 +303,10 @@ export default function Dashboard() {
   const todayLabel = new Date().toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 
   // Build delta helper text for MetricCards (MetricCard uses helper/helperTone, not delta props)
-  const respVariation = variationLabel(
-    kpis.responseTime.medianMs ?? 0,
-    kpis.responseTime.prevMedianMs ?? 0,
-  );
+  const respVariation =
+    kpis.responseTime.medianMs !== null && kpis.responseTime.prevMedianMs !== null
+      ? variationLabel(kpis.responseTime.medianMs, kpis.responseTime.prevMedianMs)
+      : null;
   const reopenVariation = variationLabel(kpis.reopened.count, kpis.reopened.prevCount);
   const volVariation = variationLabel(kpis.volume.count, kpis.volume.prevCount);
   const draftVariation =
@@ -328,7 +340,7 @@ export default function Dashboard() {
   const stateRows: { key: keyof ThreadStateCounts; label: string }[] = [
     { key: "open", label: t("dashboard.stateOpen", { defaultValue: "Ouvert" }) },
     { key: "waiting_customer", label: t("dashboard.stateWaitingCustomer", { defaultValue: "En attente client" }) },
-    { key: "waiting_merchant", label: t("dashboard.stateWaitingMerchant", { defaultValue: "En attente marchand" }) },
+    { key: "waiting_merchant", label: t("dashboard.stateWaitingMerchant", { defaultValue: "À traiter" }) },
     { key: "resolved", label: t("dashboard.stateResolved", { defaultValue: "Résolu" }) },
     { key: "no_reply_needed", label: t("dashboard.stateNoReplyNeeded", { defaultValue: "Sans réponse" }) },
   ];

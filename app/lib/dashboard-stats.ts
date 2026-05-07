@@ -6,6 +6,8 @@ import prisma from "../db.server";
 // Timezone used for day bucketing (label display and chart grouping).
 // A mail received at 01:22 local time must not appear on the previous UTC day.
 const DISPLAY_TZ = "Europe/Paris";
+// Prisma.raw snippet for AT TIME ZONE clauses — keeps DISPLAY_TZ as single source of truth.
+const TZ = Prisma.raw(`'${DISPLAY_TZ}'`);
 
 function toLocalDay(date: Date): string {
   return new Intl.DateTimeFormat("en-CA", {
@@ -160,11 +162,15 @@ export async function getCurrentThreadStates(shop: string): Promise<ThreadStateC
 // Shared percentile helper (in-process, for small datasets)
 // ---------------------------------------------------------------------------
 
+// Linear interpolation — matches PostgreSQL PERCENTILE_CONT behaviour exactly.
 function _percentile(values: number[], p: number): number | null {
   if (values.length === 0) return null;
   const sorted = [...values].sort((a, b) => a - b);
-  const idx = Math.min(Math.floor(sorted.length * p), sorted.length - 1);
-  return sorted[idx];
+  const pos = p * (sorted.length - 1);
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  if (lo === hi) return sorted[lo];
+  return sorted[lo] + (pos - lo) * (sorted[hi] - sorted[lo]);
 }
 
 // ---------------------------------------------------------------------------
@@ -225,7 +231,7 @@ export async function getResponseTimeDailyBreakdown(
       SELECT
         t.id,
         t."firstMessageAt",
-        DATE_TRUNC('day', t."firstMessageAt" AT TIME ZONE 'Europe/Paris')::date AS day,
+        DATE_TRUNC('day', t."firstMessageAt" AT TIME ZONE ${TZ})::date AS day,
         MIN(e."receivedAt") AS first_outgoing_at
       FROM "Thread" t
       LEFT JOIN "IncomingEmail" e
@@ -329,7 +335,7 @@ export async function getDraftUsageDailyBreakdown(
   type Row = { day: Date; bucket: string | null; count: bigint };
   const rows = await prisma.$queryRaw<Row[]>`
     SELECT
-      DATE_TRUNC('day', "createdAt" AT TIME ZONE 'Europe/Paris')::date AS day,
+      DATE_TRUNC('day', "createdAt" AT TIME ZONE ${TZ})::date AS day,
       "heuristicBucket" AS bucket,
       COUNT(*)::bigint AS count
     FROM "ReplyDraft"
@@ -439,8 +445,8 @@ export async function getHeatmap(
   type Row = { dow: number; hour: number; count: bigint };
   const rows = await prisma.$queryRaw<Row[]>`
     SELECT
-      EXTRACT(DOW  FROM e."receivedAt" AT TIME ZONE 'Europe/Paris')::int AS dow,
-      EXTRACT(HOUR FROM e."receivedAt" AT TIME ZONE 'Europe/Paris')::int AS hour,
+      EXTRACT(DOW  FROM e."receivedAt" AT TIME ZONE ${TZ})::int AS dow,
+      EXTRACT(HOUR FROM e."receivedAt" AT TIME ZONE ${TZ})::int AS hour,
       COUNT(*)::bigint AS count
     FROM "IncomingEmail" e
     LEFT JOIN "Thread" t ON t.id = e."canonicalThreadId"
@@ -482,6 +488,7 @@ export async function getTopIntentsWithPerf(
       WHERE e.shop = ${shop}
         AND e."detectedIntent" IS NOT NULL
         AND e."canonicalThreadId" IS NOT NULL
+        AND e."receivedAt" < ${end}
       ORDER BY e."canonicalThreadId", e."receivedAt" DESC
     ),
     thread_response AS (
@@ -630,6 +637,7 @@ export async function getAlerts(
   range: string,
   start: Date,
   end: Date,
+  topIntents: IntentPerf[],
 ): Promise<Alert[]> {
   if (range === "90d" || range === "custom") return [];
 
@@ -638,7 +646,7 @@ export async function getAlerts(
     supportNature: { in: ["confirmed_support", "probable_support"] as string[] },
   };
 
-  const [currentVolume, baselineVolume, reopened, baselineReopened, topIntents] =
+  const [currentVolume, baselineVolume, reopened, baselineReopened] =
     await Promise.all([
       prisma.thread.count({ where: { ...supportWhere, firstMessageAt: { gte: start, lt: end } } }),
       _baselineThreadCount(shop, range, start, supportWhere),
@@ -660,7 +668,6 @@ export async function getAlerts(
           },
         }),
       ),
-      getTopIntentsWithPerf(shop, start, end, 8),
     ]);
 
   const alerts: Alert[] = [];
@@ -699,18 +706,22 @@ export async function getAlerts(
     });
   }
 
-  // Intent surges: per-intent >= 2x baseline AND absolute >= 5
+  // Intent surges: per-intent >= 2x baseline AND absolute >= 5.
+  // Both current (item.count) and baseline count **threads** (not emails),
+  // so the units match and the 2× threshold is meaningful.
   for (const item of topIntents) {
     if (item.count < 5) continue;
     const baselineIntent = await _baselineEventCount(shop, range, start, (s, e) =>
-      prisma.incomingEmail.count({
+      prisma.incomingEmail.findMany({
         where: {
           shop,
           detectedIntent: item.intent,
           receivedAt: { gte: s, lt: e },
           processingStatus: { not: "outgoing" },
         },
-      }),
+        select: { canonicalThreadId: true },
+        distinct: ["canonicalThreadId"],
+      }).then((r) => r.length),
     );
     if (
       baselineIntent !== null &&
