@@ -714,9 +714,55 @@ export async function getAlerts(
     });
   }
 
+  // Delay degraded: current median first-response >= 2× baseline AND >= 8h.
+  // Baseline = median over the prior windows (same window strategy as other baselines).
+  if (range !== "90d" && range !== "custom") {
+    const durationMs =
+      range === "24h" ? 24 * 60 * 60 * 1000
+      : range === "7d" ? 7 * 24 * 60 * 60 * 1000
+      : 30 * 24 * 60 * 60 * 1000;
+    const windowCount = range === "24h" ? 4 : range === "7d" ? 4 : 3;
+
+    const currentSamples = await _fetchResponseTimesMs(shop, start, end);
+    const currentMed = _percentile(currentSamples, 0.5);
+
+    const baselineSamples: number[] = [];
+    for (let i = 0; i < windowCount; i++) {
+      let s: Date, e: Date;
+      if (range === "24h") {
+        s = new Date(start.getTime() - (i + 1) * 7 * 24 * 60 * 60 * 1000);
+        e = new Date(s.getTime() + durationMs);
+      } else {
+        e = new Date(start.getTime() - i * durationMs);
+        s = new Date(e.getTime() - durationMs);
+      }
+      baselineSamples.push(...(await _fetchResponseTimesMs(shop, s, e)));
+    }
+    const baselineMed = _percentile(baselineSamples, 0.5);
+
+    if (
+      currentMed !== null &&
+      baselineMed !== null &&
+      baselineMed > 0 &&
+      currentMed >= 8 * 60 * 60 * 1000 &&
+      currentMed >= 2 * baselineMed
+    ) {
+      const factor = currentMed / baselineMed;
+      alerts.push({
+        type: "delay_degraded",
+        label: `Délai ×${factor.toFixed(1)} vs habituel (${(currentMed / 3600000).toFixed(1)}h vs ${(baselineMed / 3600000).toFixed(1)}h attendus)`,
+        magnitude: factor,
+        current: currentMed,
+        baseline: baselineMed,
+        inboxFilterParam: "",
+      });
+    }
+  }
+
   // Intent surges: per-intent >= 2x baseline AND absolute >= 5.
-  // Both current (item.count) and baseline count **threads** (not emails),
-  // so the units match and the 2× threshold is meaningful.
+  // Both current (item.count) and baseline count **support threads** —
+  // the baseline must filter on supportNature to match the current's filter,
+  // otherwise non_support emails with a detectedIntent would skew the baseline.
   for (const item of topIntents) {
     if (item.count < 5) continue;
     const baselineIntent = await _baselineEventCount(shop, range, start, (s, e) =>
@@ -726,6 +772,7 @@ export async function getAlerts(
           detectedIntent: item.intent,
           receivedAt: { gte: s, lt: e },
           processingStatus: { not: "outgoing" },
+          thread: { supportNature: { in: ["confirmed_support", "probable_support"] } },
         },
         select: { canonicalThreadId: true },
         distinct: ["canonicalThreadId"],

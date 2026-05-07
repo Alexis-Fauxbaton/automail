@@ -1,0 +1,32 @@
+- generic [ref=e2]:
+  - generic [ref=e7]:
+    - link "Ignorer et passer au contenu":
+      - /url: "#AppFrameMain"
+    - generic [ref=e12]:
+      - generic [ref=e17] [cursor=pointer]:
+        - img "Shopify" [ref=e18]
+        - img "Shopify" [ref=e19]
+      - button "Rechercher CTRL K" [ref=e27] [cursor=pointer]:
+        - generic [ref=e28]
+      - generic [ref=e34]:
+        - generic [ref=e36]
+        - button "AMBIENT HOME" [ref=e69] [cursor=pointer]
+    - generic [ref=e79]:
+      - generic "Navigation" [ref=e80]:
+        - navigation [ref=e82]
+      - main [ref=e390]:
+        - generic [ref=e395]
+  - generic:
+    - generic:
+      - generic:
+        - generic: Raccourcis généraux
+        - generic: Ajout d’articles à votre boutique
+        - generic: Navigation dans votre interface administrateur
+        - generic: Navigation dans les paramètres
+    - dialog "Sidekick" [ref=e416]:
+      - button "Redimensionner la barre latérale" [ref=e417]:
+        - generic [ref=e418]
+    - generic:
+      - generic:
+        - generic: Cancel
+        - generic: OK
