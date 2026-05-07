@@ -28,6 +28,7 @@ import {
 } from "../mail/backfill";
 import { upsertReplyDraftBody } from "../support/reply-draft";
 import { generateLLMDraft } from "../support/llm-draft";
+import { evaluateThread } from "../support/draft-usage-heuristic";
 import { getSettings } from "../support/settings";
 
 export interface ProcessingReport {
@@ -426,6 +427,11 @@ async function ingestAndPrefilter(
       await evaluateHistoryStatus(canonicalThreadId, shop);
     } catch (err) {
       console.error("[pipeline] state recompute (outgoing) failed:", err);
+    }
+    try {
+      await evaluateThread(canonicalThreadId, shop);
+    } catch (err) {
+      console.error("[pipeline] draft-usage heuristic failed:", err);
     }
     return;
   }
