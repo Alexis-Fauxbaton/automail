@@ -95,7 +95,7 @@ function formatDuration(ms: number | null): string {
 function variationLabel(current: number, prev: number): string | null {
   if (prev === 0) return null;
   const pct = ((current - prev) / prev) * 100;
-  const sign = pct >= 0 ? "+" : "";
+  const sign = pct >= 0 ? "+" : "-";
   return `${sign}${Math.abs(pct).toFixed(0)}%`;
 }
 
@@ -288,6 +288,7 @@ export default function Dashboard() {
     heatmap, topIntents, threadStates, reopened, alerts,
   } = useLoaderData<typeof loader>();
   const { t } = useTranslation();
+  const todayLabel = new Date().toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 
   // Build delta helper text for MetricCards (MetricCard uses helper/helperTone, not delta props)
   const respVariation = variationLabel(
@@ -372,7 +373,7 @@ export default function Dashboard() {
             {t("dashboard.heroTitle", { defaultValue: "Dashboard" })}
           </h1>
           <p style={{ margin: "4px 0 0", fontSize: 13, color: "#64748b" }}>
-            {t("dashboard.heroLead", { defaultValue: "Vue d'ensemble de votre activité SAV" })}
+            {t("dashboard.heroLead", { date: todayLabel, defaultValue: "Vue d'ensemble de votre activité SAV" })}
           </p>
         </div>
         <PeriodSelector range={range} />
@@ -473,7 +474,7 @@ export default function Dashboard() {
       {/* Drill-downs: queue + reopened threads */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <Card
-          title={t("dashboard.stateCardTitle", { defaultValue: "État de la file" })}
+          title={t("dashboard.stateCardTitle", { date: todayLabel, defaultValue: "État de la file" })}
           subtitle={t("dashboard.stateCardSubtitle", { defaultValue: "Snapshot actuel — non filtré par période" })}
         >
           {stateRows.map(({ key, label }) => (
