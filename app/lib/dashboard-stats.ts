@@ -138,7 +138,7 @@ export type DashboardKpis = {
 export async function getCurrentThreadStates(shop: string): Promise<ThreadStateCounts> {
   const rows = await prisma.thread.groupBy({
     by: ["operationalState"],
-    where: { shop },
+    where: { shop, supportNature: { not: "non_support" } },
     _count: { _all: true },
   });
 
