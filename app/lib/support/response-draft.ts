@@ -202,7 +202,7 @@ function greeting(
   tone: Tone,
   lang: "fr" | "en",
 ): string {
-  const first = order?.customerName?.split(" ")[0];
+  const first = order?.customerName?.split(" ")[0]?.trim() || null;
   if (lang === "fr") {
     if (tone === "formal") return first ? `Bonjour ${first},` : "Bonjour,";
     if (tone === "neutral") return first ? `Bonjour ${first},` : "Bonjour,";

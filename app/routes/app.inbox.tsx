@@ -503,6 +503,9 @@ type OpsBucket =
   | "resolved"         // closed, no reply needed, or conversation ended
   | "other";           // filtered / non-support / unknown
 
+// Threads with no recent activity for this many ms are auto-bucketed as resolved.
+const AUTO_RESOLVE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
 function getOpsBucket(
   thread: EmailThread,
   state: SerializedThreadState | null,
@@ -524,18 +527,13 @@ function getOpsBucket(
   // DB state is stale (thread was not recomputed after we sent a reply).
   // Override to a direction-consistent bucket so the UI is never wrong.
   const lastDir = getMessageDirection(thread.latest, connectedEmail);
+  const ageMs = Date.now() - new Date(thread.latest.receivedAt).getTime();
   if (op === "waiting_merchant" && lastDir === "outgoing") {
-    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
-    const age = Date.now() - new Date(thread.latest.receivedAt).getTime();
-    return age >= sevenDaysMs ? "resolved" : "waiting_customer";
+    return ageMs >= AUTO_RESOLVE_AGE_MS ? "resolved" : "waiting_customer";
   }
   if (op === "waiting_merchant") return "waiting_merchant";
   if (op === "waiting_customer") {
-    // Auto-resolve threads where the customer hasn't replied in 7 days
-    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
-    const age = Date.now() - new Date(thread.latest.receivedAt).getTime();
-    if (age >= sevenDaysMs) return "resolved";
-    return "waiting_customer";
+    return ageMs >= AUTO_RESOLVE_AGE_MS ? "resolved" : "waiting_customer";
   }
   if (thread.latest.analysisResult?.conversation?.noReplyNeeded === true) return "resolved";
   // Support/uncertain threads with no explicit operational state yet
@@ -548,9 +546,7 @@ function getOpsBucket(
     (!state && getThreadClassification(thread) === "support");
   if (isLikelySupport) {
     if (lastDir === "outgoing") {
-      const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
-      const age = Date.now() - new Date(thread.latest.receivedAt).getTime();
-      return age >= sevenDaysMs ? "resolved" : "waiting_customer";
+      return ageMs >= AUTO_RESOLVE_AGE_MS ? "resolved" : "waiting_customer";
     }
     return "waiting_merchant";
   }
@@ -1528,6 +1524,18 @@ function ThreadCard({
   );
 }
 
+// Hoisted out of DraftBlock so they aren't reallocated on every render.
+const DRAFT_LABEL_STYLE: React.CSSProperties = {
+  fontSize: "12px",
+  color: "var(--p-color-text-subdued)",
+  minWidth: "52px",
+};
+const DRAFT_ROW_STYLE: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: "8px",
+};
+
 function DraftBlock({ email, threadSenderEmail }: {
   email: SerializedEmail;
   threadSenderEmail: string;
@@ -1622,21 +1630,18 @@ function DraftBlock({ email, threadSenderEmail }: {
     if (res.ok) setAttachments((prev) => prev.filter((a) => a.id !== attId));
   }
 
-  const labelStyle: React.CSSProperties = { fontSize: "12px", color: "var(--p-color-text-subdued)", minWidth: "52px" };
-  const rowStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: "8px" };
-
   return (
     <s-box padding="base" borderWidth="base" borderRadius="base">
       <s-stack direction="block" gap="base">
 
         {/* Compose header */}
         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <div style={rowStyle}>
-            <span style={labelStyle}>À</span>
+          <div style={DRAFT_ROW_STYLE}>
+            <span style={DRAFT_LABEL_STYLE}>À</span>
             <span style={{ fontSize: "13px", color: "var(--p-color-text-subdued)" }}>{threadSenderEmail}</span>
           </div>
-          <div style={rowStyle}>
-            <span style={labelStyle}>Objet</span>
+          <div style={DRAFT_ROW_STYLE}>
+            <span style={DRAFT_LABEL_STYLE}>Objet</span>
             <input
               style={{ flex: 1, border: "none", borderBottom: "1px solid var(--p-color-border)", padding: "2px 0", fontSize: "13px", background: "transparent", outline: "none" }}
               value={subject}
@@ -1646,8 +1651,8 @@ function DraftBlock({ email, threadSenderEmail }: {
               }}
             />
           </div>
-          <div style={rowStyle}>
-            <span style={labelStyle}>CC</span>
+          <div style={DRAFT_ROW_STYLE}>
+            <span style={DRAFT_LABEL_STYLE}>CC</span>
             <input
               style={{ flex: 1, border: "none", borderBottom: "1px solid var(--p-color-border)", padding: "2px 0", fontSize: "13px", background: "transparent", outline: "none" }}
               placeholder="email@exemple.com"
@@ -1667,8 +1672,8 @@ function DraftBlock({ email, threadSenderEmail }: {
             )}
           </div>
           {showBCC && (
-            <div style={rowStyle}>
-              <span style={labelStyle}>BCC</span>
+            <div style={DRAFT_ROW_STYLE}>
+              <span style={DRAFT_LABEL_STYLE}>BCC</span>
               <input
                 style={{ flex: 1, border: "none", borderBottom: "1px solid var(--p-color-border)", padding: "2px 0", fontSize: "13px", background: "transparent", outline: "none" }}
                 placeholder="email@exemple.com"

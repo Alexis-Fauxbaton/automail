@@ -35,6 +35,12 @@ export const DEFAULT_SETTINGS: Omit<SupportSettings, "shop"> = {
 
 const VALID_TONES: Tone[] = ["friendly", "formal", "neutral"];
 const VALID_LANGUAGES: Language[] = ["auto", "fr", "en"];
+const VALID_GREETING_STYLES: CustomerGreetingStyle[] = [
+  "auto",
+  "first_name",
+  "full_name",
+  "neutral",
+];
 
 export async function getSettings(shop: string): Promise<SupportSettings> {
   const row = await prisma.supportSettings.findUnique({ where: { shop } });
@@ -79,7 +85,6 @@ export async function saveSettings(
     ? (input.language as Language)
     : DEFAULT_SETTINGS.language;
 
-  const VALID_GREETING_STYLES: CustomerGreetingStyle[] = ["auto", "first_name", "full_name", "neutral"];
   const customerGreetingStyle: CustomerGreetingStyle = VALID_GREETING_STYLES.includes(
     input.customerGreetingStyle as CustomerGreetingStyle,
   )

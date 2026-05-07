@@ -5,7 +5,7 @@ import { detectEndOfLoop } from "./end-of-loop";
 import { llmParseEmail } from "./llm-parser";
 import { generateLLMDraft } from "./llm-draft";
 import { parseMessage } from "./message-parser";
-import { getSettings, type SupportSettings } from "./settings";
+import { DEFAULT_SETTINGS, getSettings, type SupportSettings } from "./settings";
 import type { TrackedCallContext } from "../llm/client";
 import {
   type AdminGraphqlClient,
@@ -100,17 +100,8 @@ export async function analyzeSupportEmail(
       console.error("[orchestrator] Could not load settings:", err);
     }
   }
-  const resolvedSettings: SupportSettings = settings ?? {
-    shop: input.shop ?? "",
-    signatureName: "Customer Support",
-    brandName: "",
-    tone: "friendly",
-    language: "auto",
-    closingPhrase: "",
-    shareTrackingNumber: true,
-    customerGreetingStyle: "auto",
-    refundPolicy: "",
-  };
+  const resolvedSettings: SupportSettings =
+    settings ?? { shop: input.shop ?? "", ...DEFAULT_SETTINGS };
 
   const tctx: Partial<TrackedCallContext> = { shop: input.shop, ...input.trackedCallContext };
 

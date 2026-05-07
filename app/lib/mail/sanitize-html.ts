@@ -39,19 +39,16 @@ export function sanitizeEmailHtml(
 ): string {
   // Step 1: rewrite cid: src attributes BEFORE parsing so the parser sees the
   // final data: or /api/ URL and can apply the allowedSchemes check.
-  const cidResolved = html
-    .replace(/src\s*=\s*"cid:([^"]+)"/gi, (_, cid) => {
+  // Single regex with backreferenced quote so logic isn't duplicated per-quote.
+  const cidResolved = html.replace(
+    /src\s*=\s*(["'])cid:([^"']+)\1/gi,
+    (_, q, cid) => {
       const att = cidMap.get(cid.trim());
-      if (!att) return 'src=""';
-      if (att.inlineData) return `src="data:${att.mimeType};base64,${att.inlineData}"`;
-      return `src="/api/incoming-attachment?id=${att.id}"`;
-    })
-    .replace(/src\s*=\s*'cid:([^']+)'/gi, (_, cid) => {
-      const att = cidMap.get(cid.trim());
-      if (!att) return "src=''";
-      if (att.inlineData) return `src='data:${att.mimeType};base64,${att.inlineData}'`;
-      return `src='/api/incoming-attachment?id=${att.id}'`;
-    });
+      if (!att) return `src=${q}${q}`;
+      if (att.inlineData) return `src=${q}data:${att.mimeType};base64,${att.inlineData}${q}`;
+      return `src=${q}/api/incoming-attachment?id=${att.id}${q}`;
+    },
+  );
 
   // Step 2: run the parser-based sanitizer.
   const sanitized = sanitizeHtml(cidResolved, {
