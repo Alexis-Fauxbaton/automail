@@ -99,6 +99,68 @@ export type IntentCount = {
   count: number;
 };
 
+export type ResponseTimeStats = {
+  medianMs: number | null;
+  p90Ms: number | null;
+  prevMedianMs: number | null;
+};
+
+export type ResponseTimeDailyPoint = {
+  date: string;        // "YYYY-MM-DD"
+  support: number;     // support thread count that day
+  medianMs: number | null;
+};
+
+export type DraftUsageStats = {
+  asIs: number;
+  edited: number;
+  ignored: number;
+  pending: number;
+  sentPct: number | null;     // (asIs + edited) / (asIs + edited + ignored) * 100, null if denom=0
+  prevSentPct: number | null;
+};
+
+export type ProductivityDailyPoint = {
+  date: string;    // "YYYY-MM-DD"
+  as_is: number;
+  edited: number;
+  ignored: number;
+};
+
+export type HeatmapCell = {
+  dow: number;   // 0=Sunday … 6=Saturday (Postgres EXTRACT(DOW))
+  hour: number;  // 0-23
+  count: number;
+};
+
+export type IntentPerf = {
+  intent: string;
+  count: number;
+  medianMs: number | null;
+};
+
+export type ReopenedThread = {
+  threadId: string;
+  reopenCount: number;
+  lastReopenedAt: Date;
+};
+
+export type Alert = {
+  type: "intent_surge" | "volume_surge" | "delay_degraded" | "reopened_spike";
+  label: string;
+  magnitude: number;
+  current: number;
+  baseline: number;
+  inboxFilterParam: string;
+};
+
+export type DashboardKpis = {
+  responseTime: ResponseTimeStats;
+  reopened: { count: number; prevCount: number };
+  draftUsage: DraftUsageStats;
+  volume: { count: number; prevCount: number };
+};
+
 // ---------------------------------------------------------------------------
 // Query functions
 // ---------------------------------------------------------------------------
@@ -367,4 +429,275 @@ export async function getDailyActivityBreakdown(
   }
 
   return points;
+}
+
+// ---------------------------------------------------------------------------
+// Shared percentile helper (in-process, for small datasets)
+// ---------------------------------------------------------------------------
+
+function _percentile(values: number[], p: number): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.min(Math.floor(sorted.length * p), sorted.length - 1);
+  return sorted[idx];
+}
+
+// ---------------------------------------------------------------------------
+// Response time stats
+// ---------------------------------------------------------------------------
+
+async function _fetchResponseTimesMs(shop: string, start: Date, end: Date): Promise<number[]> {
+  type Row = { response_ms: number };
+  const rows = await prisma.$queryRaw<Row[]>`
+    SELECT
+      EXTRACT(EPOCH FROM (MIN(e."receivedAt") - t."firstMessageAt")) * 1000 AS response_ms
+    FROM "Thread" t
+    JOIN "IncomingEmail" e
+      ON e."canonicalThreadId" = t.id
+      AND e."processingStatus" = 'outgoing'
+      AND e."receivedAt" > t."firstMessageAt"
+    WHERE t.shop = ${shop}
+      AND t."firstMessageAt" >= ${start}
+      AND t."firstMessageAt" < ${end}
+      AND t."supportNature" IN ('confirmed_support', 'probable_support')
+      AND NOT EXISTS (
+        SELECT 1 FROM "IncomingEmail" fe
+        WHERE fe."canonicalThreadId" = t.id
+          AND fe."processingStatus" = 'outgoing'
+          AND fe."receivedAt" <= t."firstMessageAt"
+      )
+    GROUP BY t.id, t."firstMessageAt"
+  `;
+  return rows.map((r) => Number(r.response_ms)).filter((v) => v > 0);
+}
+
+export async function getResponseTimeStats(
+  shop: string,
+  start: Date,
+  end: Date,
+  prevStart: Date,
+  prevEnd: Date,
+): Promise<ResponseTimeStats> {
+  const [current, prev] = await Promise.all([
+    _fetchResponseTimesMs(shop, start, end),
+    _fetchResponseTimesMs(shop, prevStart, prevEnd),
+  ]);
+  return {
+    medianMs: _percentile(current, 0.5),
+    p90Ms: _percentile(current, 0.9),
+    prevMedianMs: _percentile(prev, 0.5),
+  };
+}
+
+export async function getResponseTimeDailyBreakdown(
+  shop: string,
+  start: Date,
+  end: Date,
+): Promise<ResponseTimeDailyPoint[]> {
+  type Row = { day: Date; support: bigint; median_ms: number | null };
+  const rows = await prisma.$queryRaw<Row[]>`
+    WITH threads AS (
+      SELECT
+        t.id,
+        t."firstMessageAt",
+        DATE_TRUNC('day', t."firstMessageAt" AT TIME ZONE 'Europe/Paris')::date AS day,
+        MIN(e."receivedAt") AS first_outgoing_at
+      FROM "Thread" t
+      LEFT JOIN "IncomingEmail" e
+        ON e."canonicalThreadId" = t.id
+        AND e."processingStatus" = 'outgoing'
+        AND e."receivedAt" > t."firstMessageAt"
+      WHERE t.shop = ${shop}
+        AND t."firstMessageAt" >= ${start}
+        AND t."firstMessageAt" < ${end}
+        AND t."supportNature" IN ('confirmed_support', 'probable_support')
+        AND NOT EXISTS (
+          SELECT 1 FROM "IncomingEmail" fe
+          WHERE fe."canonicalThreadId" = t.id
+            AND fe."processingStatus" = 'outgoing'
+            AND fe."receivedAt" <= t."firstMessageAt"
+        )
+      GROUP BY t.id, t."firstMessageAt"
+    )
+    SELECT
+      day,
+      COUNT(*)::bigint AS support,
+      PERCENTILE_CONT(0.5) WITHIN GROUP (
+        ORDER BY EXTRACT(EPOCH FROM (first_outgoing_at - "firstMessageAt")) * 1000
+      ) FILTER (WHERE first_outgoing_at IS NOT NULL) AS median_ms
+    FROM threads
+    GROUP BY day
+    ORDER BY day
+  `;
+
+  const byDay = new Map<string, { support: number; medianMs: number | null }>();
+  for (const row of rows) {
+    byDay.set(toLocalDay(row.day), {
+      support: Number(row.support),
+      medianMs: row.median_ms != null ? Number(row.median_ms) : null,
+    });
+  }
+
+  const points: ResponseTimeDailyPoint[] = [];
+  const cursor = new Date(start);
+  cursor.setUTCHours(0, 0, 0, 0);
+  const endDay = toLocalDay(end);
+  while (toLocalDay(cursor) <= endDay) {
+    const day = toLocalDay(cursor);
+    const data = byDay.get(day) ?? { support: 0, medianMs: null };
+    points.push({ date: day, ...data });
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return points;
+}
+
+// ---------------------------------------------------------------------------
+// Draft usage stats
+// ---------------------------------------------------------------------------
+
+async function _fetchDraftBuckets(shop: string, start: Date, end: Date) {
+  const rows = await prisma.replyDraft.groupBy({
+    by: ["heuristicBucket"],
+    where: { shop, createdAt: { gte: start, lt: end } },
+    _count: { _all: true },
+  });
+  const counts = { asIs: 0, edited: 0, ignored: 0, pending: 0 };
+  for (const row of rows) {
+    const bucket = row.heuristicBucket ?? "pending";
+    if (bucket === "as_is") counts.asIs = row._count._all;
+    else if (bucket === "edited") counts.edited = row._count._all;
+    else if (bucket === "ignored") counts.ignored = row._count._all;
+    else counts.pending += row._count._all;
+  }
+  return counts;
+}
+
+function _draftSentPct(c: { asIs: number; edited: number; ignored: number }): number | null {
+  const denom = c.asIs + c.edited + c.ignored;
+  if (denom === 0) return null;
+  return Math.round(((c.asIs + c.edited) / denom) * 100);
+}
+
+export async function getDraftUsageStats(
+  shop: string,
+  start: Date,
+  end: Date,
+  prevStart: Date,
+  prevEnd: Date,
+): Promise<DraftUsageStats> {
+  const [cur, prev] = await Promise.all([
+    _fetchDraftBuckets(shop, start, end),
+    _fetchDraftBuckets(shop, prevStart, prevEnd),
+  ]);
+  return {
+    ...cur,
+    sentPct: _draftSentPct(cur),
+    prevSentPct: _draftSentPct(prev),
+  };
+}
+
+export async function getDraftUsageDailyBreakdown(
+  shop: string,
+  start: Date,
+  end: Date,
+): Promise<ProductivityDailyPoint[]> {
+  type Row = { day: Date; bucket: string | null; count: bigint };
+  const rows = await prisma.$queryRaw<Row[]>`
+    SELECT
+      DATE_TRUNC('day', "createdAt" AT TIME ZONE 'Europe/Paris')::date AS day,
+      "heuristicBucket" AS bucket,
+      COUNT(*)::bigint AS count
+    FROM "ReplyDraft"
+    WHERE shop = ${shop}
+      AND "createdAt" >= ${start}
+      AND "createdAt" < ${end}
+      AND "heuristicBucket" IS NOT NULL
+    GROUP BY 1, 2
+    ORDER BY 1
+  `;
+
+  const byDay = new Map<string, ProductivityDailyPoint>();
+  for (const row of rows) {
+    const day = toLocalDay(row.day);
+    const existing = byDay.get(day) ?? { date: day, as_is: 0, edited: 0, ignored: 0 };
+    const n = Number(row.count);
+    if (row.bucket === "as_is") existing.as_is += n;
+    else if (row.bucket === "edited") existing.edited += n;
+    else if (row.bucket === "ignored") existing.ignored += n;
+    byDay.set(day, existing);
+  }
+
+  const points: ProductivityDailyPoint[] = [];
+  const cursor = new Date(start);
+  cursor.setUTCHours(0, 0, 0, 0);
+  const endDay = toLocalDay(end);
+  while (toLocalDay(cursor) <= endDay) {
+    const day = toLocalDay(cursor);
+    points.push(byDay.get(day) ?? { date: day, as_is: 0, edited: 0, ignored: 0 });
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return points;
+}
+
+// ---------------------------------------------------------------------------
+// Aggregated KPI snapshot
+// ---------------------------------------------------------------------------
+
+export async function getDashboardKpis(
+  shop: string,
+  start: Date,
+  end: Date,
+  prevStart: Date,
+  prevEnd: Date,
+): Promise<DashboardKpis> {
+  const [responseTime, draftUsage, reopened, prevReopened, volume, prevVolume] =
+    await Promise.all([
+      getResponseTimeStats(shop, start, end, prevStart, prevEnd),
+      getDraftUsageStats(shop, start, end, prevStart, prevEnd),
+      prisma.threadStateHistory.count({
+        where: {
+          shop,
+          fromState: "resolved",
+          NOT: { toState: "resolved" },
+          changedAt: { gte: start, lt: end },
+        },
+      }),
+      prisma.threadStateHistory.count({
+        where: {
+          shop,
+          fromState: "resolved",
+          NOT: { toState: "resolved" },
+          changedAt: { gte: prevStart, lt: prevEnd },
+        },
+      }),
+      prisma.incomingEmail.count({
+        where: {
+          shop,
+          receivedAt: { gte: start, lt: end },
+          processingStatus: { not: "outgoing" },
+          OR: [
+            { tier2Result: "support_client" },
+            { thread: { supportNature: { in: ["confirmed_support", "probable_support"] } } },
+          ],
+        },
+      }),
+      prisma.incomingEmail.count({
+        where: {
+          shop,
+          receivedAt: { gte: prevStart, lt: prevEnd },
+          processingStatus: { not: "outgoing" },
+          OR: [
+            { tier2Result: "support_client" },
+            { thread: { supportNature: { in: ["confirmed_support", "probable_support"] } } },
+          ],
+        },
+      }),
+    ]);
+
+  return {
+    responseTime,
+    draftUsage,
+    reopened: { count: reopened, prevCount: prevReopened },
+    volume: { count: volume, prevCount: prevVolume },
+  };
 }
