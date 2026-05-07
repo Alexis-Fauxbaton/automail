@@ -15,7 +15,6 @@ export default defineConfig({
     // inside the single fork, causing beforeEach hooks from one file to
     // interleave with test bodies in another file and corrupt DB state.
     pool: 'forks',
-    singleFork: true,
     fileParallelism: false,
     testTimeout: 15000,
     hookTimeout: 15000,

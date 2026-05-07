@@ -1,10 +1,5 @@
-// Integration tests for dashboard stats queries.
+// Integration tests for new dashboard stats queries.
 // Uses a real Postgres DB, isolated by TEST_SHOP.
-//
-// REQ-DASH-01: totalEmails counts incoming emails in period
-// REQ-DASH-06: getDailyBreakdown zero-fills days with no activity
-// REQ-DASH-09: getConversationStats counts reopened threads
-// REQ-DASH-13: empty period returns zeros without error
 
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import {
@@ -16,12 +11,10 @@ import {
 } from './helpers/db';
 import {
   getPeriodBounds,
-  getKpiStats,
-  getDailyBreakdown,
-  getConversationStats,
+  getResponseTimeStats,
+  getDraftUsageStats,
 } from '../../dashboard-stats';
 
-// Fixed reference point for all tests.
 const NOW = new Date('2026-04-26T12:00:00Z');
 
 beforeEach(async () => {
@@ -32,92 +25,248 @@ afterAll(async () => {
   await disconnectTestDb();
 });
 
-describe('dashboard-stats — queries KPI en intégration', () => {
-  it('totalEmails compte les emails entrants de la période (REQ-DASH-01)', async () => {
-    const { start, end, prevStart, prevEnd } = getPeriodBounds('7d', undefined, undefined, NOW);
-    const thread = await createTestThread();
+describe('getPeriodBounds', () => {
+  it('calcule les bornes sur 30j par défaut', () => {
+    const { start, end } = getPeriodBounds('30d', undefined, undefined, NOW);
+    expect(end.toISOString()).toBe(NOW.toISOString());
+    const diff = end.getTime() - start.getTime();
+    expect(diff).toBe(30 * 24 * 60 * 60 * 1000);
+  });
+});
 
-    // 3 emails inside the 7-day window, 1 outside (too old)
-    await testDb.incomingEmail.createMany({
-      data: [
-        { shop: TEST_SHOP, externalMessageId: 'e1', canonicalThreadId: thread.id, fromAddress: 'a@b.com', subject: 'S', bodyText: 'B', receivedAt: new Date('2026-04-20T10:00:00Z'), processingStatus: 'analyzed' },
-        { shop: TEST_SHOP, externalMessageId: 'e2', canonicalThreadId: thread.id, fromAddress: 'a@b.com', subject: 'S', bodyText: 'B', receivedAt: new Date('2026-04-21T10:00:00Z'), processingStatus: 'analyzed' },
-        { shop: TEST_SHOP, externalMessageId: 'e3', canonicalThreadId: thread.id, fromAddress: 'a@b.com', subject: 'S', bodyText: 'B', receivedAt: new Date('2026-04-22T10:00:00Z'), processingStatus: 'analyzed' },
-        { shop: TEST_SHOP, externalMessageId: 'e-old', canonicalThreadId: thread.id, fromAddress: 'a@b.com', subject: 'S', bodyText: 'B', receivedAt: new Date('2026-03-01T10:00:00Z'), processingStatus: 'analyzed' },
-      ],
+describe('getResponseTimeStats', () => {
+  it('calcule le médian pour un thread avec une réponse sortante (REQ-DASH-RT-01)', async () => {
+    const { start, end, prevStart, prevEnd } = getPeriodBounds('7d', undefined, undefined, NOW);
+
+    const thread = await createTestThread({
+      supportNature: 'confirmed_support',
+      firstMessageAt: new Date('2026-04-22T08:00:00Z'),
     });
 
-    const stats = await getKpiStats(TEST_SHOP, start, end, prevStart, prevEnd);
-    expect(stats.totalEmails).toBe(3);
-  });
-
-  it('jours sans activité → valeur 0 dans la série (REQ-DASH-06)', async () => {
-    const { start, end } = getPeriodBounds('7d', undefined, undefined, NOW);
-    const thread = await createTestThread();
-
-    // Only one email on Apr 20 — all other days should be zero-filled
+    // Incoming customer message
     await testDb.incomingEmail.create({
       data: {
         shop: TEST_SHOP,
-        externalMessageId: 'gap-test',
+        externalMessageId: 'rt-in-1',
         canonicalThreadId: thread.id,
-        fromAddress: 'a@b.com',
-        subject: 'S',
-        bodyText: 'B',
-        receivedAt: new Date('2026-04-20T10:00:00Z'),
+        fromAddress: 'customer@example.com',
+        subject: 'Help',
+        bodyText: 'I need help',
+        receivedAt: new Date('2026-04-22T08:00:00Z'),
         processingStatus: 'analyzed',
       },
     });
 
-    const breakdown = await getDailyBreakdown(TEST_SHOP, start, end);
-
-    // Series must span the full period with no gaps
-    expect(breakdown.length).toBeGreaterThanOrEqual(7);
-
-    // At least 6 days must have total = 0
-    const zeroDays = breakdown.filter((d) => d.total === 0);
-    expect(zeroDays.length).toBeGreaterThanOrEqual(6);
-
-    // The email day must have total = 1
-    const emailDay = breakdown.find((d) => d.date === '2026-04-20');
-    expect(emailDay).toBeDefined();
-    expect(emailDay!.total).toBe(1);
-  });
-
-  it('réouvertures = transitions resolved→waiting_merchant dans ThreadStateHistory (REQ-DASH-09)', async () => {
-    const { start, end } = getPeriodBounds('7d', undefined, undefined, NOW);
-    const thread = await createTestThread({ operationalState: 'resolved' });
-
-    // One reopened transition in the period
-    await testDb.threadStateHistory.create({
+    // Merchant reply 2 hours later
+    await testDb.incomingEmail.create({
       data: {
         shop: TEST_SHOP,
-        threadId: thread.id,
-        fromState: 'resolved',
-        toState: 'waiting_merchant',
-        changedAt: new Date('2026-04-22T10:00:00Z'),
+        externalMessageId: 'rt-out-1',
+        canonicalThreadId: thread.id,
+        fromAddress: 'shop@example.com',
+        subject: 'Re: Help',
+        bodyText: 'Here is help',
+        receivedAt: new Date('2026-04-22T10:00:00Z'),
+        processingStatus: 'outgoing',
       },
     });
 
-    const stats = await getConversationStats(TEST_SHOP, start, end);
-    expect(stats.reopenedConversations).toBe(1);
+    const stats = await getResponseTimeStats(TEST_SHOP, start, end, prevStart, prevEnd);
+
+    // 2 hours = 7_200_000 ms
+    expect(stats.medianMs).toBe(7_200_000);
+    expect(stats.p90Ms).toBe(7_200_000); // single value, same at all percentiles
   });
 
-  it('période sans données → tous les KPIs à 0 sans erreur (REQ-DASH-13)', async () => {
+  it('retourne null quand aucun thread qualifié (REQ-DASH-RT-02)', async () => {
     const { start, end, prevStart, prevEnd } = getPeriodBounds('7d', undefined, undefined, NOW);
 
-    const [kpis, breakdown] = await Promise.all([
-      getKpiStats(TEST_SHOP, start, end, prevStart, prevEnd),
-      getDailyBreakdown(TEST_SHOP, start, end),
-    ]);
+    const stats = await getResponseTimeStats(TEST_SHOP, start, end, prevStart, prevEnd);
 
-    expect(kpis.totalEmails).toBe(0);
-    expect(kpis.supportEmails).toBe(0);
-    expect(kpis.draftsCreated).toBe(0);
-    expect(breakdown.length).toBeGreaterThanOrEqual(7);
-    breakdown.forEach((d) => {
-      expect(d.total).toBe(0);
-      expect(d.support).toBe(0);
+    expect(stats.medianMs).toBeNull();
+    expect(stats.p90Ms).toBeNull();
+    expect(stats.prevMedianMs).toBeNull();
+  });
+
+  it('exclut les threads où le marchand a envoyé en premier (REQ-DASH-RT-03)', async () => {
+    const { start, end, prevStart, prevEnd } = getPeriodBounds('7d', undefined, undefined, NOW);
+
+    const thread = await createTestThread({
+      supportNature: 'confirmed_support',
+      firstMessageAt: new Date('2026-04-22T08:00:00Z'),
     });
+
+    // Merchant initiates (outgoing first)
+    await testDb.incomingEmail.create({
+      data: {
+        shop: TEST_SHOP,
+        externalMessageId: 'merchant-first',
+        canonicalThreadId: thread.id,
+        fromAddress: 'shop@example.com',
+        subject: 'Following up',
+        bodyText: 'Just checking in',
+        receivedAt: new Date('2026-04-22T08:00:00Z'),
+        processingStatus: 'outgoing',
+      },
+    });
+
+    const stats = await getResponseTimeStats(TEST_SHOP, start, end, prevStart, prevEnd);
+
+    // Thread excluded because merchant went first
+    expect(stats.medianMs).toBeNull();
+  });
+});
+
+describe('getDraftUsageStats', () => {
+  it('calcule le % de drafts utilisés depuis les buckets (REQ-DASH-DR-01)', async () => {
+    const { start, end, prevStart, prevEnd } = getPeriodBounds('7d', undefined, undefined, NOW);
+
+    const thread = await createTestThread();
+
+    // Each ReplyDraft needs its own IncomingEmail (emailId is @unique)
+    const email1 = await testDb.incomingEmail.create({
+      data: {
+        shop: TEST_SHOP,
+        externalMessageId: 'draft-email-1',
+        canonicalThreadId: thread.id,
+        fromAddress: 'c@example.com',
+        subject: 'S',
+        bodyText: 'B',
+        receivedAt: new Date('2026-04-22T08:00:00Z'),
+        processingStatus: 'analyzed',
+      },
+    });
+
+    const email2 = await testDb.incomingEmail.create({
+      data: {
+        shop: TEST_SHOP,
+        externalMessageId: 'draft-email-2',
+        canonicalThreadId: thread.id,
+        fromAddress: 'c@example.com',
+        subject: 'S2',
+        bodyText: 'B2',
+        receivedAt: new Date('2026-04-22T08:01:00Z'),
+        processingStatus: 'analyzed',
+      },
+    });
+
+    const email3 = await testDb.incomingEmail.create({
+      data: {
+        shop: TEST_SHOP,
+        externalMessageId: 'draft-email-3',
+        canonicalThreadId: thread.id,
+        fromAddress: 'c@example.com',
+        subject: 'S3',
+        bodyText: 'B3',
+        receivedAt: new Date('2026-04-22T08:02:00Z'),
+        processingStatus: 'analyzed',
+      },
+    });
+
+    // 1 as_is + 1 edited + 1 ignored = 3 classified, sentPct = 67%
+    await testDb.replyDraft.create({
+      data: {
+        shop: TEST_SHOP,
+        emailId: email1.id,
+        heuristicBucket: 'as_is',
+        heuristicComputedAt: new Date(),
+        createdAt: new Date('2026-04-22T09:00:00Z'),
+      },
+    });
+
+    await testDb.replyDraft.create({
+      data: {
+        shop: TEST_SHOP,
+        emailId: email2.id,
+        heuristicBucket: 'edited',
+        heuristicComputedAt: new Date(),
+        createdAt: new Date('2026-04-23T09:00:00Z'),
+      },
+    });
+
+    await testDb.replyDraft.create({
+      data: {
+        shop: TEST_SHOP,
+        emailId: email3.id,
+        heuristicBucket: 'ignored',
+        heuristicComputedAt: new Date(),
+        createdAt: new Date('2026-04-24T09:00:00Z'),
+      },
+    });
+
+    const stats = await getDraftUsageStats(TEST_SHOP, start, end, prevStart, prevEnd);
+
+    expect(stats.asIs).toBe(1);
+    expect(stats.edited).toBe(1);
+    expect(stats.ignored).toBe(1);
+    expect(stats.pending).toBe(0);
+    expect(stats.sentPct).toBe(67); // round((1+1)/3 * 100)
+  });
+
+  it('retourne sentPct null quand aucun draft classifié (REQ-DASH-DR-02)', async () => {
+    const { start, end, prevStart, prevEnd } = getPeriodBounds('7d', undefined, undefined, NOW);
+
+    const stats = await getDraftUsageStats(TEST_SHOP, start, end, prevStart, prevEnd);
+
+    expect(stats.sentPct).toBeNull();
+    expect(stats.asIs).toBe(0);
+    expect(stats.edited).toBe(0);
+    expect(stats.ignored).toBe(0);
+  });
+
+  it('compte les drafts pending séparément (REQ-DASH-DR-03)', async () => {
+    const { start, end, prevStart, prevEnd } = getPeriodBounds('7d', undefined, undefined, NOW);
+
+    const thread = await createTestThread();
+
+    const email1 = await testDb.incomingEmail.create({
+      data: {
+        shop: TEST_SHOP,
+        externalMessageId: 'pending-email-1',
+        canonicalThreadId: thread.id,
+        fromAddress: 'c@example.com',
+        subject: 'S',
+        bodyText: 'B',
+        receivedAt: new Date('2026-04-22T08:00:00Z'),
+        processingStatus: 'analyzed',
+      },
+    });
+
+    const email2 = await testDb.incomingEmail.create({
+      data: {
+        shop: TEST_SHOP,
+        externalMessageId: 'pending-email-2',
+        canonicalThreadId: thread.id,
+        fromAddress: 'c@example.com',
+        subject: 'S2',
+        bodyText: 'B2',
+        receivedAt: new Date('2026-04-22T08:01:00Z'),
+        processingStatus: 'analyzed',
+      },
+    });
+
+    // 2 pending drafts (heuristicBucket = null)
+    await testDb.replyDraft.create({
+      data: {
+        shop: TEST_SHOP,
+        emailId: email1.id,
+        heuristicBucket: null,
+        createdAt: new Date('2026-04-22T09:00:00Z'),
+      },
+    });
+
+    await testDb.replyDraft.create({
+      data: {
+        shop: TEST_SHOP,
+        emailId: email2.id,
+        heuristicBucket: null,
+        createdAt: new Date('2026-04-23T09:00:00Z'),
+      },
+    });
+
+    const stats = await getDraftUsageStats(TEST_SHOP, start, end, prevStart, prevEnd);
+
+    expect(stats.pending).toBe(2);
+    expect(stats.sentPct).toBeNull(); // denom = 0 because no classified drafts
   });
 });

@@ -28,6 +28,7 @@ import {
 } from "../mail/backfill";
 import { upsertReplyDraftBody } from "../support/reply-draft";
 import { generateLLMDraft } from "../support/llm-draft";
+import { evaluateThread } from "../support/draft-usage-heuristic";
 import { getSettings } from "../support/settings";
 
 export interface ProcessingReport {
@@ -334,7 +335,7 @@ async function isCancelled(shop: string, syncStartedAt: Date): Promise<boolean> 
  * Pass 1: fetch the remote message, store it in DB, and run the free
  * regex prefilter. LLM-based tiers are deferred to Pass 2.
  */
-async function ingestAndPrefilter(
+export async function ingestAndPrefilter(
   shop: string,
   provider: string,
   client: MailClient,
@@ -426,6 +427,11 @@ async function ingestAndPrefilter(
       await evaluateHistoryStatus(canonicalThreadId, shop);
     } catch (err) {
       console.error("[pipeline] state recompute (outgoing) failed:", err);
+    }
+    try {
+      await evaluateThread(canonicalThreadId, shop);
+    } catch (err) {
+      console.error("[pipeline] draft-usage heuristic failed:", err);
     }
     return;
   }
@@ -886,7 +892,7 @@ async function pickThreadsForClassification(
  * analysis + draft) on the given record. Thread context (incoming AND
  * outgoing) is pulled from DB — it was fully populated in Pass 1.
  */
-async function classifyAndDraft(
+export async function classifyAndDraft(
   shop: string,
   admin: AdminGraphqlClient,
   client: MailClient,
@@ -1006,6 +1012,42 @@ async function classifyAndDraft(
       ? await getThreadResolution(record.canonicalThreadId, shop)
       : null;
 
+    // Respect any manual intent override set on the previous anchor.
+    // Aligns this path with reanalyzeEmail (which does the same at ~line 1301).
+    const prevAnchor = record.canonicalThreadId
+      ? await prisma.incomingEmail.findFirst({
+          where: {
+            canonicalThreadId: record.canonicalThreadId,
+            processingStatus: "analyzed",
+            analysisResult: { not: null },
+            id: { not: record.id },
+          },
+          orderBy: { receivedAt: "desc" },
+          select: { analysisResult: true },
+        })
+      : null;
+    let prevAnalysis: Awaited<ReturnType<typeof analyzeSupportEmail>> | null = null;
+    if (prevAnchor?.analysisResult) {
+      try {
+        prevAnalysis = JSON.parse(prevAnchor.analysisResult) as Awaited<ReturnType<typeof analyzeSupportEmail>>;
+      } catch (err) {
+        console.error("[pipeline] classifyAndDraft: failed to parse prevAnchor analysisResult", err);
+      }
+    }
+    const reuseIntents = prevAnalysis?.manualOverrides?.intents
+      ? {
+          intent: prevAnalysis.intent,
+          intents: prevAnalysis.intents ?? [prevAnalysis.intent],
+          identifiers: prevAnalysis.identifiers,
+        }
+      : undefined;
+    const reuseOrder = prevAnalysis?.manualOverrides?.order
+      ? {
+          order: prevAnalysis.order ?? null,
+          orderCandidates: prevAnalysis.orderCandidates ?? [],
+        }
+      : undefined;
+
     const analysis = await analyzeSupportEmail({
       subject: msg.subject,
       body: threadContext.body,
@@ -1033,7 +1075,25 @@ async function classifyAndDraft(
       skipDraft: true,
       // Resolved threads: extract intent only, skip Shopify/tracking fetch.
       skipTracking: isResolved,
+      reuseIntents,
+      reuseOrder,
     });
+
+    // Carry forward manual override markers (same as reanalyzeEmail line ~1342).
+    if (prevAnalysis?.manualOverrides) {
+      analysis.manualOverrides = prevAnalysis.manualOverrides;
+    }
+
+    if (record.canonicalThreadId && prevAnalysis?.manualOverrides?.order) {
+      const finalOrderNumber = analysis.order?.name?.replace(/^#/, "") ?? null;
+      await prisma.thread.update({
+        where: { id: record.canonicalThreadId, shop },
+        data: { resolvedOrderNumber: finalOrderNumber },
+      }).catch((err) => {
+        console.error("[pipeline] classifyAndDraft: thread order sync failed:", err);
+      });
+    }
+
     await prisma.incomingEmail.update({
       where: { id: record.id },
       data: {

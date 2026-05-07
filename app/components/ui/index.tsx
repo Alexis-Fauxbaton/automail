@@ -1,4 +1,5 @@
 /* eslint-disable react/no-unknown-property */
+import { Fragment } from "react";
 import type { CSSProperties, ReactNode, SVGProps } from "react";
 
 // ---------------------------------------------------------------------------
@@ -338,6 +339,190 @@ export function SegmentedTabs<T extends string>({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// AlertBanner — dismissible strip shown when ≥1 anomaly detected.
+// ---------------------------------------------------------------------------
+
+export interface AlertItem {
+  type: "intent_surge" | "volume_surge" | "delay_degraded" | "reopened_spike";
+  label: string;
+  inboxFilterParam: string;
+}
+
+export function AlertBanner({
+  alerts,
+  inboxBasePath = "/app/inbox",
+}: {
+  alerts: AlertItem[];
+  inboxBasePath?: string;
+}) {
+  if (alerts.length === 0) return null;
+  const shown = alerts.slice(0, 3);
+  const extra = alerts.length - shown.length;
+  return (
+    <div
+      style={{
+        background: "#fef3c7",
+        border: "1px solid #f59e0b",
+        borderRadius: 12,
+        padding: "12px 16px",
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+      }}
+    >
+      {shown.map((a, i) => (
+        <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+          <span style={{ color: "#92400e", flex: 1 }}>{a.label}</span>
+          {a.inboxFilterParam && (
+            <a
+              href={`${inboxBasePath}?${a.inboxFilterParam}`}
+              style={{
+                color: "#b45309",
+                fontWeight: 600,
+                textDecoration: "none",
+                whiteSpace: "nowrap",
+              }}
+            >
+              Voir l&apos;inbox →
+            </a>
+          )}
+        </div>
+      ))}
+      {extra > 0 && (
+        <div style={{ fontSize: 12, color: "#92400e" }}>
+          +{extra} autre{extra > 1 ? "s" : ""}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// HeatMap — 7-row × 24-col grid visualising email volume by day-of-week × hour.
+// dow follows Postgres EXTRACT(DOW): 0 = Sunday, 1 = Monday … 6 = Saturday.
+// ---------------------------------------------------------------------------
+
+export function HeatMap({
+  cells,
+  maxCount,
+}: {
+  cells: Array<{ dow: number; hour: number; count: number }>;
+  maxCount?: number;
+}) {
+  const dowLabels = ["Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"];
+  // Display order: Mon first
+  const dowOrder = [1, 2, 3, 4, 5, 6, 0];
+  const cellMap = new Map(cells.map((c) => [`${c.dow}-${c.hour}`, c.count]));
+  const max = maxCount ?? Math.max(1, ...cells.map((c) => c.count));
+
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "36px repeat(24, 1fr)",
+          gap: 2,
+          minWidth: 600,
+        }}
+      >
+        {/* Header row */}
+        <div />
+        {Array.from({ length: 24 }, (_, h) => (
+          <div
+            key={h}
+            style={{ textAlign: "center", fontSize: 10, color: "#94a3b8" }}
+          >
+            {h % 3 === 0 ? String(h).padStart(2, "0") : ""}
+          </div>
+        ))}
+        {/* Data rows */}
+        {dowOrder.map((dow) => (
+          <Fragment key={dow}>
+            <div
+              style={{
+                fontSize: 11,
+                color: "#64748b",
+                lineHeight: "20px",
+                paddingRight: 4,
+              }}
+            >
+              {dowLabels[dow]}
+            </div>
+            {Array.from({ length: 24 }, (_, hour) => {
+              const count = cellMap.get(`${dow}-${hour}`) ?? 0;
+              const intensity = count / max;
+              const bg =
+                count === 0
+                  ? "#f1f5f9"
+                  : `rgba(79, 70, 229, ${(0.15 + intensity * 0.85).toFixed(2)})`;
+              return (
+                <div
+                  key={hour}
+                  title={`${dowLabels[dow]} ${String(hour).padStart(2, "0")}h · ${count} email${count !== 1 ? "s" : ""}`}
+                  style={{
+                    background: bg,
+                    borderRadius: 3,
+                    height: 20,
+                  }}
+                />
+              );
+            })}
+          </Fragment>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TopIntentsList — ranked intents with thread count + median response time.
+// ---------------------------------------------------------------------------
+
+export function TopIntentsList({
+  items,
+  t,
+}: {
+  items: Array<{ intent: string; count: number; medianMs: number | null }>;
+  t: (key: string, opts?: Record<string, unknown>) => string;
+}) {
+  function formatDuration(ms: number | null): string {
+    if (ms === null) return "—";
+    const h = ms / 3_600_000;
+    if (h >= 1) return `${h.toFixed(1)}h`;
+    const m = ms / 60_000;
+    return `${Math.round(m)}m`;
+  }
+  const urgentIntents = new Set(["damaged_product", "refund_request"]);
+  const warningIntents = new Set(["delivery_delay"]);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {items.map((item) => (
+        <div key={item.intent} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Pill
+            tone={
+              urgentIntents.has(item.intent)
+                ? "danger"
+                : warningIntents.has(item.intent)
+                  ? "warning"
+                  : "info"
+            }
+          >
+            {t(`analysis.intent_${item.intent}`, { defaultValue: item.intent })}
+          </Pill>
+          <span style={{ flex: 1, fontSize: 13, color: "#334155" }}>
+            {item.count} thread{item.count !== 1 ? "s" : ""}
+          </span>
+          <span style={{ fontSize: 12, color: "#64748b" }}>
+            {formatDuration(item.medianMs)}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }

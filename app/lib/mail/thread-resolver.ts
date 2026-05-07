@@ -17,6 +17,7 @@
 //   3. Create a new Thread.
 
 import type { PrismaClient, Prisma } from "@prisma/client";
+import { Prisma as PrismaNS } from "@prisma/client";
 import prisma from "../../db.server";
 
 export interface ResolveThreadInput {
@@ -134,30 +135,61 @@ export async function resolveCanonicalThread(
   }
 
   // ---- 3. Create a new Thread ----
-  const thread = await db.thread.create({
-    data: {
-      shop,
-      provider,
-      firstMessageAt: receivedAt,
-      lastMessageAt: receivedAt,
-      messageCount: 0,                // incremented after email upsert
-      subjectKey: normalizeSubjectKey(subject),
-      providerIds: {
-        create: {
-          shop,
-          provider,
-          providerThreadId: mappingKey,
+  // Concurrent ingestions of two messages sharing the same providerThreadId
+  // can both reach this point (both passed step 1 because the mapping did
+  // not yet exist). Whichever loses the race on the (shop, provider,
+  // providerThreadId) unique constraint must NOT throw — it should fall
+  // back to the now-existing mapping written by the winner.
+  try {
+    const thread = await db.thread.create({
+      data: {
+        shop,
+        provider,
+        firstMessageAt: receivedAt,
+        lastMessageAt: receivedAt,
+        messageCount: 0,                // incremented after email upsert
+        subjectKey: normalizeSubjectKey(subject),
+        providerIds: {
+          create: {
+            shop,
+            provider,
+            providerThreadId: mappingKey,
+          },
         },
       },
-    },
-    select: { id: true },
-  });
+      select: { id: true },
+    });
 
-  return {
-    canonicalThreadId: thread.id,
-    isNew: true,
-    mergedFromRfc: false,
-  };
+    return {
+      canonicalThreadId: thread.id,
+      isNew: true,
+      mergedFromRfc: false,
+    };
+  } catch (err) {
+    if (
+      err instanceof PrismaNS.PrismaClientKnownRequestError &&
+      err.code === "P2002"
+    ) {
+      const winner = await db.threadProviderId.findUnique({
+        where: {
+          shop_provider_providerThreadId: {
+            shop,
+            provider,
+            providerThreadId: mappingKey,
+          },
+        },
+        select: { canonicalThreadId: true },
+      });
+      if (winner) {
+        return {
+          canonicalThreadId: winner.canonicalThreadId,
+          isNew: false,
+          mergedFromRfc: false,
+        };
+      }
+    }
+    throw err;
+  }
 }
 
 /**

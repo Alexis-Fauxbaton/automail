@@ -8,6 +8,7 @@
 
 import { getOpenAIClient, trackedChatCompletion, type TrackedCallContext } from "../llm/client";
 import { buildDraft as templateFallback } from "./response-draft";
+import { markdownToHtml } from "./markdown-to-html";
 import type { CrawledContext } from "./crawl/context-crawler";
 import type { SupportSettings } from "./settings";
 import type {
@@ -94,7 +95,14 @@ ${closingNote}
 - If live tracking context is available, use it naturally without citing its source.
 
 ## Output
-Plain text only. No subject line, no markdown, no JSON.`;
+Use light Markdown formatting where it helps readability:
+- **bold** for key information (order numbers, dates, actions)
+- bullet lists (- item) for multiple steps or items
+- numbered lists (1. item) for sequential steps
+- > blockquote for quoting back something the customer said
+- [link text](url) for hyperlinks
+
+No subject line, no JSON. Keep formatting minimal and professional.`;
 }
 
 function buildUserMessage(
@@ -297,7 +305,7 @@ export async function generateLLMDraft(input: LLMDraftInput): Promise<string> {
   const primaryTracking = (shareTracking ? input.trackings[0] : null) ?? null;
 
   if (!client) {
-    return templateFallback({
+    return markdownToHtml(templateFallback({
       intent: input.intent,
       order: input.order,
       orderCandidates: input.orderCandidates,
@@ -314,7 +322,7 @@ export async function generateLLMDraft(input: LLMDraftInput): Promise<string> {
       },
       settings: input.settings,
       parsed: input.parsed,
-    });
+    }));
   }
 
   try {
@@ -346,12 +354,12 @@ export async function generateLLMDraft(input: LLMDraftInput): Promise<string> {
       { callSite: "llm-draft", ...input.trackedCallContext },
     );
 
-    const draft = response.choices[0]?.message?.content?.trim() ?? "";
-    if (!draft) throw new Error("Empty response from OpenAI");
-    return draft;
+    const markdown = response.choices[0]?.message?.content?.trim() ?? "";
+    if (!markdown) throw new Error("Empty response from OpenAI");
+    return markdownToHtml(markdown);
   } catch (err) {
     console.error("[llm-draft] OpenAI call failed, using template fallback:", err);
-    return templateFallback({
+    return markdownToHtml(templateFallback({
       intent: input.intent,
       order: input.order,
       orderCandidates: input.orderCandidates,
@@ -368,6 +376,6 @@ export async function generateLLMDraft(input: LLMDraftInput): Promise<string> {
       },
       settings: input.settings,
       parsed: input.parsed,
-    });
+    }));
   }
 }

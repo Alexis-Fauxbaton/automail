@@ -65,8 +65,10 @@ jobs:
         run: npx prisma migrate deploy
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/automail_test
+          DIRECT_URL: postgresql://test:test@localhost:5432/automail_test
 
       - name: Run integration tests
         run: npm run test:integration
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/automail_test
+          DIRECT_URL: postgresql://test:test@localhost:5432/automail_test

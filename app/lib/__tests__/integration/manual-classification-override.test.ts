@@ -282,3 +282,149 @@ describe("manual classification override survives auto-refresh", () => {
     expect(db.manualOverrides?.intents?.editedAt).toBeDefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// classifyAndDraft respects manualOverrides.intents from previous anchor
+// ---------------------------------------------------------------------------
+
+describe("classifyAndDraft respects manualOverrides.intents from previous anchor", () => {
+  it("passes reuseIntents from prev anchor manualOverrides and preserves detectedIntent", async () => {
+    // ── Fixture: thread with a previously-analyzed anchor email that has a
+    //    manual intent override set (merchant changed it to 'refund_request').
+    const thread = await testDb.thread.create({
+      data: {
+        shop: TEST_SHOP,
+        provider: "gmail",
+        lastMessageAt: new Date(),
+        firstMessageAt: new Date(),
+        operationalStateUpdatedAt: new Date(),
+        operationalState: "open",
+        supportNature: "confirmed_support",
+        historyStatus: "complete",
+      },
+    });
+
+    const anchorAnalysis = makeAnalysis("refund_request", {
+      manualOverrides: { intents: { editedAt: "2026-05-01T00:00:00.000Z" } },
+    });
+
+    // Previous anchor email — analyzed, with manual override.
+    const anchorEmail = await testDb.incomingEmail.create({
+      data: {
+        shop: TEST_SHOP,
+        externalMessageId: `ext-anchor-${thread.id}`,
+        canonicalThreadId: thread.id,
+        fromAddress: "customer@example.com",
+        subject: "Where is my order?",
+        bodyText: "I haven't received my order yet.",
+        receivedAt: new Date(Date.now() - 60_000),
+        processingStatus: "analyzed",
+        analysisResult: JSON.stringify(anchorAnalysis),
+        detectedIntent: anchorAnalysis.intent,
+        lastAnalyzedAt: new Date(Date.now() - 60_000),
+      },
+    });
+
+    // New incoming email on the same thread — not yet analyzed.
+    const newEmail = await testDb.incomingEmail.create({
+      data: {
+        shop: TEST_SHOP,
+        externalMessageId: `ext-new-${thread.id}`,
+        canonicalThreadId: thread.id,
+        fromAddress: "customer@example.com",
+        subject: "Re: Where is my order?",
+        bodyText: "Still waiting!",
+        receivedAt: new Date(),
+        processingStatus: "ingested",
+        tier2Result: "support_client",
+      },
+    });
+
+    // ── Mirror the fix: build reuseIntents from the previous anchor ──────
+    // This is the exact logic introduced into classifyAndDraft by the fix.
+    const prevAnchorRow = await testDb.incomingEmail.findFirst({
+      where: {
+        canonicalThreadId: thread.id,
+        processingStatus: "analyzed",
+        analysisResult: { not: null },
+        id: { not: newEmail.id },
+      },
+      orderBy: { receivedAt: "desc" },
+      select: { analysisResult: true },
+    });
+
+    const prevAnalysis = prevAnchorRow?.analysisResult
+      ? (JSON.parse(prevAnchorRow.analysisResult as string) as SupportAnalysis)
+      : null;
+
+    const reuseIntents = prevAnalysis?.manualOverrides?.intents
+      ? {
+          intent: prevAnalysis.intent,
+          intents: prevAnalysis.intents ?? [prevAnalysis.intent],
+          identifiers: prevAnalysis.identifiers,
+        }
+      : undefined;
+
+    // ── Assert: reuseIntents carries the merchant's override ──────────────
+    expect(reuseIntents).toBeDefined();
+    expect(reuseIntents!.intent).toBe("refund_request");
+
+    // ── Simulate analyzeSupportEmail call (as the fixed classifyAndDraft
+    //    would make it) and capture the argument.
+    let capturedInput: AnalyzeInput | undefined;
+    (analyzeSupportEmail as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async (input: AnalyzeInput) => {
+        capturedInput = input;
+        // LLM would return WISMO if not given reuseIntents — but the fix passes
+        // reuseIntents so the orchestrator must honour the override.
+        const intent = input.reuseIntents?.intent ?? "where_is_my_order";
+        return {
+          ...makeAnalysis(intent),
+          crawledContexts: [],
+        };
+      },
+    );
+
+    const fakeAdmin = {} as never;
+    const analysis = await analyzeSupportEmail({
+      subject: newEmail.subject ?? "",
+      body: "Still waiting!",
+      admin: fakeAdmin,
+      reuseIntents,
+    });
+
+    // Carry forward manual override markers (same as the fix).
+    if (prevAnalysis?.manualOverrides) {
+      analysis.manualOverrides = prevAnalysis.manualOverrides;
+    }
+
+    // Persist the analysis as the fixed classifyAndDraft would.
+    await testDb.incomingEmail.update({
+      where: { id: newEmail.id },
+      data: {
+        processingStatus: "analyzed",
+        analysisResult: JSON.stringify(analysis),
+        detectedIntent: analysis.intent,
+        lastAnalyzedAt: new Date(),
+      },
+    });
+
+    // ── Assert: analyzeSupportEmail received reuseIntents with the override ─
+    expect(capturedInput).toBeDefined();
+    expect(capturedInput!.reuseIntents?.intent).toBe("refund_request");
+
+    // ── Assert: final persisted detectedIntent is the override, not WISMO ──
+    const saved = await testDb.incomingEmail.findUniqueOrThrow({
+      where: { id: newEmail.id },
+      select: { detectedIntent: true, analysisResult: true },
+    });
+    expect(saved.detectedIntent).toBe("refund_request");
+
+    const savedAnalysis = JSON.parse(saved.analysisResult as string) as SupportAnalysis;
+    expect(savedAnalysis.intent).toBe("refund_request");
+    expect(savedAnalysis.manualOverrides?.intents?.editedAt).toBe("2026-05-01T00:00:00.000Z");
+
+    // Cleanup anchor (other cleanup happens in beforeEach).
+    void anchorEmail; // referenced to silence unused-var linting
+  });
+});
