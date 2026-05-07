@@ -172,8 +172,8 @@ export async function getZohoAccessToken(shop: string): Promise<string> {
   const conn = await prisma.mailConnection.findUnique({ where: { shop } });
   if (!conn || conn.provider !== "zoho") throw new Error("No Zoho connection");
 
-  // Refresh if expired or about to expire
-  if (conn.tokenExpiry.getTime() < Date.now() + 60_000) {
+  // 120 s buffer guards against clock skew and request-in-flight expiry.
+  if (conn.tokenExpiry.getTime() < Date.now() + 120_000) {
     return refreshZohoToken(shop);
   }
   return decrypt(conn.accessToken);
