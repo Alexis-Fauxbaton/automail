@@ -60,10 +60,14 @@ const RULES: Rule[] = [
       /vous vous [êe]tes tromp[ée]s?/i,
     ],
   },
+  // The two `delivery_delay` rules below are split intentionally:
+  // - "stuck / no movement" keywords are very specific and must win over
+  //   refund_request when both signals appear
+  // - "late / overdue" keywords are generic and lose to an explicit refund ask
+  // Do not merge them. Order matters; CODE2-M1 was a false positive.
   {
     intent: "delivery_delay",
     keywords: [
-      // Stuck / no movement
       /stuck/i,
       /not moving/i,
       /no update/i,
@@ -73,15 +77,6 @@ const RULES: Rule[] = [
       /pas de mise [àa] jour/i,
       /n'a pas bougé/i,
       /pas boug[ée]/i,
-      // Late / overdue
-      /late/i,
-      /delay/i,
-      /still waiting/i,
-      /taking too long/i,
-      /en retard/i,
-      /retard/i,
-      /toujours pas/i,
-      /j'attends/i,
     ],
   },
   {
@@ -92,6 +87,19 @@ const RULES: Rule[] = [
       /money back/i,
       /remboursement/i,
       /rembours/i,
+    ],
+  },
+  {
+    intent: "delivery_delay",
+    keywords: [
+      /late/i,
+      /delay/i,
+      /still waiting/i,
+      /taking too long/i,
+      /en retard/i,
+      /retard/i,
+      /toujours pas/i,
+      /j'attends/i,
     ],
   },
   {

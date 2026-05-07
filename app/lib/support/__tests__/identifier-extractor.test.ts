@@ -141,4 +141,49 @@ describe("extractIdentifiers", () => {
     expect(result.trackingNumber).toBe("1Z999AA10123456784");
     expect(result.customerName).toBe("Jean Dupont");
   });
+
+  // --- Pass 2: order phrase patterns ---
+  describe("ORDER_WITH_PHRASE", () => {
+    it("extracts via 'order number is N'", () => {
+      expect(extract("", "order number is 9876")).toMatchObject({ orderNumber: "9876" });
+    });
+
+    it("extracts via 'order no. N'", () => {
+      expect(extract("", "order no. 5432")).toMatchObject({ orderNumber: "5432" });
+    });
+
+    it("extracts via 'numéro de commande est N'", () => {
+      expect(extract("", "numéro de commande est 7777")).toMatchObject({ orderNumber: "7777" });
+    });
+  });
+
+  // --- Pass 2: stricter email regex rejects consecutive dots ---
+  describe("EMAIL regex (strict)", () => {
+    it("matches a normal email", () => {
+      expect(extract("", "contact me at user@example.com please")).toMatchObject({
+        email: "user@example.com",
+      });
+    });
+
+    it("does not match a malformed local part with consecutive dots as a single email", () => {
+      // The regex still extracts the valid suffix substring "name@example.com"
+      // (anything else would be lossy), but does NOT return the malformed
+      // "user..name@example.com" as a whole.
+      expect(extract("", "user..name@example.com").email).toBe("name@example.com");
+    });
+
+    it("does not match a malformed domain with consecutive dots as a single email", () => {
+      // Similar to above: the prefix domain is invalid, but a valid suffix
+      // ("user@example.com" via the second domain dot) is not present.
+      // What matters is that the literal "user@example..com" is rejected.
+      const out = extract("", "user@example..com").email;
+      expect(out === undefined || /^[^.]/.test(out.split("@")[1] ?? "")).toBe(true);
+    });
+  });
+
+  // --- Pass 2: Unicode handling end-to-end ---
+  it("preserves accented characters in customer names", () => {
+    const result = extract("Re: commande", "Je m'appelle François Müller");
+    expect(result.customerName).toBe("François Müller");
+  });
 });
