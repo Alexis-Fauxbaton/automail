@@ -1,8 +1,25 @@
 import { getOpenAIClient, trackedChatCompletion, type TrackedCallContext } from "../llm/client";
+import { markdownToHtml } from "../support/markdown-to-html";
+
+/**
+ * Strip HTML tags to plain text for LLM input.
+ * Replaces block-level closing tags with newlines to preserve readability.
+ */
+function htmlToPlainText(html: string): string {
+  return html
+    .replace(/<\/p>|<\/li>|<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
 
 /**
  * Refine a draft reply based on user instructions.
- * Takes the current draft and free-text instructions, returns an updated draft.
+ * Accepts HTML draft input (from TipTap), returns HTML output.
  */
 export async function refineDraft(
   currentDraft: string,
@@ -13,9 +30,12 @@ export async function refineDraft(
   const client = getOpenAIClient();
   if (!client) throw new Error("OpenAI API key not configured");
 
+  // Strip HTML to plain text so the LLM sees clean content, not markup
+  const currentDraftText = htmlToPlainText(currentDraft);
+
   const systemPrompt = `You are a customer support email editor for an e-commerce store.
 You will receive:
-- The current draft reply to a customer
+- The current draft reply to a customer (as plain text)
 - The user's instructions on how to modify it
 - Optionally, the original customer email for context
 
@@ -24,9 +44,14 @@ Apply the requested changes while keeping the reply:
 - Factual (never invent information)
 - In the same language as the current draft
 
-Return ONLY the updated email text. No explanation, no markdown, no quotes.`;
+Use light Markdown formatting where it helps readability:
+- **bold** for key information
+- bullet lists (- item) for multiple steps or items
+- numbered lists (1. item) for sequential steps
 
-  let userMessage = `Current draft:\n${currentDraft}\n\nInstructions: ${instructions}`;
+Return ONLY the updated email text. No explanation, no quotes.`;
+
+  let userMessage = `Current draft:\n${currentDraftText}\n\nInstructions: ${instructions}`;
   if (context?.subject || context?.body) {
     const original = [
       context.subject ? `Subject: ${context.subject}` : "",
@@ -49,5 +74,6 @@ Return ONLY the updated email text. No explanation, no markdown, no quotes.`;
     { callSite: "refine-draft", ...ctx },
   );
 
-  return response.choices[0]?.message?.content?.trim() ?? currentDraft;
+  const markdown = response.choices[0]?.message?.content?.trim() ?? currentDraft;
+  return markdownToHtml(markdown);
 }
