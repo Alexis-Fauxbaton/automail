@@ -90,7 +90,7 @@ export function verifyOAuthState(raw: string): VerifiedState | null {
   // Basic shop-domain shape check. Shopify shops are *.myshopify.com.
   // Custom domains may be configured via SHOP_CUSTOM_DOMAIN — but OAuth
   // flows only bind mailboxes to the canonical *.myshopify.com identity.
-  if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/i.test(payload.s)) return null;
+  if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(payload.s.toLowerCase())) return null;
 
-  return { provider: payload.p, shop: payload.s };
+  return { provider: payload.p, shop: payload.s.toLowerCase() };
 }

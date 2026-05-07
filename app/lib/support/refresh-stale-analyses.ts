@@ -79,40 +79,49 @@ export async function refreshStaleAnalysesForShop(
     orderBy: { receivedAt: "desc" },
     distinct: ["canonicalThreadId"],
     select: { id: true, analysisResult: true },
+    take: 10,
   });
 
   let refreshed = 0;
+  let skipped = 0;
   let errors = 0;
   if (candidates.length === 0) {
     console.log(`[refresh-stale] shop=${shop} no stale candidates found`);
   }
-  for (const c of candidates) {
-    try {
-      const previous: SupportAnalysis | null = c.analysisResult
-        ? (JSON.parse(c.analysisResult) as SupportAnalysis)
-        : null;
 
-      const reclassifyIntent =
-        !previous ||
-        !previous.intent ||
-        previous.intent === "unknown" ||
-        !previous.intents ||
-        previous.intents.length === 0;
-      const reSearchOrder = !previous || !previous.order;
+  const BATCH_SIZE = 3;
+  for (let i = 0; i < candidates.length; i += BATCH_SIZE) {
+    const batch = candidates.slice(i, i + BATCH_SIZE);
+    await Promise.all(
+      batch.map(async (c) => {
+        try {
+          const previous: SupportAnalysis | null = c.analysisResult
+            ? (JSON.parse(c.analysisResult) as SupportAnalysis)
+            : null;
 
-      await refreshThreadAnalysis(c.id, admin, shop, {
-        reclassifyIntent,
-        reSearchOrder,
-        refreshTracking: true,
-      });
-      refreshed++;
-    } catch (err) {
-      errors++;
-      console.error(
-        `[refresh-stale] shop=${shop} email=${c.id} reanalyze failed:`,
-        err,
-      );
-    }
+          const reclassifyIntent =
+            !previous ||
+            !previous.intent ||
+            previous.intent === "unknown" ||
+            !previous.intents ||
+            previous.intents.length === 0;
+          const reSearchOrder = !previous || !previous.order;
+
+          await refreshThreadAnalysis(c.id, admin, shop, {
+            reclassifyIntent,
+            reSearchOrder,
+            refreshTracking: true,
+          });
+          refreshed++;
+        } catch (err) {
+          errors++;
+          console.error(
+            `[refresh-stale] shop=${shop} email=${c.id} reanalyze failed:`,
+            err,
+          );
+        }
+      }),
+    );
   }
-  return { refreshed, skipped: 0, errors };
+  return { refreshed, skipped, errors };
 }

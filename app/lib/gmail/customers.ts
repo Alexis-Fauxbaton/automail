@@ -11,8 +11,18 @@ const CUSTOMERS_QUERY = `#graphql
 `;
 
 const CACHE_TTL_MS = 20 * 60 * 1000; // 20 minutes
+const MAX_CACHE_SIZE = 200;
 
-const cache = new Map<string, { emails: Set<string>; fetchedAt: number }>();
+type CacheEntry = { emails: Set<string>; fetchedAt: number };
+const cache = new Map<string, CacheEntry>();
+
+function setCacheEntry(shop: string, value: CacheEntry) {
+  if (cache.size >= MAX_CACHE_SIZE) {
+    const firstKey = cache.keys().next().value;
+    if (firstKey) cache.delete(firstKey);
+  }
+  cache.set(shop, value);
+}
 
 export async function fetchCustomerEmails(
   admin: AdminGraphqlClient,
@@ -36,6 +46,6 @@ export async function fetchCustomerEmails(
     console.error("[gmail/customers] Failed to fetch customer emails:", err);
   }
 
-  cache.set(shop, { emails, fetchedAt: Date.now() });
+  setCacheEntry(shop, { emails, fetchedAt: Date.now() });
   return emails;
 }

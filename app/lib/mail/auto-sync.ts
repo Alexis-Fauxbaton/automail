@@ -45,6 +45,7 @@ const MAX_CONCURRENT = Math.max(
 const ZOMBIE_TIMEOUT_MS = 30 * 60_000; // reclaim jobs stuck > 30 min in "running"
 
 let started = false;
+let _intervalHandle: ReturnType<typeof setInterval> | null = null;
 let inFlight = 0;
 const runningShops = new Set<string>();
 
@@ -59,7 +60,7 @@ export function startAutoSyncLoop(): void {
     tick().catch((err) =>
       console.error("[auto-sync] initial tick failed:", err),
     );
-    setInterval(() => {
+    _intervalHandle = setInterval(() => {
       tick().catch((err) =>
         console.error("[auto-sync] tick failed:", err),
       );
@@ -177,18 +178,22 @@ async function drainJobQueue(): Promise<void> {
  * `enqueueJob` ensures at most one pending/running job per shop at a time.
  */
 async function enqueueRecomputeIfNeeded(): Promise<void> {
-  // Only target threads whose operationalState has NEVER been computed
-  // (operationalStateUpdatedAt IS NULL). Threads that were already processed
-  // but legitimately stay "open" (e.g. outgoing-only) must NOT trigger a new
-  // job every tick — that would create an infinite recompute loop.
-  const staleShops = await prisma.thread.groupBy({
-    by: ["shop"],
-    where: { operationalState: "open", operationalStateUpdatedAt: null },
-  });
-  for (const { shop } of staleShops) {
-    await enqueueJob(shop, "recompute").catch((err) =>
-      console.error(`[auto-sync] enqueue recompute for ${shop} failed:`, err),
-    );
+  try {
+    // Only target threads whose operationalState has NEVER been computed
+    // (operationalStateUpdatedAt IS NULL). Threads that were already processed
+    // but legitimately stay "open" (e.g. outgoing-only) must NOT trigger a new
+    // job every tick — that would create an infinite recompute loop.
+    const staleShops = await prisma.thread.groupBy({
+      by: ["shop"],
+      where: { operationalState: "open", operationalStateUpdatedAt: null },
+    });
+    for (const { shop } of staleShops) {
+      await enqueueJob(shop, "recompute").catch((err) =>
+        console.error(`[auto-sync] enqueue recompute for ${shop} failed:`, err),
+      );
+    }
+  } catch (err) {
+    console.error("[auto-sync] enqueueRecomputeIfNeeded failed:", err);
   }
 }
 
@@ -317,23 +322,29 @@ async function runSyncForShop(
   // Best-effort refresh of active thread analyses during mailbox sync so
   // tracking and Shopify data don't remain stale while the mail timestamp
   // updates. Failures are isolated per email and never abort sync.
-  try {
-    const res = await refreshStaleAnalysesForShop(shop, admin, {
-      maxAgeMs: ANALYSIS_FRESHNESS_MS.autoRefresh,
-    });
-    if (res.refreshed > 0 || res.errors > 0) {
-      console.log(
-        `[auto-sync] shop=${shop} stale-refresh: refreshed=${res.refreshed} errors=${res.errors}`,
-      );
+  if (report.total > 0) {
+    try {
+      const res = await refreshStaleAnalysesForShop(shop, admin, {
+        maxAgeMs: ANALYSIS_FRESHNESS_MS.autoRefresh,
+      });
+      if (res.refreshed > 0 || res.errors > 0) {
+        console.log(
+          `[auto-sync] shop=${shop} stale-refresh: refreshed=${res.refreshed} errors=${res.errors}`,
+        );
+      }
+    } catch (err) {
+      console.error(`[auto-sync] shop=${shop} stale-refresh failed:`, err);
     }
-  } catch (err) {
-    console.error(`[auto-sync] shop=${shop} stale-refresh failed:`, err);
   }
 }
 
 // Reset the singleton guard on hot reload so the loop doesn't duplicate.
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
+    if (_intervalHandle) {
+      clearInterval(_intervalHandle);
+      _intervalHandle = null;
+    }
     started = false;
   });
 }

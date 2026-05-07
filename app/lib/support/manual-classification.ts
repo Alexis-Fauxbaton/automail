@@ -154,14 +154,19 @@ export async function persistClassificationEdit(
       analysisResult: { not: null },
     },
     orderBy: { receivedAt: "desc" },
-    select: { id: true, analysisResult: true },
+    select: { id: true, analysisResult: true, shop: true },
   });
 
   if (!anchor || !anchor.analysisResult) {
     throw new Error("Thread has no analyzed email to edit");
   }
 
-  const current = JSON.parse(anchor.analysisResult) as SupportAnalysis;
+  let current: SupportAnalysis;
+  try {
+    current = JSON.parse(anchor.analysisResult) as SupportAnalysis;
+  } catch {
+    throw new Error(`Failed to parse analysisResult for email ${anchor.id}`);
+  }
   const next = applyClassificationEditToAnalysis(current, edit);
 
   const data: Prisma.IncomingEmailUpdateInput = {
@@ -169,25 +174,20 @@ export async function persistClassificationEdit(
     detectedIntent: next.intent,
   };
 
-  await prisma.incomingEmail.update({
-    where: { id: anchor.id },
-    data,
-  });
-
-  // Keep Thread.resolvedOrderNumber aligned with the manual edit so the
-  // inbox-list and detail-header badges reflect the new state. Only touch
-  // it when the order field was actually edited; intent-only edits leave
-  // the resolved order untouched.
   const orderTouched =
     edit.resetOrder === true || edit.detachOrder === true || edit.order !== undefined;
+
   if (orderTouched) {
     const newOrderNumber = next.order?.name?.replace(/^#/, "") ?? null;
-    await prisma.thread.update({
-      where: { id: threadId },
-      data: { resolvedOrderNumber: newOrderNumber },
-    }).catch((err) => {
-      console.error("[manual-classification] thread.update failed:", err);
-    });
+    await prisma.$transaction([
+      prisma.incomingEmail.update({ where: { id: anchor.id }, data }),
+      prisma.thread.update({
+        where: { id: threadId, shop: anchor.shop },
+        data: { resolvedOrderNumber: newOrderNumber },
+      }),
+    ]);
+  } else {
+    await prisma.incomingEmail.update({ where: { id: anchor.id }, data });
   }
 
   return { emailId: anchor.id, analysis: next };

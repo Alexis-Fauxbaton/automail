@@ -72,8 +72,12 @@ export const sessionStorage = shopify.sessionStorage;
 // ---------------------------------------------------------------------------
 const E2E_AUTH_BYPASS_ACTIVE =
   process.env.E2E_AUTH_BYPASS === "true" &&
-  process.env.NODE_ENV !== "production" &&
+  (process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test") &&
   process.env.ALLOW_E2E_AUTH_BYPASS === "yes-i-know";
+
+if (process.env.E2E_AUTH_BYPASS === "true" && process.env.NODE_ENV === "production") {
+  throw new Error("E2E_AUTH_BYPASS must not be set in production");
+}
 
 const E2E_BYPASS_SHOP = "e2e-test.myshopify.com";
 
@@ -94,6 +98,9 @@ export const authenticate = E2E_AUTH_BYPASS_ACTIVE
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ...(shopify.authenticate as any),
       admin: async (_request: Request) => {
+        if (_request.method !== "GET" && _request.method !== "HEAD") {
+          throw new Response("E2E bypass is read-only", { status: 405 });
+        }
         const session = {
           id: `offline_${E2E_BYPASS_SHOP}`,
           shop: E2E_BYPASS_SHOP,

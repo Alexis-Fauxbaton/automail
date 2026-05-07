@@ -9,6 +9,8 @@ const RETENTION_DAYS = 7;
 let ran = false;
 
 export async function runBootCleanup(): Promise<void> {
+  const isLeaderWorker = !process.env.WORKER_ID || process.env.WORKER_ID === "0";
+  if (!isLeaderWorker) return;
   if (ran) return;
   ran = true;
 

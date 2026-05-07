@@ -6,7 +6,7 @@ import { extractAndCache, mergeThreadIdentifiers } from "./app/lib/support/threa
 
 const emails = await prisma.incomingEmail.findMany({
   where: { processingStatus: { notIn: ["outgoing"] } },
-  select: { id: true, subject: true, bodyText: true, canonicalThreadId: true },
+  select: { id: true, subject: true, bodyText: true, canonicalThreadId: true, shop: true },
 });
 
 console.log(`Extracting identifiers for ${emails.length} messages...`);
@@ -14,12 +14,16 @@ for (const e of emails) {
   await extractAndCache(e.id, e.subject, e.bodyText);
 }
 
-const canonicalIds = Array.from(
-  new Set(emails.map((e) => e.canonicalThreadId).filter((id): id is string => !!id)),
-);
+const threadShopMap = new Map<string, string>();
+for (const e of emails) {
+  if (e.canonicalThreadId && !threadShopMap.has(e.canonicalThreadId)) {
+    threadShopMap.set(e.canonicalThreadId, e.shop);
+  }
+}
+const canonicalIds = Array.from(threadShopMap.keys());
 console.log(`Merging identifiers for ${canonicalIds.length} threads...`);
 for (const id of canonicalIds) {
-  await mergeThreadIdentifiers(id);
+  await mergeThreadIdentifiers(id, threadShopMap.get(id)!);
 }
 
 const resolved = await prisma.thread.count({

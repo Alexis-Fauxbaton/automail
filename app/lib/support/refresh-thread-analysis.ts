@@ -110,13 +110,13 @@ export async function refreshThreadAnalysis(
   if (record.canonicalThreadId) {
     try {
       await extractAndCache(record.id, record.subject, record.bodyText);
-      await mergeThreadIdentifiers(record.canonicalThreadId);
+      await mergeThreadIdentifiers(record.canonicalThreadId, shop);
     } catch (err) {
       console.error("[refresh-thread-analysis] thread identifier merge failed:", err);
     }
   }
   const threadResolution = record.canonicalThreadId
-    ? await getThreadResolution(record.canonicalThreadId)
+    ? await getThreadResolution(record.canonicalThreadId, shop)
     : null;
 
   // Build reuseIntents / reuseOrder payloads from the previous analysis

@@ -10,7 +10,6 @@ const SAFE_INLINE_MIME_TYPES = new Set([
   "image/png",
   "image/gif",
   "image/webp",
-  "image/svg+xml",
   "application/pdf",
 ]);
 
@@ -68,7 +67,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (attachment.inlineData) {
     const buffer = Buffer.from(attachment.inlineData, "base64");
     const { contentType, forceDownload } = safeMimeType(attachment.mimeType);
-    const safeCd = forceDownload ? `attachment; filename="${safeFileName}"` : cd;
+    const safeCd = (forceDownload || contentType === "image/svg+xml") ? `attachment; filename="${safeFileName}"` : cd;
     return new Response(buffer, {
       headers: {
         "Content-Type": contentType,
@@ -97,7 +96,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       if (!data) return new Response("Empty attachment", { status: 502 });
       const buffer = Buffer.from(data, "base64url");
       const { contentType, forceDownload } = safeMimeType(attachment.mimeType);
-      const safeCd = forceDownload ? `attachment; filename="${safeFileName}"` : cd;
+      const safeCd = (forceDownload || contentType === "image/svg+xml") ? `attachment; filename="${safeFileName}"` : cd;
       return new Response(buffer, {
         headers: {
           "Content-Type": contentType,
@@ -139,7 +138,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       if (!proxyRes.ok) return new Response("Provider error", { status: 502 });
       const buffer = Buffer.from(await proxyRes.arrayBuffer());
       const { contentType, forceDownload } = safeMimeType(attachment.mimeType);
-      const safeCd = forceDownload ? `attachment; filename="${safeFileName}"` : cd;
+      const safeCd = (forceDownload || contentType === "image/svg+xml") ? `attachment; filename="${safeFileName}"` : cd;
       return new Response(buffer, {
         headers: {
           "Content-Type": contentType,

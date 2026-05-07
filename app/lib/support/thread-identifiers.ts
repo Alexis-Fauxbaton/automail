@@ -77,10 +77,12 @@ function parseCached(raw: string | null | undefined): ExtractedIdentifiers {
  */
 export async function mergeThreadIdentifiers(
   canonicalThreadId: string,
+  shop: string,
 ): Promise<ThreadResolution> {
   const messages = await prisma.incomingEmail.findMany({
     where: {
       canonicalThreadId,
+      shop,
       processingStatus: { notIn: ["outgoing"] },
     },
     orderBy: { receivedAt: "desc" },
@@ -136,7 +138,7 @@ export async function mergeThreadIdentifiers(
   }
 
   await prisma.thread.update({
-    where: { id: canonicalThreadId },
+    where: { id: canonicalThreadId, shop },
     data: {
       resolvedOrderNumber:    resolution.orderNumber    ?? null,
       resolvedTrackingNumber: resolution.trackingNumber ?? null,
@@ -164,9 +166,10 @@ function isStronger(a: ResolutionConfidence, b: ResolutionConfidence): boolean {
  */
 export async function getThreadResolution(
   canonicalThreadId: string,
+  shop: string,
 ): Promise<ThreadResolution | null> {
   const t = await prisma.thread.findUnique({
-    where: { id: canonicalThreadId },
+    where: { id: canonicalThreadId, shop },
     select: {
       resolvedOrderNumber: true,
       resolvedTrackingNumber: true,

@@ -8,7 +8,6 @@ const SAFE_INLINE_MIME_TYPES = new Set([
   "image/png",
   "image/gif",
   "image/webp",
-  "image/svg+xml",
   "application/pdf",
 ]);
 
@@ -77,7 +76,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       "X-Content-Type-Options": "nosniff",
     };
 
-    if (forceDownload) {
+    if (forceDownload || contentType === "image/svg+xml") {
       headers["Content-Disposition"] = "attachment";
     }
 

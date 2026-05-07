@@ -222,7 +222,7 @@ export async function runOpportunisticThreadBackfill(
   });
   // Re-evaluate after ingestion — best-effort, don't abort if these fail.
   try {
-    await evaluateHistoryStatus(canonicalThreadId);
+    await evaluateHistoryStatus(canonicalThreadId, thread.shop);
   } catch (err) {
     console.error("[backfill] evaluateHistoryStatus failed:", canonicalThreadId, err);
   }
@@ -301,11 +301,11 @@ async function ingestHistoricalMessage(
     select: { id: true },
   });
 
-  await refreshThreadStats(canonicalThreadId);
+  await refreshThreadStats(canonicalThreadId, shop);
   if (!isOutgoing) {
     try {
       await extractAndCache(created.id, msg.subject, msg.bodyText);
-      await mergeThreadIdentifiers(canonicalThreadId);
+      await mergeThreadIdentifiers(canonicalThreadId, shop);
     } catch (err) {
       console.error("[backfill] identifier merge failed:", err);
     }
@@ -327,9 +327,10 @@ async function ingestHistoricalMessage(
  */
 export async function evaluateHistoryStatus(
   canonicalThreadId: string,
+  shop: string,
 ): Promise<"complete" | "partial" | "unknown"> {
   const msgs = await prisma.incomingEmail.findMany({
-    where: { canonicalThreadId },
+    where: { canonicalThreadId, shop },
     select: {
       id: true,
       rfcMessageId: true,

@@ -110,11 +110,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
     return redirect(adminInboxUrl(shop, { connected: "true" }));
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[mail-auth] ${provider} token exchange failed:`, err);
+    const correlationId = Date.now().toString(36);
+    console.error(`[mail-auth] ${provider} token exchange failed [ref=${correlationId}]:`, err);
     return errorPage(
       `${provider} token exchange failed`,
-      msg,
+      `Token exchange failed. Reference: ${correlationId}`,
     );
   }
 };

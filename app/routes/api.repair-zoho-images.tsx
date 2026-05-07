@@ -43,22 +43,28 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const results: Array<{ id: string; ok: boolean; error?: string }> = [];
 
-  for (const email of emails) {
-    try {
-      const msg = await client.getMessage(email.externalMessageId);
-      if (msg.bodyHtml) {
-        await prisma.incomingEmail.update({
-          where: { id: email.id },
-          data: { bodyHtml: msg.bodyHtml },
-        });
-        results.push({ id: email.id, ok: true });
-      } else {
-        results.push({ id: email.id, ok: false, error: "no bodyHtml returned" });
-      }
-    } catch (err) {
-      console.error(`[repair-zoho-images] failed for ${email.id}:`, err);
-      results.push({ id: email.id, ok: false, error: String(err) });
-    }
+  const BATCH_SIZE = 5;
+  for (let i = 0; i < emails.length; i += BATCH_SIZE) {
+    const batch = emails.slice(i, i + BATCH_SIZE);
+    await Promise.all(
+      batch.map(async (email) => {
+        try {
+          const msg = await client.getMessage(email.externalMessageId);
+          if (msg.bodyHtml) {
+            await prisma.incomingEmail.update({
+              where: { id: email.id },
+              data: { bodyHtml: msg.bodyHtml },
+            });
+            results.push({ id: email.id, ok: true });
+          } else {
+            results.push({ id: email.id, ok: false, error: "no bodyHtml returned" });
+          }
+        } catch (err) {
+          console.error(`[repair-zoho-images] failed for ${email.id}:`, err);
+          results.push({ id: email.id, ok: false, error: String(err) });
+        }
+      }),
+    );
   }
 
   const fixed = results.filter((r) => r.ok).length;

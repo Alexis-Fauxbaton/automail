@@ -68,9 +68,7 @@ export async function exchangeCodeForTokens(code: string) {
     console.warn("[outlook/auth] failed to fetch user email from Graph /me, using 'unknown'");
   }
   const meData = meRes.ok ? await meRes.json() as { mail?: string; userPrincipalName?: string } : {};
-  const email = (meData as { mail?: string; userPrincipalName?: string }).mail
-    || (meData as { mail?: string; userPrincipalName?: string }).userPrincipalName
-    || "unknown";
+  const email = meData.mail || meData.userPrincipalName || "unknown";
 
   return {
     accessToken: tokenData.access_token,

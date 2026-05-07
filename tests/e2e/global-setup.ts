@@ -23,8 +23,12 @@ import path from 'node:path';
 export const E2E_SHOP = 'e2e-test.myshopify.com';
 
 export default async function globalSetup() {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("E2E tests must not run in production");
+  }
+
   const db = new PrismaClient({
-    datasources: { db: { url: process.env.DATABASE_URL } },
+    datasources: { db: { url: process.env.E2E_DATABASE_URL } },
   });
 
   try {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useFetcher, useLoaderData, useNavigation, useRevalidator, useSearchParams } from "react-router";
 import { useTranslation } from "react-i18next";
@@ -36,6 +36,9 @@ import {
 // Tracks email IDs for which an HTML body refresh was already submitted
 // this browser session, so we don't re-fetch on every remount.
 const _refreshedEmailIds = new Set<string>();
+
+const GRID_COLS_WITH_PANEL = "minmax(0, 1fr) minmax(0, 2fr)";
+const GRID_COLS_LIST_ONLY = "minmax(0, 1fr)";
 
 // ---------------------------------------------------------------------------
 // Loader
@@ -76,50 +79,57 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     // customer complaint) are invisible and the analysis + draft blocks
     // never render for long threads.
     const existingIds = new Set(rows.map((r) => r.id));
-    let extraRows: typeof rows = [];
-    if (canonicalIds.length > 0) {
-      const analyzedPerThread = await prisma.incomingEmail.findMany({
-        where: {
-          shop,
-          canonicalThreadId: { in: canonicalIds },
-          analysisResult: { not: null },
-        },
-        orderBy: { receivedAt: "desc" },
-        distinct: ["canonicalThreadId"],
-        include: {
-          replyDraft: { include: { attachments: true } },
-          incomingAttachments: {
-            select: { id: true, fileName: true, mimeType: true, sizeBytes: true, disposition: true, contentId: true, inlineData: true },
-          },
-        },
-      });
-      extraRows = analyzedPerThread.filter((r) => !existingIds.has(r.id));
-    }
 
+    const [analyzedPerThreadRaw, threadRows, outgoingRows] = await Promise.all([
+      canonicalIds.length > 0
+        ? prisma.incomingEmail.findMany({
+            where: {
+              shop,
+              canonicalThreadId: { in: canonicalIds },
+              analysisResult: { not: null },
+            },
+            orderBy: { receivedAt: "desc" },
+            distinct: ["canonicalThreadId"],
+            include: {
+              replyDraft: { include: { attachments: true } },
+              incomingAttachments: {
+                select: { id: true, fileName: true, mimeType: true, sizeBytes: true, disposition: true, contentId: true, inlineData: true },
+              },
+            },
+          })
+        : Promise.resolve([] as typeof rows),
+      canonicalIds.length > 0
+        ? prisma.thread.findMany({
+            where: { id: { in: canonicalIds } },
+            select: {
+              id: true,
+              createdAt: true,
+              supportNature: true,
+              operationalState: true,
+              previousOperationalState: true,
+              historyStatus: true,
+              resolvedOrderNumber: true,
+              resolvedTrackingNumber: true,
+              resolvedEmail: true,
+              resolvedCustomerName: true,
+              resolutionConfidence: true,
+            },
+          })
+        : Promise.resolve([] as Array<{ id: string; createdAt: Date; supportNature: string; operationalState: string; previousOperationalState: string | null; historyStatus: string; resolvedOrderNumber: string | null; resolvedTrackingNumber: string | null; resolvedEmail: string | null; resolvedCustomerName: string | null; resolutionConfidence: string }>),
+      prisma.incomingEmail.findMany({
+        where: { shop, processingStatus: "outgoing" },
+        select: { canonicalThreadId: true, receivedAt: true },
+      }),
+    ]);
+
+    const extraRows = analyzedPerThreadRaw.filter((r) => !existingIds.has(r.id));
     emails = [...rows, ...extraRows].map(serializeEmail);
+
     let threadCreatedAt = new Map<string, Date>();
-    if (canonicalIds.length > 0) {
-      const threads = await prisma.thread.findMany({
-        where: { id: { in: canonicalIds } },
-        select: {
-          id: true,
-          createdAt: true,
-          supportNature: true,
-          operationalState: true,
-          previousOperationalState: true,
-          historyStatus: true,
-          resolvedOrderNumber: true,
-          resolvedTrackingNumber: true,
-          resolvedEmail: true,
-          resolvedCustomerName: true,
-          resolutionConfidence: true,
-        },
-      });
-      threadStates = Object.fromEntries(
-        threads.map((t) => [t.id, serializeThreadState(t)]),
-      );
-      threadCreatedAt = new Map(threads.map((t) => [t.id, t.createdAt]));
-    }
+    threadStates = Object.fromEntries(
+      threadRows.map((t) => [t.id, serializeThreadState(t)]),
+    );
+    threadCreatedAt = new Map(threadRows.map((t) => [t.id, t.createdAt]));
 
     // Cross-thread prior contact: find customer addresses and order numbers
     // that the shop has already replied to in OTHER threads (outgoing present).
@@ -128,10 +138,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     // Badge condition: the OTHER thread has an outgoing message sent BEFORE
     // the current thread was created — i.e. we had already been in contact
     // before this thread even started.
-    const outgoingRows = await prisma.incomingEmail.findMany({
-      where: { shop, processingStatus: "outgoing" },
-      select: { canonicalThreadId: true, receivedAt: true },
-    });
     // Map: threadId → earliest AND latest outgoing date in that thread
     const earliestOutgoingByThread = new Map<string, number>();
     const latestOutgoingByThread = new Map<string, number>();
@@ -145,17 +151,25 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }
     const repliedCanonicalIds = [...earliestOutgoingByThread.keys()];
 
-    // Collect customer addresses that appeared in those replied threads
-    const repliedAddressRows = repliedCanonicalIds.length > 0
-      ? await prisma.incomingEmail.findMany({
-          where: {
-            shop,
-            canonicalThreadId: { in: repliedCanonicalIds },
-            processingStatus: { not: "outgoing" },
-          },
-          select: { fromAddress: true, canonicalThreadId: true },
-        })
-      : [];
+    const [repliedAddressRows, repliedThreadMetaRows] = await Promise.all([
+      repliedCanonicalIds.length > 0
+        ? prisma.incomingEmail.findMany({
+            where: {
+              shop,
+              canonicalThreadId: { in: repliedCanonicalIds },
+              processingStatus: { not: "outgoing" },
+            },
+            select: { fromAddress: true, canonicalThreadId: true },
+          })
+        : Promise.resolve([] as Array<{ fromAddress: string; canonicalThreadId: string | null }>),
+      repliedCanonicalIds.length > 0
+        ? prisma.thread.findMany({
+            where: { id: { in: repliedCanonicalIds } },
+            select: { id: true, resolvedOrderNumber: true },
+          })
+        : Promise.resolve([] as Array<{ id: string; resolvedOrderNumber: string | null }>),
+    ]);
+
     // Map: lowercase address → set of threadIds where we replied.
     // Shared system sender addresses (Shopify contact form forwards, etc.)
     // are excluded: they're not real customer identities and would match
@@ -175,16 +189,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }
     // Map: orderNumber → set of threadIds where we replied
     const orderRepliedIn = new Map<string, Set<string>>();
-    if (repliedCanonicalIds.length > 0) {
-      const repliedThreadMeta = await prisma.thread.findMany({
-        where: { id: { in: repliedCanonicalIds } },
-        select: { id: true, resolvedOrderNumber: true },
-      });
-      for (const r of repliedThreadMeta) {
-        if (!r.resolvedOrderNumber) continue;
-        if (!orderRepliedIn.has(r.resolvedOrderNumber)) orderRepliedIn.set(r.resolvedOrderNumber, new Set());
-        orderRepliedIn.get(r.resolvedOrderNumber)!.add(r.id);
-      }
+    for (const r of repliedThreadMetaRows) {
+      if (!r.resolvedOrderNumber) continue;
+      if (!orderRepliedIn.has(r.resolvedOrderNumber)) orderRepliedIn.set(r.resolvedOrderNumber, new Set());
+      orderRepliedIn.get(r.resolvedOrderNumber)!.add(r.id);
     }
     // Build lookup: canonicalThreadId → { byAddress, byOrder, recentReply }
     // - byAddress / byOrder: other thread had an outgoing BEFORE this thread was created
@@ -260,6 +268,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   // Check if a heavy background job is still pending or running for this shop.
   // This lets the UI warn the user that badges / states may not yet be final.
+  // Run in parallel with the connection block above (only depends on shop).
   const activeHeavyJob = await prisma.syncJob.findFirst({
     where: {
       shop,
@@ -354,34 +363,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       ),
     );
 
-    await prisma.incomingEmail.deleteMany({ where: { shop: session.shop } });
-    // Reset all non-"non_support" natures to unknown so the next Tier 2 pass
-    // can re-classify from scratch. Without this, threads stuck in "to handle"
-    // due to a past LLM false-positive can never be downgraded:
-    //   - confirmed_support is sticky in mergeNature (never downgraded)
-    //   - probable_support outranks non_support (downgrade blocked by rank)
-    //   - needs_review is protected against non_support specifically
-    // A full resync is the user's escape hatch — it must give Tier 2 a clean
-    // slate. Threads where the agent manually resolved or drafted a reply
-    // are preserved (real engagement signal). non_support is kept to avoid
-    // burning LLM credits re-classifying already-known noise.
-    await prisma.thread.updateMany({
-      where: {
-        shop: session.shop,
-        supportNature: { in: ["needs_review", "probable_support", "confirmed_support", "mixed"] },
-        previousOperationalState: null,
-        id: { notIn: engagedThreadIds },
-      },
-      data: { supportNature: "unknown" },
-    });
-    await prisma.mailConnection.update({
-      where: { shop: session.shop },
-      // Reset cursor + backfill flag so onboarding backfill re-runs.
-      data: { historyId: null, lastSyncAt: null, onboardingBackfillDoneAt: null },
-    });
-    // Enqueue a durable resync job. The auto-sync worker picks it up on
-    // the next tick — survives a process restart, unlike the previous
-    // fire-and-forget Promise.
+    await prisma.$transaction([
+      prisma.incomingEmail.deleteMany({ where: { shop: session.shop } }),
+      prisma.thread.updateMany({
+        where: {
+          shop: session.shop,
+          supportNature: { in: ["needs_review", "probable_support", "confirmed_support", "mixed"] },
+          previousOperationalState: null,
+          id: { notIn: engagedThreadIds },
+        },
+        data: { supportNature: "unknown" },
+      }),
+      prisma.mailConnection.update({
+        where: { shop: session.shop },
+        data: { historyId: null, lastSyncAt: null, onboardingBackfillDoneAt: null },
+      }),
+    ]);
     await enqueueJob(session.shop, "resync");
     return { syncStarted: true, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
   }
@@ -629,11 +626,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
     }
 
+    const threadOwner = await prisma.thread.findUnique({ where: { id: threadId } });
+    if (!threadOwner || threadOwner.shop !== session.shop) {
+      return { error: "Not found", report: null, disconnected: false, reanalyzed: null, refined: null };
+    }
+
     try {
       if (orderChangeType === "candidate") {
         const orderId = String(formData.get("orderId") ?? "");
         const candidateJson = String(formData.get("candidate") ?? "");
-        const candidate = candidateJson ? JSON.parse(candidateJson) : null;
+        let candidate: ReturnType<typeof JSON.parse> | null = null;
+        if (candidateJson) {
+          try {
+            candidate = JSON.parse(candidateJson);
+          } catch {
+            return { classificationError: "Invalid candidate payload", report: null, disconnected: false, reanalyzed: null, refined: null };
+          }
+        }
         if (!candidate || candidate.id !== orderId) {
           return {
             classificationError: "candidate_mismatch",
@@ -1642,8 +1651,10 @@ function EmailMessageBlock({
   const body = normalizeEmailBody(email.bodyText);
   const PREVIEW_LENGTH = 300;
 
-  const cidMap = buildCidMap(email.incomingAttachments);
-  const sanitizedHtml = email.bodyHtml ? sanitizeEmailHtml(email.bodyHtml, cidMap) : null;
+  const sanitizedHtml = useMemo(
+    () => email.bodyHtml ? sanitizeEmailHtml(email.bodyHtml, buildCidMap(email.incomingAttachments)) : null,
+    [email.id, email.bodyHtml, email.incomingAttachments],
+  );
   const hasHtmlBody = !!sanitizedHtml;
   const hasUnresolvedZohoImages = !!email.bodyHtml?.includes("/mail/ImageDisplay?");
 
@@ -1655,8 +1666,9 @@ function EmailMessageBlock({
   const refreshPending = refreshFetcher.state !== "idle";
   useEffect(() => {
     const needsRefresh = !email.bodyHtml || hasUnresolvedZohoImages;
-    if (needsRefresh && !_refreshedEmailIds.has(email.id) && refreshFetcher.state === "idle") {
-      _refreshedEmailIds.add(email.id);
+    const refreshKey = `${connectedEmail}:${email.id}`;
+    if (needsRefresh && !_refreshedEmailIds.has(refreshKey) && refreshFetcher.state === "idle") {
+      _refreshedEmailIds.add(refreshKey);
       refreshFetcher.submit(
         { _action: "refresh_email_html", emailId: email.id },
         { method: "post" },
@@ -2024,11 +2036,11 @@ function DraftBlock({ email, threadSenderEmail }: {
     }, 800);
   };
 
-  // Clear pending debounce timers on unmount
+  // Clear pending debounce timers on unmount or email switch
   useEffect(() => () => {
     if (metaSaveTimer.current) clearTimeout(metaSaveTimer.current);
     if (bodySaveTimer.current) clearTimeout(bodySaveTimer.current);
-  }, []);
+  }, [email.id]);
 
   // Attach input listener to the s-text-area web component
   useEffect(() => {
@@ -2578,7 +2590,7 @@ function ThreadDetailPanel({
           <div>
             <div style={sectionLabel}>{t("inbox.sectionSuggestedDraft")}</div>
             {draftEmail && !noReplyNeeded ? (
-              <DraftBlock email={draftEmail} threadSenderEmail={latest.fromAddress} />
+              <DraftBlock key={draftEmail.id} email={draftEmail} threadSenderEmail={latest.fromAddress} />
             ) : noReplyNeeded ? (
               <div style={{ fontSize: "0.8125rem", color: "var(--ui-slate-500)", fontStyle: "italic" }}>
                 {t("inbox.noReplyNeededMsg")}
@@ -2844,7 +2856,7 @@ export default function InboxPage() {
 
   const reanalyzed = actionData?.reanalyzed;
   const refined = (actionData as { refined?: { emailId: string; newDraft: string; draftHistory?: string[] } | null })?.refined;
-  const displayEmails = emails.map((e) => {
+  const displayEmails = useMemo(() => emails.map((e) => {
     if (reanalyzed && e.id === reanalyzed.emailId) {
       return {
         ...e,
@@ -2858,13 +2870,11 @@ export default function InboxPage() {
       return { ...e, draftReply: refined.newDraft, draftHistory: refined.draftHistory ?? e.draftHistory };
     }
     return e;
-  });
+  }), [emails, reanalyzed, refined]);
 
-  const threads = groupByThread(displayEmails);
+  const threads = useMemo(() => groupByThread(displayEmails), [displayEmails]);
 
-  // Precompute each thread's bucket + classification once for reuse in
-  // counts and filtering. Cheaper than calling the helpers repeatedly.
-  const threadMeta = threads.map((t) => {
+  const threadMeta = useMemo(() => threads.map((t) => {
     const state =
       (t.latest.canonicalThreadId &&
         loaderData.threadStates?.[t.latest.canonicalThreadId]) ||
@@ -2883,9 +2893,9 @@ export default function InboxPage() {
         matchedAddress: (pc as { matchedAddress?: string | null } | null)?.matchedAddress ?? null,
       },
     };
-  });
+  }), [threads, loaderData.threadStates, loaderData.priorContact, loaderData.connectedEmail]);
 
-  const bucketCounts: Record<OpsBucket | "all" | "to_handle", number> = {
+  const bucketCounts: Record<OpsBucket | "all" | "to_handle", number> = useMemo(() => ({
     all: threadMeta.length,
     to_handle: threadMeta.filter((m) => m.bucket === "to_process" || m.bucket === "waiting_merchant").length,
     to_process: threadMeta.filter((m) => m.bucket === "to_process").length,
@@ -2893,7 +2903,7 @@ export default function InboxPage() {
     waiting_merchant: threadMeta.filter((m) => m.bucket === "waiting_merchant").length,
     resolved: threadMeta.filter((m) => m.bucket === "resolved").length,
     other: threadMeta.filter((m) => m.bucket === "other").length,
-  };
+  }), [threadMeta]);
 
   // Selected thread for the right-side detail panel (searched across ALL threads,
   // not just filtered, so the panel stays open when filters change).
@@ -3110,9 +3120,7 @@ export default function InboxPage() {
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: selectedThreadMeta
-                    ? "minmax(0, 1fr) minmax(0, 2fr)"
-                    : "minmax(0, 1fr)",
+                  gridTemplateColumns: selectedThreadMeta ? GRID_COLS_WITH_PANEL : GRID_COLS_LIST_ONLY,
                   gap: "16px",
                   alignItems: "start",
                 }}

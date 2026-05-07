@@ -50,17 +50,18 @@ export function prefilterEmail(
 
   // Store's own domain → internal notification, not customer support
   const senderDomain = msg.from.split("@")[1]?.toLowerCase();
+  const senderDomainParts = senderDomain?.split(".");
+  const senderParentDomain =
+    senderDomainParts && senderDomainParts.length > 2
+      ? senderDomainParts.slice(-2).join(".")
+      : undefined;
   const storeDomains = getStoreDomains();
   if (senderDomain && storeDomains.size > 0) {
     if (storeDomains.has(senderDomain)) {
       return { passed: false, reason: `own_store_domain:${senderDomain}` };
     }
-    const parts = senderDomain.split(".");
-    if (parts.length > 2) {
-      const parentDomain = parts.slice(-2).join(".");
-      if (storeDomains.has(parentDomain)) {
-        return { passed: false, reason: `own_store_domain:${parentDomain}` };
-      }
+    if (senderParentDomain && storeDomains.has(senderParentDomain)) {
+      return { passed: false, reason: `own_store_domain:${senderParentDomain}` };
     }
   }
 
@@ -79,18 +80,12 @@ export function prefilterEmail(
   }
 
   // Blacklisted domain (check exact domain + parent domain)
-  const domain = msg.from.split("@")[1]?.toLowerCase();
-  if (domain) {
-    if (BLACKLISTED_DOMAINS.has(domain)) {
-      return { passed: false, reason: `blacklisted_domain:${domain}` };
+  if (senderDomain) {
+    if (BLACKLISTED_DOMAINS.has(senderDomain)) {
+      return { passed: false, reason: `blacklisted_domain:${senderDomain}` };
     }
-    // Check parent domain (e.g. selections.aliexpress.com → aliexpress.com)
-    const parts = domain.split(".");
-    if (parts.length > 2) {
-      const parentDomain = parts.slice(-2).join(".");
-      if (BLACKLISTED_DOMAINS.has(parentDomain)) {
-        return { passed: false, reason: `blacklisted_domain:${parentDomain}` };
-      }
+    if (senderParentDomain && BLACKLISTED_DOMAINS.has(senderParentDomain)) {
+      return { passed: false, reason: `blacklisted_domain:${senderParentDomain}` };
     }
   }
 
@@ -107,4 +102,10 @@ export function prefilterEmail(
   }
 
   return { passed: true };
+}
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    _storeDomains = null;
+  });
 }

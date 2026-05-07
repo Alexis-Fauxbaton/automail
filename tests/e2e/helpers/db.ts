@@ -1,10 +1,17 @@
 // tests/e2e/helpers/db.ts
 import { PrismaClient } from '@prisma/client';
 
+if (!process.env.E2E_DATABASE_URL) {
+  throw new Error("E2E_DATABASE_URL must be set for E2E tests. Never point at DATABASE_URL directly.");
+}
+if (process.env.E2E_DATABASE_URL === process.env.DATABASE_URL) {
+  throw new Error("E2E_DATABASE_URL must be a separate database from DATABASE_URL");
+}
+
 export const E2E_SHOP = 'e2e-test.myshopify.com';
 
 export const db = new PrismaClient({
-  datasources: { db: { url: process.env.DATABASE_URL } },
+  datasources: { db: { url: process.env.E2E_DATABASE_URL } },
 });
 
 /** Cleans E2E test data. Does NOT touch the session row (needed for auth). */
@@ -63,9 +70,27 @@ export async function seedSupportThread(overrides: Partial<{
       // analysisResult drives the intent pills in the inbox row (see
       // app.inbox.tsx ~1832: pills come from analysisResult.intents).
       // Stored as a JSON-encoded string per the schema (String?, // JSON blob).
+      // Shape must match SupportAnalysis (app/lib/support/types.ts).
       analysisResult: JSON.stringify({
         intent: intents[0],
         intents,
+        identifiers: {
+          orderNumber: overrides.orderNumber ?? 'TEST-001',
+          trackingNumber: null,
+        },
+        order: null,
+        orderCandidates: [],
+        trackings: [],
+        confidence: 'high',
+        warnings: [],
+        draftReply: '',
+        conversation: {
+          messageCount: 1,
+          incomingCount: 1,
+          outgoingCount: 0,
+          lastMessageDirection: 'incoming',
+          noReplyNeeded: false,
+        },
       }),
       analysisConfidence: 'high',
     },

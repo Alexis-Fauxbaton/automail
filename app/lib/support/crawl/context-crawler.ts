@@ -228,7 +228,7 @@ async function extractWithLLM(
         temperature: 0,
         max_tokens: 300,
       },
-      { callSite: "context-crawler", shop: ctx?.shop ?? "", ...ctx },
+      { callSite: "context-crawler", ...ctx },
     );
     const result = response.choices[0]?.message?.content?.trim() ?? "";
     if (!result || result === "NO_USEFUL_CONTENT") return null;

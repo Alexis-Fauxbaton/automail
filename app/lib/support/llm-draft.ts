@@ -343,7 +343,7 @@ export async function generateLLMDraft(input: LLMDraftInput): Promise<string> {
         temperature: 0.3,
         max_tokens: 600,
       },
-      { callSite: "llm-draft", shop: input.trackedCallContext?.shop ?? "", ...input.trackedCallContext },
+      { callSite: "llm-draft", ...input.trackedCallContext },
     );
 
     const draft = response.choices[0]?.message?.content?.trim() ?? "";

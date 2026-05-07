@@ -39,13 +39,11 @@ export function computeCostUsd(
 // ---------------------------------------------------------------------------
 // Shared client
 // ---------------------------------------------------------------------------
-let cachedClient: OpenAI | null = null;
+const openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 export function getOpenAIClient(): OpenAI | null {
   const key = process.env.OPENAI_API_KEY;
   if (!key || key === "sk-your-key-here") return null;
-  if (cachedClient) return cachedClient;
-  cachedClient = new OpenAI({ apiKey: key });
-  return cachedClient;
+  return openaiClient;
 }
 
 // ---------------------------------------------------------------------------
@@ -75,7 +73,7 @@ export interface TrackedCallContext {
 export async function trackedChatCompletion(
   client: OpenAI,
   params: ChatCompletionCreateParamsNonStreaming,
-  ctx: TrackedCallContext,
+  ctx: Partial<TrackedCallContext> & { callSite: CallSite },
 ): Promise<ChatCompletion> {
   const start = Date.now();
   const response = await client.chat.completions.create(params);
@@ -87,25 +85,26 @@ export async function trackedChatCompletion(
   const totalTokens = usage?.total_tokens ?? promptTokens + completionTokens;
   const costUsd = computeCostUsd(params.model, promptTokens, completionTokens);
 
-  // Fire-and-forget logging — never block or break the caller.
-  void logCall({
-    shop: ctx.shop,
-    emailId: ctx.emailId,
-    threadId: ctx.threadId,
-    callSite: ctx.callSite,
-    model: params.model,
-    promptTokens,
-    completionTokens,
-    totalTokens,
-    costUsd,
-    durationMs: duration,
-  }).catch((err) => console.error("[llm] logCall failed:", err));
+  if (ctx.shop) {
+    void logCall({
+      shop: ctx.shop,
+      emailId: ctx.emailId,
+      threadId: ctx.threadId,
+      callSite: ctx.callSite,
+      model: params.model,
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      costUsd,
+      durationMs: duration,
+    }).catch((err) => console.error("[llm] logCall failed:", err));
+  }
 
   return response;
 }
 
 async function logCall(row: {
-  shop?: string;
+  shop: string;
   emailId?: string;
   threadId?: string;
   callSite: CallSite;
@@ -120,7 +119,7 @@ async function logCall(row: {
   try {
     await prisma.llmCallLog.create({
       data: {
-        shop: row.shop ?? "",
+        shop: row.shop,
         emailId: row.emailId ?? null,
         threadId: row.threadId ?? null,
         callSite: row.callSite,

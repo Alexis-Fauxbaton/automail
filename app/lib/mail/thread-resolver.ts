@@ -187,26 +187,24 @@ export async function attachProviderMapping(
  */
 export async function refreshThreadStats(
   canonicalThreadId: string,
+  shop: string,
   db: PrismaClient | Prisma.TransactionClient = prisma,
 ): Promise<void> {
-  // Merge two DB round-trips into one transaction: aggregate stats and
-  // latest-message lookup are fetched in parallel, then a single update
-  // writes all four fields atomically.
   const [agg, latest] = await Promise.all([
     db.incomingEmail.aggregate({
-      where: { canonicalThreadId },
+      where: { canonicalThreadId, shop },
       _count: { _all: true },
       _min: { receivedAt: true },
       _max: { receivedAt: true },
     }),
     db.incomingEmail.findFirst({
-      where: { canonicalThreadId },
+      where: { canonicalThreadId, shop },
       orderBy: [{ receivedAt: "desc" }, { createdAt: "desc" }],
       select: { id: true },
     }),
   ]);
   await db.thread.update({
-    where: { id: canonicalThreadId },
+    where: { id: canonicalThreadId, shop },
     data: {
       messageCount: agg._count._all,
       firstMessageAt: agg._min.receivedAt ?? new Date(),
@@ -221,9 +219,9 @@ export async function refreshThreadStats(
  * recent message in any direction (incoming, outgoing, filtered).
  * This may differ from the "target message" being classified.
  */
-export async function getTrueLatestMessage(canonicalThreadId: string) {
+export async function getTrueLatestMessage(canonicalThreadId: string, shop: string) {
   return prisma.incomingEmail.findFirst({
-    where: { canonicalThreadId },
+    where: { canonicalThreadId, shop },
     orderBy: [{ receivedAt: "desc" }, { createdAt: "desc" }],
     select: {
       id: true,
@@ -237,22 +235,5 @@ export async function getTrueLatestMessage(canonicalThreadId: string) {
       processingStatus: true,
       tier1Result: true,
     },
-  });
-}
-
-/**
- * Return the "target message" — the latest incoming message that passed
- * Tier 1 and should be considered for classification / drafting. This is
- * what pickThreadsForClassification uses. Distinct from true-latest
- * because an outgoing reply or a Tier 1 filter can land after the target.
- */
-export async function getTargetMessage(canonicalThreadId: string) {
-  return prisma.incomingEmail.findFirst({
-    where: {
-      canonicalThreadId,
-      processingStatus: { notIn: ["outgoing"] },
-      tier1Result: "passed",
-    },
-    orderBy: { receivedAt: "desc" },
   });
 }

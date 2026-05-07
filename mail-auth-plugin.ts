@@ -20,6 +20,10 @@ export function mailAuthPlugin(): Plugin {
           res: ServerResponse,
           next: () => void,
         ) => {
+          if (process.env.NODE_ENV === "production") {
+            return;
+          }
+
           const fullUrl = req.url ?? "";
           if (!fullUrl.startsWith("/mail-auth")) {
             return next();

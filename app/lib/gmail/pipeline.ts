@@ -26,6 +26,9 @@ import {
   evaluateHistoryStatus,
   runOpportunisticThreadBackfill,
 } from "../mail/backfill";
+import { upsertReplyDraftBody } from "../support/reply-draft";
+import { generateLLMDraft } from "../support/llm-draft";
+import { getSettings } from "../support/settings";
 
 export interface ProcessingReport {
   total: number;
@@ -413,14 +416,14 @@ async function ingestAndPrefilter(
   }
 
   // Refresh cached thread stats (lastMessageAt, lastMessageId, count).
-  await refreshThreadStats(canonicalThreadId);
+  await refreshThreadStats(canonicalThreadId, shop);
 
   if (isOutgoing) {
     // Outgoing messages still affect operational state (merchant replied
     // → thread should move to waiting_customer), so recompute + return.
     try {
       await recomputeThreadState(canonicalThreadId, { mailboxAddress });
-      await evaluateHistoryStatus(canonicalThreadId);
+      await evaluateHistoryStatus(canonicalThreadId, shop);
     } catch (err) {
       console.error("[pipeline] state recompute (outgoing) failed:", err);
     }
@@ -436,7 +439,7 @@ async function ingestAndPrefilter(
   });
   try {
     await extractAndCache(recordForExtraction.id, msg.subject, msg.bodyText);
-    await mergeThreadIdentifiers(canonicalThreadId);
+    await mergeThreadIdentifiers(canonicalThreadId, shop);
   } catch (err) {
     // Extraction is best-effort: failures must not block ingestion.
     console.error("[pipeline] thread identifier extraction failed:", err);
@@ -464,7 +467,7 @@ async function ingestAndPrefilter(
     // outgoing message changed the conversation context.
     try {
       await recomputeThreadState(canonicalThreadId, { mailboxAddress });
-      await evaluateHistoryStatus(canonicalThreadId);
+      await evaluateHistoryStatus(canonicalThreadId, shop);
     } catch (err) {
       console.error("[pipeline] state recompute (skip-tier1) failed:", err);
     }
@@ -492,7 +495,7 @@ async function ingestAndPrefilter(
   // message (spec §4, §5, §7, §12).
   try {
     await recomputeThreadState(canonicalThreadId, { mailboxAddress });
-    const hist = await evaluateHistoryStatus(canonicalThreadId);
+    const hist = await evaluateHistoryStatus(canonicalThreadId, shop);
 
     // Opportunistic backfill (spec §11): if history looks partial and
     // we haven't attempted a backfill in the last 24h, try once.
@@ -740,7 +743,7 @@ export async function backfillResolvedIntents(
       undefined,
     );
 
-    const threadResolution = await getThreadResolution(canonicalThreadId);
+    const threadResolution = await getThreadResolution(canonicalThreadId, shop);
     const analysis = await analyzeSupportEmail({
       subject: anchor.subject,
       body: threadContext.body,
@@ -845,43 +848,37 @@ async function pickThreadsForClassification(
   );
   if (canonicalIds.length === 0) return [];
 
-  const selected: string[] = [];
+  const results = await Promise.all(
+    canonicalIds.map(async (canonicalThreadId) => {
+      const latest = await prisma.incomingEmail.findFirst({
+        where: {
+          shop,
+          canonicalThreadId,
+          processingStatus: { notIn: ["outgoing"] },
+          tier1Result: "passed",
+        },
+        orderBy: { receivedAt: "desc" },
+      });
+      if (!latest) return null;
 
-  for (const canonicalThreadId of canonicalIds) {
-    // Latest incoming (non-outgoing) in this canonical thread that
-    // passed Tier 1.
-    const latest = await prisma.incomingEmail.findFirst({
-      where: {
-        shop,
-        canonicalThreadId,
-        processingStatus: { notIn: ["outgoing"] },
-        tier1Result: "passed",
-      },
-      orderBy: { receivedAt: "desc" },
-    });
-    if (!latest) continue;
+      if (latest.processingStatus === "analyzed") return null;
 
-    // Skip if already fully analyzed
-    if (latest.processingStatus === "analyzed") continue;
+      await prisma.incomingEmail.updateMany({
+        where: {
+          shop,
+          canonicalThreadId,
+          id: { not: latest.id },
+          processingStatus: { notIn: ["outgoing", "classified"] },
+          receivedAt: { lt: latest.receivedAt },
+        },
+        data: { processingStatus: "classified" },
+      });
 
-    selected.push(latest.id);
+      return latest.id;
+    }),
+  );
 
-    // Mark older incoming messages in the same canonical thread as
-    // "classified" so they don't consume LLM calls and the UI shows a
-    // clean state.
-    await prisma.incomingEmail.updateMany({
-      where: {
-        shop,
-        canonicalThreadId,
-        id: { not: latest.id },
-        processingStatus: { notIn: ["outgoing", "classified"] },
-        receivedAt: { lt: latest.receivedAt },
-      },
-      data: { processingStatus: "classified" },
-    });
-  }
-
-  return selected;
+  return results.filter((id): id is string => id !== null);
 }
 
 /**
@@ -898,9 +895,10 @@ async function classifyAndDraft(
   mailboxAddress: string,
   report: ProcessingReport,
 ) {
-  const record = await prisma.incomingEmail.findUniqueOrThrow({
-    where: { id: recordId },
+  const record = await prisma.incomingEmail.findFirst({
+    where: { id: recordId, shop },
   });
+  if (!record) throw new Error(`Email ${recordId} not found for shop ${shop}`);
 
   // Resolved threads: restore intent badges without hitting Shopify/tracking.
   const thread = record.canonicalThreadId
@@ -935,7 +933,7 @@ async function classifyAndDraft(
   let trueLatestBody: string | undefined;
   let agentHasReplied = false;
   if (record.canonicalThreadId) {
-    const trueLatest = await getTrueLatestMessage(record.canonicalThreadId);
+    const trueLatest = await getTrueLatestMessage(record.canonicalThreadId, shop);
     if (trueLatest && trueLatest.id !== record.id) {
       trueLatestBody = trueLatest.bodyText;
     }
@@ -1005,7 +1003,7 @@ async function classifyAndDraft(
     // Thread-level resolved identifiers (cheap path, populated at
     // ingestion). The orchestrator will prefer these over re-parsing.
     const threadResolution = record.canonicalThreadId
-      ? await getThreadResolution(record.canonicalThreadId)
+      ? await getThreadResolution(record.canonicalThreadId, shop)
       : null;
 
     const analysis = await analyzeSupportEmail({
@@ -1098,8 +1096,8 @@ export async function buildThreadContext(
     canonicalThreadId,
     currentEmailId,
   );
-  const targetRecord = await prisma.incomingEmail.findUnique({
-    where: { id: targetEmailId },
+  const targetRecord = await prisma.incomingEmail.findFirst({
+    where: { id: targetEmailId, shop },
     select: { externalMessageId: true },
   });
   const targetExternalId = targetRecord?.externalMessageId ?? "";
@@ -1157,8 +1155,8 @@ export async function buildThreadContext(
   // splits (several providerThreadIds mapped to the same canonical id)
   // are reassembled into a single conversation.
   if (!canonicalThreadId && !threadId) {
-    const current = await prisma.incomingEmail.findUnique({
-      where: { id: currentEmailId },
+    const current = await prisma.incomingEmail.findFirst({
+      where: { id: currentEmailId, shop },
       select: {
         bodyText: true, subject: true, fromAddress: true, receivedAt: true,
         incomingAttachments: { select: { fileName: true, disposition: true } },
@@ -1251,8 +1249,8 @@ export async function reanalyzeEmail(
   shop: string,
   options: { skipDraft?: boolean } = {},
 ) {
-  const record = await prisma.incomingEmail.findUnique({ where: { id: emailId } });
-  if (!record || record.shop !== shop) {
+  const record = await prisma.incomingEmail.findFirst({ where: { id: emailId, shop } });
+  if (!record) {
     throw new Error("Email not found");
   }
 
@@ -1284,13 +1282,13 @@ export async function reanalyzeEmail(
   if (record.canonicalThreadId) {
     try {
       await extractAndCache(record.id, record.subject, record.bodyText);
-      await mergeThreadIdentifiers(record.canonicalThreadId);
+      await mergeThreadIdentifiers(record.canonicalThreadId, shop);
     } catch (err) {
       console.error("[pipeline] reanalyze: thread identifier merge failed:", err);
     }
   }
   const threadResolution = record.canonicalThreadId
-    ? await getThreadResolution(record.canonicalThreadId)
+    ? await getThreadResolution(record.canonicalThreadId, shop)
     : null;
 
   // Honour any manual classification overrides set by the user in the
@@ -1370,7 +1368,6 @@ export async function reanalyzeEmail(
     });
   }
   if (analysis.draftReply && !options.skipDraft) {
-    const { upsertReplyDraftBody } = await import("../support/reply-draft");
     await upsertReplyDraftBody(emailId, shop, analysis.draftReply);
   }
 
@@ -1393,8 +1390,8 @@ export async function reanalyzeEmail(
  * when the context is already up-to-date.
  */
 export async function redraftEmail(emailId: string, shop: string): Promise<string> {
-  const record = await prisma.incomingEmail.findUnique({ where: { id: emailId } });
-  if (!record || record.shop !== shop) throw new Error("Email not found");
+  const record = await prisma.incomingEmail.findFirst({ where: { id: emailId, shop } });
+  if (!record) throw new Error("Email not found");
   if (!record.analysisResult) throw new Error("No analysis result found — run Refresh context first");
 
   let analysis: ReturnType<typeof JSON.parse>;
@@ -1404,8 +1401,6 @@ export async function redraftEmail(emailId: string, shop: string): Promise<strin
     throw new Error("analysisResult is not valid JSON — run Refresh context first");
   }
 
-  const { generateLLMDraft } = await import("../support/llm-draft");
-  const { getSettings } = await import("../support/settings");
   const settings = await getSettings(shop);
 
   const newDraft = await generateLLMDraft({
@@ -1421,7 +1416,6 @@ export async function redraftEmail(emailId: string, shop: string): Promise<strin
     trackedCallContext: { shop, emailId: record.id, threadId: record.threadId },
   });
 
-  const { upsertReplyDraftBody } = await import("../support/reply-draft");
   await upsertReplyDraftBody(emailId, shop, newDraft);
 
   return newDraft;
