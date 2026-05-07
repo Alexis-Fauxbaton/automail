@@ -36,6 +36,12 @@ export function RichDraftEditor({ content, onChange, readOnly = false }: RichDra
     }
   }, [content, editor]);
 
+  // Sync editable state when parent toggles readOnly
+  useEffect(() => {
+    if (!editor) return;
+    editor.setEditable(!readOnly);
+  }, [editor, readOnly]);
+
   const applyLink = useCallback(() => {
     if (!editor) return;
     const url = linkUrl.trim();
@@ -63,17 +69,9 @@ export function RichDraftEditor({ content, onChange, readOnly = false }: RichDra
 
   if (!editor) return null;
 
-  if (readOnly) {
-    return (
-      <EditorContent
-        editor={editor}
-        className="rich-draft-editor rich-draft-editor--standalone"
-      />
-    );
-  }
-
   return (
     <div>
+      {!readOnly && (
       <div className="rich-draft-toolbar" role="toolbar" aria-label="Formatting options">
         <button
           type="button"
@@ -152,8 +150,9 @@ export function RichDraftEditor({ content, onChange, readOnly = false }: RichDra
           ✕
         </button>
       </div>
+      )}
 
-      {showLinkInput && (
+      {!readOnly && showLinkInput && (
         <div className="rich-draft-link-row">
           <input
             autoFocus
@@ -171,7 +170,10 @@ export function RichDraftEditor({ content, onChange, readOnly = false }: RichDra
         </div>
       )}
 
-      <EditorContent editor={editor} className="rich-draft-editor" />
+      <EditorContent
+        editor={editor}
+        className={`rich-draft-editor${readOnly ? " rich-draft-editor--standalone" : ""}`}
+      />
     </div>
   );
 }

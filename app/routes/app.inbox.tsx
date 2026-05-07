@@ -1731,20 +1731,15 @@ function DraftBlock({ email, threadSenderEmail }: {
           )}
         </s-stack>
 
-        {isLatest ? (
-          <RichDraftEditor
-            content={bodyText}
-            onChange={(html) => {
-              setBodyText(html);
-              saveBody(html);
-            }}
-          />
-        ) : (
-          <RichDraftEditor
-            content={currentVersion}
-            readOnly
-          />
-        )}
+        <RichDraftEditor
+          content={isLatest ? bodyText : currentVersion}
+          onChange={isLatest ? (html) => {
+            setBodyText(html);
+            saveBody(html);
+          } : undefined}
+          readOnly={!isLatest}
+        />
+
 
         {isLatest && (
           <refineFetcher.Form method="post">
