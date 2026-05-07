@@ -112,19 +112,16 @@ function variationLabel(current: number, prev: number): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// Quality chart (volume bars + median response line) — SSR-safe lazy
+// Quality chart — two tabs: Volume / Délai médian — SSR-safe lazy
 // ---------------------------------------------------------------------------
 
-const QualityCombinedChart = lazy(() =>
+const VolumeBarChart = lazy(() =>
   import("recharts").then((mod) => ({
-    default: function QualityChartInner({ data }: { data: ResponseTimeDailyPoint[] }) {
-      const {
-        ComposedChart, Bar, Line, XAxis, YAxis, Tooltip,
-        ResponsiveContainer, CartesianGrid,
-      } = mod;
+    default: function VolumeBarChartInner({ data }: { data: ResponseTimeDailyPoint[] }) {
+      const { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } = mod;
       return (
-        <ResponsiveContainer width="100%" height={260}>
-          <ComposedChart data={data} margin={{ top: 8, right: 32, left: -16, bottom: 0 }}>
+        <ResponsiveContainer width="100%" height={240}>
+          <BarChart data={data} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
             <XAxis
               dataKey="date"
@@ -134,15 +131,42 @@ const QualityCombinedChart = lazy(() =>
               tickLine={false}
             />
             <YAxis
-              yAxisId="vol"
               tick={{ fontSize: 11, fill: "#64748b" }}
               allowDecimals={false}
               axisLine={false}
               tickLine={false}
             />
+            <Tooltip
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              formatter={(value: any) => [value, "Emails support"]}
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              labelFormatter={(l: any) => l}
+              contentStyle={{ fontSize: 12, borderRadius: 12, border: "1px solid #e2e8f0" }}
+            />
+            <Bar dataKey="support" fill="#c7d2fe" radius={[6, 6, 0, 0]} maxBarSize={32} />
+          </BarChart>
+        </ResponsiveContainer>
+      );
+    },
+  })),
+);
+
+const ResponseTimeBarChart = lazy(() =>
+  import("recharts").then((mod) => ({
+    default: function ResponseTimeBarChartInner({ data }: { data: ResponseTimeDailyPoint[] }) {
+      const { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } = mod;
+      return (
+        <ResponsiveContainer width="100%" height={240}>
+          <BarChart data={data} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+            <XAxis
+              dataKey="date"
+              tick={{ fontSize: 11, fill: "#64748b" }}
+              tickFormatter={(v: string) => v.slice(5)}
+              axisLine={false}
+              tickLine={false}
+            />
             <YAxis
-              yAxisId="time"
-              orientation="right"
               domain={["auto", "auto"]}
               tickFormatter={(v: number) =>
                 v >= 3_600_000
@@ -157,26 +181,13 @@ const QualityCombinedChart = lazy(() =>
             />
             <Tooltip
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              formatter={(value: any, name: any) => {
-                if (name === "support") return [value, "Emails support"];
-                if (name === "medianMs") return [formatDuration(value as number), "Médian réponse"];
-                return [value, name];
-              }}
+              formatter={(value: any) => [formatDuration(value as number), "Médian réponse"]}
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               labelFormatter={(l: any) => l}
               contentStyle={{ fontSize: 12, borderRadius: 12, border: "1px solid #e2e8f0" }}
             />
-            <Bar yAxisId="vol" dataKey="support" fill="#c7d2fe" radius={[6, 6, 0, 0]} maxBarSize={32} />
-            <Line
-              yAxisId="time"
-              type="monotone"
-              dataKey="medianMs"
-              stroke="#4f46e5"
-              strokeWidth={2}
-              dot={false}
-              connectNulls={false}
-            />
-          </ComposedChart>
+            <Bar dataKey="medianMs" fill="#4f46e5" radius={[6, 6, 0, 0]} maxBarSize={32} />
+          </BarChart>
         </ResponsiveContainer>
       );
     },
@@ -185,12 +196,43 @@ const QualityCombinedChart = lazy(() =>
 
 function QualityChartClient({ data }: { data: ResponseTimeDailyPoint[] }) {
   const [mounted, setMounted] = useState(false);
+  const [tab, setTab] = useState<"volume" | "time">("volume");
   useEffect(() => setMounted(true), []);
-  if (!mounted) return <div style={{ height: 260 }} />;
+
+  const tabStyle = (active: boolean): React.CSSProperties => ({
+    padding: "4px 14px",
+    fontSize: 12,
+    fontWeight: active ? 600 : 400,
+    color: active ? "#4f46e5" : "#64748b",
+    background: "none",
+    border: "none",
+    borderBottom: active ? "2px solid #4f46e5" : "2px solid transparent",
+    cursor: "pointer",
+    transition: "color 0.15s, border-color 0.15s",
+  });
+
   return (
-    <Suspense fallback={<div style={{ height: 260 }} />}>
-      <QualityCombinedChart data={data} />
-    </Suspense>
+    <div>
+      <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
+        <button style={tabStyle(tab === "volume")} onClick={() => setTab("volume")}>
+          Volume
+        </button>
+        <button style={tabStyle(tab === "time")} onClick={() => setTab("time")}>
+          Délai médian
+        </button>
+      </div>
+      {!mounted ? (
+        <div style={{ height: 240 }} />
+      ) : (
+        <Suspense fallback={<div style={{ height: 240 }} />}>
+          {tab === "volume" ? (
+            <VolumeBarChart data={data} />
+          ) : (
+            <ResponseTimeBarChart data={data} />
+          )}
+        </Suspense>
+      )}
+    </div>
   );
 }
 
