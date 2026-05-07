@@ -435,7 +435,9 @@ export default function Dashboard() {
         title={t("dashboard.qualityTitle", { defaultValue: "Qualité du service" })}
         subtitle={t("dashboard.qualitySubtitle", { defaultValue: "Volume support + délai médian de réponse par jour" })}
       >
-        <QualityChartClient data={qualityChart} />
+        <div data-testid="chart-quality-service">
+          <QualityChartClient data={qualityChart} />
+        </div>
       </Card>
 
       {/* Productivity chart */}

@@ -31,11 +31,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const uiLanguage = userId ? await getUiLanguage(userId, session.shop) : null;
 
   // eslint-disable-next-line no-undef
-  return { apiKey: process.env.SHOPIFY_API_KEY || "", uiLanguage };
+  const isE2E = process.env.E2E_AUTH_BYPASS === "true";
+  // eslint-disable-next-line no-undef
+  return { apiKey: process.env.SHOPIFY_API_KEY || "", uiLanguage, isE2E };
 };
 
 export default function App() {
-  const { apiKey, uiLanguage } = useLoaderData<typeof loader>();
+  const { apiKey, uiLanguage, isE2E } = useLoaderData<typeof loader>();
   const { t, i18n } = useTranslation();
 
   useEffect(() => {
@@ -45,7 +47,7 @@ export default function App() {
   }, [uiLanguage, i18n]);
 
   return (
-    <AppProvider embedded apiKey={apiKey}>
+    <AppProvider embedded={!isE2E} apiKey={apiKey}>
       <s-app-nav>
         <s-link href="/app">{t("nav.home")}</s-link>
         <s-link href="/app/inbox">{t("nav.emailInbox")}</s-link>

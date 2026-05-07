@@ -20,25 +20,28 @@ test('dashboard affiche les KPIs à 0 quand il n\'y a pas de données (REQ-DASH-
 
   await expect(page.getByText(/dashboard/i).first()).toBeVisible();
 
-  // KPI "Mails reçus" should show 0
-  const mailsRecusCard = page.locator('.ui-metric').filter({ hasText: 'Mails reçus' });
-  await expect(mailsRecusCard.locator('.ui-metric__value')).toContainText('0');
+  // KPI "Emails support" should show 0
+  const emailsSupportCard = page.locator('.ui-metric').filter({ hasText: 'Emails support' });
+  await expect(emailsSupportCard.locator('.ui-metric__value')).toContainText('0');
 
   // No error on the page
   await expect(page.locator('[data-error]')).not.toBeVisible();
 });
 
-test('bar chart quotidien est présent (REQ-DASH-05)', async ({ page }) => {
+test('bar chart qualité du service est présent (REQ-DASH-05)', async ({ page }) => {
   await page.goto('/app/dashboard');
 
-  // Click the 7 jours preset to ensure the chart loads
-  await page.getByRole('button', { name: '7 jours' }).click();
+  // Click the 7d preset to ensure the chart loads
+  await page.getByRole('button', { name: '7d' }).click();
   await page.waitForLoadState('networkidle');
 
-  await expect(page.locator('[data-testid="chart-daily-breakdown"]')).toBeVisible();
+  // Quality chart section must be present and contain an SVG (Recharts)
+  const qualitySection = page.locator('[data-testid="chart-quality-service"]');
+  await expect(qualitySection).toBeVisible();
+  await expect(qualitySection.locator('svg').first()).toBeVisible({ timeout: 8000 });
 });
 
-test('changement de preset 7 jours → 30 jours recalcule les KPIs (REQ-DASH-11)', async ({ page }) => {
+test('changement de preset 7d → 30d recalcule les KPIs (REQ-DASH-11)', async ({ page }) => {
   // Insert one email 20 days ago (outside 7d, inside 30d)
   const thread = await db.thread.create({
     data: {
@@ -67,19 +70,19 @@ test('changement de preset 7 jours → 30 jours recalcule les KPIs (REQ-DASH-11)
 
   await page.goto('/app/dashboard');
 
-  // Select 7 jours — the email (20 days old) is outside this period
-  await page.getByRole('button', { name: '7 jours' }).click();
+  // Select 7d — the email (20 days old) is outside this period
+  await page.getByRole('button', { name: '7d' }).click();
   await page.waitForLoadState('networkidle');
   const kpi7d = await page
-    .locator('.ui-metric').filter({ hasText: 'Mails reçus' })
+    .locator('.ui-metric').filter({ hasText: 'Emails support' })
     .locator('.ui-metric__value')
     .textContent();
 
-  // Select 30 jours — the email is now within the period
-  await page.getByRole('button', { name: '30 jours' }).click();
+  // Select 30d — the email is now within the period
+  await page.getByRole('button', { name: '30d' }).click();
   await page.waitForLoadState('networkidle');
   const kpi30d = await page
-    .locator('.ui-metric').filter({ hasText: 'Mails reçus' })
+    .locator('.ui-metric').filter({ hasText: 'Emails support' })
     .locator('.ui-metric__value')
     .textContent();
 
