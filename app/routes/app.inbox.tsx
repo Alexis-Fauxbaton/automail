@@ -1150,9 +1150,20 @@ function EmailHtmlBody({ html }: { html: string }) {
 
   useEffect(() => {
     const handler = (event: MessageEvent) => {
-      if (event.data?.type !== "email-height") return;
+      // The iframe is sandboxed without allow-same-origin → its origin is "null".
+      // Reject any message that doesn't come from a null-origin frame to
+      // prevent Shopify's parent frame, dev-tools panels, or other iframes
+      // on the page from spoofing height-resize messages.
+      if (event.origin !== "null") return;
+      if (event.source !== iframeRef.current?.contentWindow) return;
+      const data = event.data as { type?: unknown; height?: unknown };
+      if (data?.type !== "email-height") return;
+      if (typeof data.height !== "number" || !Number.isFinite(data.height)) return;
       if (iframeRef.current) {
-        iframeRef.current.style.height = event.data.height + 4 + "px";
+        // Cap the height to defend against a malicious email setting an
+        // absurd scrollHeight that would create a giant scroll trap.
+        const safe = Math.min(Math.max(data.height + 4, 60), 8000);
+        iframeRef.current.style.height = safe + "px";
       }
     };
     window.addEventListener("message", handler);
@@ -1176,7 +1187,10 @@ function EmailHtmlBody({ html }: { html: string }) {
     <iframe
       ref={iframeRef}
       srcDoc={srcDoc}
-      sandbox="allow-scripts allow-popups"
+      // allow-scripts only — emails should never need to open popups,
+      // and allow-same-origin is intentionally absent so the iframe
+      // runs in a null origin (no DOM/cookies/storage from the parent).
+      sandbox="allow-scripts"
       title="Email body"
       style={{ border: "none", width: "100%", minHeight: "60px", display: "block" }}
     />

@@ -5,6 +5,16 @@ import prisma from "../db.server";
 
 const VALID_REPLY_MODES = ["thread", "new_thread"] as const;
 
+/**
+ * CSRF model: this endpoint is only callable from inside the embedded
+ * Shopify admin via App Bridge `fetch`. Shopify session-token validation
+ * inside `authenticate.admin(request)` rejects any request whose
+ * `Authorization: Bearer <token>` header doesn't carry a valid, current
+ * JWT signed for THIS app + THIS merchant. The token is per-app +
+ * per-merchant + short-lived (≤ 1 min) and cannot be obtained or replayed
+ * cross-origin. No additional anti-CSRF token is therefore required.
+ * If you ever serve this endpoint outside the embedded admin, revisit.
+ */
 export async function action({ request }: ActionFunctionArgs) {
   if (request.method !== "POST") {
     return data({ error: "Method not allowed" }, { status: 405 });
