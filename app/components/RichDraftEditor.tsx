@@ -23,6 +23,7 @@ export function RichDraftEditor({ content, onChange, readOnly = false }: RichDra
     ],
     content,
     editable: !readOnly,
+    immediatelyRender: false,
     onUpdate: ({ editor: e }) => {
       onChange?.(e.getHTML());
     },
