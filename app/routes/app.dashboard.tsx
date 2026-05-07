@@ -141,12 +141,14 @@ const QualityCombinedChart = lazy(() =>
               tickLine={false}
             />
             <Tooltip
-              formatter={(value: number, name: string) => {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              formatter={(value: any, name: any) => {
                 if (name === "support") return [value, "Emails support"];
-                if (name === "medianMs") return [formatDuration(value), "Médian réponse"];
+                if (name === "medianMs") return [formatDuration(value as number), "Médian réponse"];
                 return [value, name];
               }}
-              labelFormatter={(l: string) => l}
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              labelFormatter={(l: any) => l}
               contentStyle={{ fontSize: 12, borderRadius: 12, border: "1px solid #e2e8f0" }}
             />
             <Bar yAxisId="vol" dataKey="support" fill="#c7d2fe" radius={[6, 6, 0, 0]} maxBarSize={32} />
@@ -206,7 +208,8 @@ const StackedDailyBars = lazy(() =>
               tickLine={false}
             />
             <Tooltip
-              formatter={(value: number, name: string) => [
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              formatter={(value: any, name: any) => [
                 value,
                 name === "as_is" ? "Envoyé tel quel" : name === "edited" ? "Modifié" : "Ignoré",
               ]}

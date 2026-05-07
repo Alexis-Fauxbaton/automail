@@ -1,5 +1,6 @@
 ﻿// Dashboard statistics helpers â€” period bounds computation and aggregated DB queries.
 
+import { Prisma } from "@prisma/client";
 import prisma from "../db.server";
 
 // Timezone used for day bucketing (label display and chart grouping).
@@ -561,7 +562,7 @@ async function _baselineThreadCount(
   shop: string,
   range: string,
   currentStart: Date,
-  where: Parameters<typeof prisma.thread.count>[0]["where"],
+  where: Prisma.ThreadWhereInput,
 ): Promise<number | null> {
   if (range === "90d" || range === "custom") return null;
 
@@ -634,8 +635,8 @@ export async function getAlerts(
 
   const supportWhere = {
     shop,
-    supportNature: { in: ["confirmed_support", "probable_support"] },
-  } as const;
+    supportNature: { in: ["confirmed_support", "probable_support"] as string[] },
+  };
 
   const [currentVolume, baselineVolume, reopened, baselineReopened, topIntents] =
     await Promise.all([
