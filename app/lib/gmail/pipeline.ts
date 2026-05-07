@@ -1006,6 +1006,31 @@ async function classifyAndDraft(
       ? await getThreadResolution(record.canonicalThreadId, shop)
       : null;
 
+    // Respect any manual intent override set on the previous anchor.
+    // Aligns this path with reanalyzeEmail (which does the same at ~line 1301).
+    const prevAnchor = record.canonicalThreadId
+      ? await prisma.incomingEmail.findFirst({
+          where: {
+            canonicalThreadId: record.canonicalThreadId,
+            processingStatus: "analyzed",
+            analysisResult: { not: null },
+            id: { not: record.id },
+          },
+          orderBy: { receivedAt: "desc" },
+          select: { analysisResult: true },
+        })
+      : null;
+    const prevAnalysis = prevAnchor?.analysisResult
+      ? (JSON.parse(prevAnchor.analysisResult) as Awaited<ReturnType<typeof analyzeSupportEmail>>)
+      : null;
+    const reuseIntents = prevAnalysis?.manualOverrides?.intents
+      ? {
+          intent: prevAnalysis.intent,
+          intents: prevAnalysis.intents ?? [prevAnalysis.intent],
+          identifiers: prevAnalysis.identifiers,
+        }
+      : undefined;
+
     const analysis = await analyzeSupportEmail({
       subject: msg.subject,
       body: threadContext.body,
@@ -1033,7 +1058,14 @@ async function classifyAndDraft(
       skipDraft: true,
       // Resolved threads: extract intent only, skip Shopify/tracking fetch.
       skipTracking: isResolved,
+      reuseIntents,
     });
+
+    // Carry forward manual override markers (same as reanalyzeEmail line ~1342).
+    if (prevAnalysis?.manualOverrides) {
+      analysis.manualOverrides = prevAnalysis.manualOverrides;
+    }
+
     await prisma.incomingEmail.update({
       where: { id: record.id },
       data: {
