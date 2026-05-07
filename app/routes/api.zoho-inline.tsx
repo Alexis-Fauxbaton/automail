@@ -56,8 +56,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
     if (cid) params.set("cid", cid);
     const imageUrl = `https://${domain}/mail/ImageDisplay?${params}`;
 
+    // 8 s timeout protects the Node thread if Zoho hangs.
     const res = await fetch(imageUrl, {
       headers: { Authorization: `Zoho-oauthtoken ${token}` },
+      signal: AbortSignal.timeout(8000),
     });
 
     if (!res.ok) {

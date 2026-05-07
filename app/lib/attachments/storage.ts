@@ -8,14 +8,27 @@ export interface Storage {
   getUrl(storagePath: string): string;
 }
 
+// Allowlist of file extensions that are safe to persist on the support
+// agent's machine. Executables / scripts are rejected — even if the file
+// is only ever served back via api.draft-attachment with forced download,
+// preventing storage in the first place is the cleanest defence.
+const SAFE_EXTENSIONS = new Set([
+  ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".csv", ".txt", ".md",
+  ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".svg",
+  ".zip", ".rar", ".7z",
+  ".mp3", ".wav", ".mp4", ".mov", ".webm",
+  ".eml", ".msg",
+]);
+
 export function createStorage(baseDir: string): Storage {
   return {
     async save(shop, emailId, file) {
       const dir = path.join(baseDir, shop, emailId);
       fs.mkdirSync(dir, { recursive: true });
 
-      const rawExt = path.extname(file.name);
-      const ext = /^[a-zA-Z0-9.]{1,10}$/.test(rawExt) ? rawExt : "";
+      const rawExt = path.extname(file.name).toLowerCase();
+      const isSafeShape = /^\.[a-z0-9]{1,10}$/.test(rawExt);
+      const ext = isSafeShape && SAFE_EXTENSIONS.has(rawExt) ? rawExt : "";
       const base = path.basename(file.name, rawExt)
         .replace(/[^a-zA-Z0-9._-]/g, "_")
         .slice(0, 60);

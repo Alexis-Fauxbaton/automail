@@ -11,7 +11,11 @@ const ORDER_WITH_KEYWORD =
 const ORDER_WITH_PHRASE =
   /\b(?:num[eé]ro\s+de\s+commande|order\s+(?:number|no\.?))\s*(?:est|is|:)?\s*(\d{3,10})\b/i;
 
-const EMAIL_RE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
+// Stricter email regex: rejects consecutive dots in either local or domain
+// part to avoid false matches like "user..name@example..com" that the
+// previous loose pattern accepted.
+const EMAIL_RE =
+  /\b[A-Z0-9_%+-]+(?:\.[A-Z0-9_%+-]+)*@[A-Z0-9-]+(?:\.[A-Z0-9-]+)*\.[A-Z]{2,}\b/i;
 
 // Tracking: loose match. Carriers vary wildly; we keep a permissive regex and
 // a few tight ones to avoid collapsing with an order number.

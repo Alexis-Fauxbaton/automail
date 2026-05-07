@@ -89,7 +89,11 @@ export async function llmParseEmail(
     );
 
     const raw = response.choices[0]?.message?.content ?? "";
-    const parsed_json = JSON.parse(raw) as Record<string, unknown>;
+    const candidate: unknown = JSON.parse(raw);
+    if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
+      throw new Error("LLM did not return a JSON object");
+    }
+    const parsed_json = candidate as Record<string, unknown>;
 
     const parsedIntent = coerceIntent(parsed_json.intent);
 
