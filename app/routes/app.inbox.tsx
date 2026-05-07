@@ -17,6 +17,7 @@ import type { MailProvider } from "../lib/mail/types";
 import { decodeHtmlEntities } from "../lib/gmail/client";
 import { sanitizeEmailHtml, buildCidMap } from "../lib/mail/sanitize-html";
 import { buildReplySubject } from "../lib/support/draft-subject";
+import { RichDraftEditor } from "../components/RichDraftEditor";
 import prisma from "../db.server";
 import { computePriorContact } from "../lib/support/prior-contact";
 import {
@@ -1557,10 +1558,6 @@ function DraftBlock({ email, threadSenderEmail }: {
     }, 800);
   };
 
-  // Ref for the s-text-area web component (captures native input/change events)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const textareaRef = useRef<any>(null);
-
   // Compose field state
   const [subject, setSubject] = useState(
     email.draftSubject ?? buildReplySubject(email.subject)
@@ -1589,25 +1586,6 @@ function DraftBlock({ email, threadSenderEmail }: {
   useEffect(() => () => {
     if (metaSaveTimer.current) clearTimeout(metaSaveTimer.current);
     if (bodySaveTimer.current) clearTimeout(bodySaveTimer.current);
-  }, []);
-
-  // Attach input listener to the s-text-area web component
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    const handler = (e: Event) => {
-      const textarea = (e.target as HTMLElement).shadowRoot?.querySelector("textarea") ??
-        (el.shadowRoot?.querySelector("textarea"));
-      const value = textarea?.value ?? (e as InputEvent).data ?? "";
-      // Fallback: read from the inner textarea if event.target is the wrapper
-      const inner = el.querySelector("textarea") ?? el.shadowRoot?.querySelector("textarea");
-      const text = inner?.value ?? value;
-      setBodyText(text);
-      saveBody(text);
-    };
-    el.addEventListener("input", handler);
-    return () => el.removeEventListener("input", handler);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Jump to latest version when a new draft arrives
@@ -1752,13 +1730,20 @@ function DraftBlock({ email, threadSenderEmail }: {
           )}
         </s-stack>
 
-        <s-text-area
-          ref={textareaRef}
-          label={isLatest ? t("inbox.editableDraft") : t("inbox.draftVersion", { n: versionIndex + 1 })}
-          rows={10}
-          value={isLatest ? bodyText : currentVersion}
-          readOnly={!isLatest}
-        />
+        {isLatest ? (
+          <RichDraftEditor
+            content={bodyText}
+            onChange={(html) => {
+              setBodyText(html);
+              saveBody(html);
+            }}
+          />
+        ) : (
+          <RichDraftEditor
+            content={currentVersion}
+            readOnly
+          />
+        )}
 
         {isLatest && (
           <refineFetcher.Form method="post">
