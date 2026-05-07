@@ -1,0 +1,119 @@
+/* Toolbar */
+.rich-draft-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border: 1px solid var(--p-color-border);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  background: var(--p-color-bg-surface-secondary);
+  flex-wrap: wrap;
+}
+
+.rich-draft-toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--p-color-text);
+  transition: background 0.1s;
+}
+
+.rich-draft-toolbar-btn:hover {
+  background: var(--p-color-bg-surface-hover);
+}
+
+.rich-draft-toolbar-btn.active {
+  background: var(--p-color-bg-surface-active, #e8eaed);
+  color: var(--p-color-text-emphasis, #1a1a2e);
+}
+
+.rich-draft-toolbar-sep {
+  width: 1px;
+  height: 20px;
+  background: var(--p-color-border);
+  margin: 0 4px;
+}
+
+/* Link input row */
+.rich-draft-link-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border: 1px solid var(--p-color-border);
+  border-bottom: none;
+  background: var(--p-color-bg-surface);
+}
+
+.rich-draft-link-row input {
+  flex: 1;
+  border: 1px solid var(--p-color-border);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 12px;
+  outline: none;
+  background: var(--p-color-bg-surface);
+  color: var(--p-color-text);
+}
+
+.rich-draft-link-row input:focus {
+  border-color: var(--p-color-border-focus, #5c6ac4);
+}
+
+.rich-draft-link-row button {
+  padding: 3px 10px;
+  border: 1px solid var(--p-color-border);
+  border-radius: 4px;
+  background: var(--p-color-bg-surface);
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--p-color-text);
+}
+
+/* Editor content area */
+.rich-draft-editor {
+  border: 1px solid var(--p-color-border);
+  border-radius: 0 0 8px 8px;
+  padding: 10px 12px;
+  min-height: 220px;
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.55;
+  color: var(--p-color-text);
+  background: var(--p-color-bg-surface);
+  outline: none;
+  overflow-y: auto;
+}
+
+/* When no toolbar (readOnly), full border radius */
+.rich-draft-editor--standalone {
+  border-radius: 8px;
+}
+
+/* Rendered content styles */
+.rich-draft-editor p { margin: 0 0 8px; }
+.rich-draft-editor p:last-child { margin-bottom: 0; }
+.rich-draft-editor strong { font-weight: 600; }
+.rich-draft-editor em { font-style: italic; }
+.rich-draft-editor u { text-decoration: underline; }
+.rich-draft-editor ul, .rich-draft-editor ol { padding-left: 20px; margin: 0 0 8px; }
+.rich-draft-editor li { margin-bottom: 2px; }
+.rich-draft-editor blockquote {
+  border-left: 3px solid var(--p-color-border-strong, #c9cdd3);
+  margin: 0 0 8px;
+  padding-left: 12px;
+  color: var(--p-color-text-subdued);
+}
+.rich-draft-editor a {
+  color: var(--p-color-text-link, #5c6ac4);
+  text-decoration: underline;
+}
