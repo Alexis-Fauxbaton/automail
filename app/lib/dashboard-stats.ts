@@ -478,9 +478,23 @@ export async function getTopIntentsWithPerf(
   end: Date,
   limit = 5,
 ): Promise<IntentPerf[]> {
+  // Threads with ANY support-email activity in the period (consistent with the
+  // Volume KPI which counts emails received in the period — not threads created).
+  // Without this, a re-opened thread with fresh activity is counted in volume
+  // but excluded from top-intents, making the two views internally inconsistent.
   type Row = { intent: string; count: bigint; median_ms: number | null };
   const rows = await prisma.$queryRaw<Row[]>`
-    WITH latest_intent AS (
+    WITH active_threads AS (
+      SELECT DISTINCT t.id, t."firstMessageAt"
+      FROM "Thread" t
+      JOIN "IncomingEmail" e ON e."canonicalThreadId" = t.id
+      WHERE t.shop = ${shop}
+        AND t."supportNature" IN ('confirmed_support', 'probable_support')
+        AND e."receivedAt" >= ${start}
+        AND e."receivedAt" < ${end}
+        AND e."processingStatus" != 'outgoing'
+    ),
+    latest_intent AS (
       SELECT DISTINCT ON (e."canonicalThreadId")
         e."canonicalThreadId",
         e."detectedIntent"
@@ -493,30 +507,22 @@ export async function getTopIntentsWithPerf(
     ),
     thread_response AS (
       SELECT
-        t.id,
-        EXTRACT(EPOCH FROM (MIN(oe."receivedAt") - t."firstMessageAt")) * 1000 AS resp_ms
-      FROM "Thread" t
+        at.id,
+        EXTRACT(EPOCH FROM (MIN(oe."receivedAt") - at."firstMessageAt")) * 1000 AS resp_ms
+      FROM active_threads at
       JOIN "IncomingEmail" oe
-        ON oe."canonicalThreadId" = t.id
+        ON oe."canonicalThreadId" = at.id
         AND oe."processingStatus" = 'outgoing'
-        AND oe."receivedAt" > t."firstMessageAt"
-      WHERE t.shop = ${shop}
-        AND t."firstMessageAt" >= ${start}
-        AND t."firstMessageAt" < ${end}
-        AND t."supportNature" IN ('confirmed_support', 'probable_support')
-      GROUP BY t.id, t."firstMessageAt"
+        AND oe."receivedAt" > at."firstMessageAt"
+      GROUP BY at.id, at."firstMessageAt"
     )
     SELECT
       li."detectedIntent" AS intent,
       COUNT(*)::bigint AS count,
       PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY tr.resp_ms) AS median_ms
-    FROM "Thread" t
-    JOIN latest_intent li ON li."canonicalThreadId" = t.id
-    LEFT JOIN thread_response tr ON tr.id = t.id
-    WHERE t.shop = ${shop}
-      AND t."firstMessageAt" >= ${start}
-      AND t."firstMessageAt" < ${end}
-      AND t."supportNature" IN ('confirmed_support', 'probable_support')
+    FROM active_threads at
+    JOIN latest_intent li ON li."canonicalThreadId" = at.id
+    LEFT JOIN thread_response tr ON tr.id = at.id
     GROUP BY li."detectedIntent"
     ORDER BY count DESC
     LIMIT ${limit}
