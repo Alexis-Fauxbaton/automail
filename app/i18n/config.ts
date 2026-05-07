@@ -5,6 +5,11 @@ import fr from "./locales/fr.json";
 
 // Language is managed server-side via UserPreference (app.tsx loader → i18n.changeLanguage).
 // No browser/localStorage detection — avoids stale "en" overriding the DB preference.
+// Clear the key that the old LanguageDetector may have cached in localStorage.
+if (typeof window !== "undefined") {
+  localStorage.removeItem("i18nextLng");
+}
+
 i18n.use(initReactI18next).init({
   resources: { en: { translation: en }, fr: { translation: fr } },
   lng: "fr",
