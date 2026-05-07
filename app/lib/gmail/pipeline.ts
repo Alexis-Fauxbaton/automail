@@ -1020,14 +1020,25 @@ async function classifyAndDraft(
           select: { analysisResult: true },
         })
       : null;
-    const prevAnalysis = prevAnchor?.analysisResult
-      ? (JSON.parse(prevAnchor.analysisResult) as Awaited<ReturnType<typeof analyzeSupportEmail>>)
-      : null;
+    let prevAnalysis: Awaited<ReturnType<typeof analyzeSupportEmail>> | null = null;
+    if (prevAnchor?.analysisResult) {
+      try {
+        prevAnalysis = JSON.parse(prevAnchor.analysisResult) as Awaited<ReturnType<typeof analyzeSupportEmail>>;
+      } catch (err) {
+        console.error("[pipeline] classifyAndDraft: failed to parse prevAnchor analysisResult", err);
+      }
+    }
     const reuseIntents = prevAnalysis?.manualOverrides?.intents
       ? {
           intent: prevAnalysis.intent,
           intents: prevAnalysis.intents ?? [prevAnalysis.intent],
           identifiers: prevAnalysis.identifiers,
+        }
+      : undefined;
+    const reuseOrder = prevAnalysis?.manualOverrides?.order
+      ? {
+          order: prevAnalysis.order ?? null,
+          orderCandidates: prevAnalysis.orderCandidates ?? [],
         }
       : undefined;
 
@@ -1059,11 +1070,22 @@ async function classifyAndDraft(
       // Resolved threads: extract intent only, skip Shopify/tracking fetch.
       skipTracking: isResolved,
       reuseIntents,
+      reuseOrder,
     });
 
     // Carry forward manual override markers (same as reanalyzeEmail line ~1342).
     if (prevAnalysis?.manualOverrides) {
       analysis.manualOverrides = prevAnalysis.manualOverrides;
+    }
+
+    if (record.canonicalThreadId && prevAnalysis?.manualOverrides?.order) {
+      const finalOrderNumber = analysis.order?.name?.replace(/^#/, "") ?? null;
+      await prisma.thread.update({
+        where: { id: record.canonicalThreadId, shop },
+        data: { resolvedOrderNumber: finalOrderNumber },
+      }).catch((err) => {
+        console.error("[pipeline] classifyAndDraft: thread order sync failed:", err);
+      });
     }
 
     await prisma.incomingEmail.update({
