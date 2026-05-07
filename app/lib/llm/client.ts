@@ -37,12 +37,15 @@ export function computeCostUsd(
 }
 
 // ---------------------------------------------------------------------------
-// Shared client
+// Shared client (lazy-init: don't construct OpenAI at module load, otherwise
+// any test or CI env without OPENAI_API_KEY crashes on import — even if the
+// caller never actually invokes the LLM).
 // ---------------------------------------------------------------------------
-const openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
+let openaiClient: OpenAI | null = null;
 export function getOpenAIClient(): OpenAI | null {
   const key = process.env.OPENAI_API_KEY;
   if (!key || key === "sk-your-key-here") return null;
+  if (!openaiClient) openaiClient = new OpenAI({ apiKey: key });
   return openaiClient;
 }
 
