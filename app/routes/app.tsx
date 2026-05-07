@@ -48,11 +48,12 @@ export default function App() {
 
   return (
     <AppProvider embedded={!isE2E} apiKey={apiKey}>
-      <s-app-nav>
+      <s-app-nav name="Automail">
         <s-link href="/app">{t("nav.home")}</s-link>
         <s-link href="/app/inbox">{t("nav.emailInbox")}</s-link>
         <s-link href="/app/dashboard">{t("nav.dashboard")}</s-link>
         <s-link href="/app/settings">{t("nav.settings")}</s-link>
+        <s-link href="/app/help">{t("nav.help")}</s-link>
       </s-app-nav>
       <Outlet />
     </AppProvider>

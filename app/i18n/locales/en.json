@@ -5,11 +5,16 @@
     "emailInbox": "Email inbox",
     "dashboard": "Dashboard",
     "settings": "Settings",
+    "help": "Help",
     "languageLabel": "Language",
     "errorTitle": "Something went wrong",
     "errorDesc": "An unexpected error occurred. Please try refreshing the page.",
     "errorContact": "If the problem persists, contact support.",
     "errorDevTitle": "Application Error"
+  },
+  "help": {
+    "title": "Help & support",
+    "contactHeading": "Contact us"
   },
   "support": {
     "pageHeading": "Support copilot",

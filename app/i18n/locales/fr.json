@@ -5,11 +5,16 @@
     "emailInbox": "Boîte mail",
     "dashboard": "Dashboard",
     "settings": "Paramètres",
+    "help": "Aide",
     "languageLabel": "Langue",
     "errorTitle": "Une erreur s'est produite",
     "errorDesc": "Une erreur inattendue s'est produite. Veuillez rafraîchir la page.",
     "errorContact": "Si le problème persiste, contactez le support.",
     "errorDevTitle": "Erreur applicative"
+  },
+  "help": {
+    "title": "Aide & support",
+    "contactHeading": "Nous contacter"
   },
   "support": {
     "pageHeading": "Copilot support",
