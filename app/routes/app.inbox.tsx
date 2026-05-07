@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useFetcher, useLoaderData, useNavigation, useRevalidator, useSearchParams } from "react-router";
 import { useTranslation } from "react-i18next";
@@ -1183,7 +1183,7 @@ function EmailHtmlBody({ html }: { html: string }) {
   );
 }
 
-function EmailMessageBlock({
+const EmailMessageBlock = memo(function EmailMessageBlock({
   email,
   idx,
   total,
@@ -1200,8 +1200,13 @@ function EmailMessageBlock({
   const body = normalizeEmailBody(email.bodyText);
   const PREVIEW_LENGTH = 300;
 
-  const cidMap = buildCidMap(email.incomingAttachments);
-  const sanitizedHtml = email.bodyHtml ? sanitizeEmailHtml(email.bodyHtml, cidMap) : null;
+  // Memoize per-email — sanitize-html is expensive (O(html_size)) and EmailMessageBlock
+  // re-renders any time the parent loader data changes, even if THIS email is unchanged.
+  const cidMap = useMemo(() => buildCidMap(email.incomingAttachments), [email.incomingAttachments]);
+  const sanitizedHtml = useMemo(
+    () => (email.bodyHtml ? sanitizeEmailHtml(email.bodyHtml, cidMap) : null),
+    [email.bodyHtml, cidMap],
+  );
   const hasHtmlBody = !!sanitizedHtml;
   const hasUnresolvedZohoImages = !!email.bodyHtml?.includes("/mail/ImageDisplay?");
 
@@ -1297,9 +1302,9 @@ function EmailMessageBlock({
       </s-stack>
     </s-box>
   );
-}
+});
 
-function ThreadCard({
+const ThreadCard = memo(function ThreadCard({
   thread,
   threadState,
   isSelected,
@@ -1522,7 +1527,7 @@ function ThreadCard({
       )}
     </div>
   );
-}
+});
 
 // Hoisted out of DraftBlock so they aren't reallocated on every render.
 const DRAFT_LABEL_STYLE: React.CSSProperties = {
@@ -2407,30 +2412,35 @@ export default function InboxPage() {
     return e;
   });
 
-  const threads = groupByThread(displayEmails);
+  const threads = useMemo(() => groupByThread(displayEmails), [displayEmails]);
 
   // Precompute each thread's bucket + classification once for reuse in
   // counts and filtering. Cheaper than calling the helpers repeatedly.
-  const threadMeta = threads.map((t) => {
-    const state =
-      (t.latest.canonicalThreadId &&
-        loaderData.threadStates?.[t.latest.canonicalThreadId]) ||
-      null;
-    const pc = (t.latest.canonicalThreadId && loaderData.priorContact?.[t.latest.canonicalThreadId]) || null;
-    return {
-      thread: t,
-      state,
-      bucket: getOpsBucket(t, state, loaderData.connectedEmail),
-      nature: getThreadClassification(t),
-      linkedOrder: hasLinkedOrder(state),
-      previousContact: {
-        byAddress: pc?.byAddress ?? false,
-        byOrder: pc?.byOrder ?? false,
-        recentReply: (pc as { recentReply?: boolean } | null)?.recentReply ?? false,
-        matchedAddress: (pc as { matchedAddress?: string | null } | null)?.matchedAddress ?? null,
-      },
-    };
-  });
+  // Memoized so 100+ threads aren't re-derived on every unrelated state change.
+  const threadMeta = useMemo(
+    () =>
+      threads.map((t) => {
+        const state =
+          (t.latest.canonicalThreadId &&
+            loaderData.threadStates?.[t.latest.canonicalThreadId]) ||
+          null;
+        const pc = (t.latest.canonicalThreadId && loaderData.priorContact?.[t.latest.canonicalThreadId]) || null;
+        return {
+          thread: t,
+          state,
+          bucket: getOpsBucket(t, state, loaderData.connectedEmail),
+          nature: getThreadClassification(t),
+          linkedOrder: hasLinkedOrder(state),
+          previousContact: {
+            byAddress: pc?.byAddress ?? false,
+            byOrder: pc?.byOrder ?? false,
+            recentReply: (pc as { recentReply?: boolean } | null)?.recentReply ?? false,
+            matchedAddress: (pc as { matchedAddress?: string | null } | null)?.matchedAddress ?? null,
+          },
+        };
+      }),
+    [threads, loaderData.threadStates, loaderData.priorContact, loaderData.connectedEmail],
+  );
 
   const bucketCounts: Record<OpsBucket | "all" | "to_handle", number> = {
     all: threadMeta.length,

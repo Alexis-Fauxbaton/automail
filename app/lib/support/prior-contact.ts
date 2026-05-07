@@ -77,14 +77,23 @@ export async function computePriorContact(
     }
   }
 
+  // Pre-bucket incoming rows by thread so the per-thread loop is O(incoming)
+  // total rather than O(threads × rows) — the previous filter() inside the
+  // loop was the hottest path in the inbox loader.
+  const incomingByThread = new Map<string, typeof rows>();
+  for (const r of rows) {
+    if (!r.canonicalThreadId || r.processingStatus === "outgoing") continue;
+    const bucket = incomingByThread.get(r.canonicalThreadId);
+    if (bucket) bucket.push(r);
+    else incomingByThread.set(r.canonicalThreadId, [r]);
+  }
+
   const priorContactByThread: Record<string, PriorContactResult> = {};
   for (const id of canonicalIds) {
     const state = threadStates[id];
     const currentCreatedAt = threadCreatedAt.get(id);
     if (!currentCreatedAt) continue;
-    const incomingMsgs = rows.filter(
-      (r) => r.canonicalThreadId === id && r.processingStatus !== "outgoing",
-    );
+    const incomingMsgs = incomingByThread.get(id) ?? [];
     const latestIncomingAt = incomingMsgs.reduce(
       (max, r) => (r.receivedAt.getTime() > max ? r.receivedAt.getTime() : max),
       0,
