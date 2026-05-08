@@ -22,6 +22,10 @@ interface CacheEntry {
 }
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
+// In-process module-level cache. In multi-worker deployments each worker
+// holds its own cache; manual invalidation (invalidateCache) only affects
+// the worker handling the current request. The 5min TTL ensures eventual
+// consistency across workers — webhook-driven invalidation is best-effort.
 const cache = new Map<string, CacheEntry>();
 
 interface AdminClient {

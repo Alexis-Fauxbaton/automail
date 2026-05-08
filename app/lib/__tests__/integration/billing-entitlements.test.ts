@@ -53,6 +53,28 @@ describe('resolveEntitlements — trial active, no subscription', () => {
     expect(ent.trialDaysRemaining).toBe(12);
     expect(ent.quotaStatus.limit).toBe(Infinity);
   });
+
+  it('reports real used count during trial', async () => {
+    const now = new Date('2026-05-08T12:00:00Z');
+    await setInstallDate(TEST_SHOP, new Date(now.getTime() - 2 * DAY_MS));
+    await testDb.billingUsage.create({
+      data: {
+        shop: TEST_SHOP,
+        periodStart: new Date('2026-05-01T00:00:00Z'),
+        draftsCount: 7,
+      },
+    });
+
+    const ent = await resolveEntitlements({
+      shop: TEST_SHOP,
+      admin: makeAdmin([]) as any,
+      now,
+    });
+
+    expect(ent.state).toBe('trial_active');
+    expect(ent.quotaStatus.used).toBe(7);
+    expect(ent.quotaStatus.limit).toBe(Infinity);
+  });
 });
 
 describe('resolveEntitlements — trial expired, no subscription', () => {
@@ -137,6 +159,29 @@ describe('resolveEntitlements — starter active', () => {
     expect(ent.quotaStatus.level).toBe('exceeded');
     expect(ent.canGenerateDraft).toBe(false);
   });
+
+  it('flags critical at 95%', async () => {
+    const now = new Date('2026-05-08T12:00:00Z');
+    await setInstallDate(TEST_SHOP, new Date(now.getTime() - 30 * DAY_MS));
+    await testDb.billingUsage.create({
+      data: {
+        shop: TEST_SHOP,
+        periodStart: new Date('2026-05-01T00:00:00Z'),
+        draftsCount: 48, // 48/50 = 96% → critical
+      },
+    });
+
+    const ent = await resolveEntitlements({
+      shop: TEST_SHOP,
+      admin: makeAdmin([
+        { id: 'gid://1', name: 'starter', status: 'ACTIVE', trialDays: 14, createdAt: '2026-05-01T00:00:00Z', currentPeriodEnd: '2026-06-01T00:00:00Z' },
+      ]) as any,
+      now,
+    });
+
+    expect(ent.quotaStatus.level).toBe('critical');
+    expect(ent.canGenerateDraft).toBe(true);
+  });
 });
 
 describe('resolveEntitlements — internal flag bypass', () => {
@@ -156,6 +201,36 @@ describe('resolveEntitlements — internal flag bypass', () => {
     expect(ent.canGenerateDraft).toBe(true);
     expect(ent.canConnectMailbox).toBe(true);
     expect(ent.canViewAdvancedDashboard).toBe(true);
+  });
+});
+
+describe('resolveEntitlements — first-touch (no BillingShopFlag yet)', () => {
+  it('creates the flag with installDate=now and starts trial', async () => {
+    const now = new Date('2026-05-08T12:00:00Z');
+    // No setInstallDate call — shop has nothing yet
+    const ent = await resolveEntitlements({
+      shop: TEST_SHOP,
+      admin: makeAdmin([]) as any,
+      now,
+    });
+    expect(ent.state).toBe('trial_active');
+    expect(ent.trialDaysRemaining).toBe(14);
+
+    // Verify the flag was created
+    const flag = await testDb.billingShopFlag.findUnique({ where: { shop: TEST_SHOP } });
+    expect(flag).not.toBeNull();
+    expect(flag?.installDate.toISOString()).toBe(now.toISOString());
+    expect(flag?.isInternal).toBe(false);
+  });
+
+  it('handles concurrent first-touch without unique-constraint violation', async () => {
+    const now = new Date('2026-05-08T12:00:00Z');
+    const [a, b] = await Promise.all([
+      resolveEntitlements({ shop: TEST_SHOP, admin: makeAdmin([]) as any, now }),
+      resolveEntitlements({ shop: TEST_SHOP, admin: makeAdmin([]) as any, now }),
+    ]);
+    expect(a.state).toBe('trial_active');
+    expect(b.state).toBe('trial_active');
   });
 });
 

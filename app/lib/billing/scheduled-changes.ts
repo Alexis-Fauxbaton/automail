@@ -64,6 +64,12 @@ export async function getPendingChange(shop: string): Promise<ScheduledChange | 
   });
 }
 
+/**
+ * Returns ALL pending plan changes across ALL shops whose effectiveAt has
+ * arrived. This is a global sweep helper for the cron/job processor that
+ * applies due changes — NOT a per-shop query. Per-shop callers should use
+ * `getPendingChange(shop)` instead.
+ */
 export async function listDueChanges(now: Date = new Date()): Promise<ScheduledChange[]> {
   return prisma.billingScheduledChange.findMany({
     where: {

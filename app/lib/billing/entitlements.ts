@@ -73,13 +73,13 @@ interface ResolveInput {
 export async function resolveEntitlements(input: ResolveInput): Promise<Entitlements> {
   const now = input.now ?? new Date();
 
-  const flag = await prisma.billingShopFlag.findUnique({ where: { shop: input.shop } });
-  if (!flag) {
-    // First-touch: create the row with installDate=now so trial starts ticking.
-    await prisma.billingShopFlag.create({ data: { shop: input.shop, installDate: now } });
-  }
-  const installDate = flag?.installDate ?? now;
-  const isInternal = flag?.isInternal ?? false;
+  const flag = await prisma.billingShopFlag.upsert({
+    where: { shop: input.shop },
+    create: { shop: input.shop, installDate: now },
+    update: {},
+  });
+  const installDate = flag.installDate;
+  const isInternal = flag.isInternal;
 
   // Internal bypass — pro-level entitlements with infinite quota.
   if (isInternal) {
@@ -187,7 +187,7 @@ async function buildTrialActiveEntitlements(input: {
   now: Date;
 }): Promise<Entitlements> {
   const plan = PLANS.trial;
-  const periodStart = getCurrentPeriodStart(input.now);
+  const usage = await getUsage(input.shop, input.now);
   return {
     shop: input.shop,
     state: 'trial_active',
@@ -198,18 +198,18 @@ async function buildTrialActiveEntitlements(input: {
     canViewAdvancedDashboard: true,
     trialDaysRemaining: input.trialDaysRemaining,
     trialExpiresAt: input.trialExpiresAt,
-    quotaStatus: { used: 0, limit: Infinity, pct: 0, level: 'ok', periodStart },
+    quotaStatus: { used: usage.count, limit: Infinity, pct: 0, level: 'ok', periodStart: usage.periodStart },
     mailboxStatus: { used: input.mailboxCount, limit: plan.maxMailboxes },
     dashboardMaxRangeDays: plan.dashboardMaxRangeDays,
   };
 }
 
-async function buildTrialExpiredEntitlements(input: {
+function buildTrialExpiredEntitlements(input: {
   shop: string;
   mailboxCount: number;
   trialExpiresAt: Date;
   now: Date;
-}): Promise<Entitlements> {
+}): Entitlements {
   const periodStart = getCurrentPeriodStart(input.now);
   return {
     shop: input.shop,
@@ -223,7 +223,7 @@ async function buildTrialExpiredEntitlements(input: {
     trialExpiresAt: input.trialExpiresAt,
     quotaStatus: { used: 0, limit: 0, pct: 0, level: 'exceeded', periodStart },
     mailboxStatus: { used: input.mailboxCount, limit: 0 },
-    dashboardMaxRangeDays: 7,
+    dashboardMaxRangeDays: PLANS.starter.dashboardMaxRangeDays,
   };
 }
 
