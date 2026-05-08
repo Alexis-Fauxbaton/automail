@@ -389,6 +389,9 @@
       "lastUsedBody": "{{used}} of {{limit}} drafts used. Generation is paused until next month or upgrade.",
       "later": "Later",
       "viewPlans": "View plans"
+    },
+    "syncSuspended": {
+      "banner": "Mailbox sync is paused — your quota is exhausted or your trial has ended. Upgrade or wait for the next monthly reset to resume."
     }
   },
   "classification": {

@@ -389,6 +389,9 @@
       "lastUsedBody": "{{used}} brouillons utilisés sur {{limit}}. Génération en pause jusqu'au prochain mois ou upgrade.",
       "later": "Plus tard",
       "viewPlans": "Voir les plans"
+    },
+    "syncSuspended": {
+      "banner": "La synchronisation de votre boîte mail est en pause — votre quota est épuisé ou votre essai est terminé. Passez à un plan supérieur ou attendez le reset mensuel pour reprendre."
     }
   },
   "classification": {
