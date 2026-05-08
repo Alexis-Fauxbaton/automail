@@ -198,7 +198,7 @@ export async function handleRedraft(params: {
         disconnected: false,
         refined: null,
         quotaExceeded: true,
-        quotaStatus: { used: ent.quotaStatus.used + 1, limit: ent.quotaStatus.limit },
+        quotaStatus: { used: ent.quotaStatus.used, limit: ent.quotaStatus.limit },
       };
     }
     throw guarded.error ?? new Error('Draft generation failed');
@@ -309,7 +309,7 @@ export async function handleRefine(params: {
         reanalyzed: null,
         refined: null,
         quotaExceeded: true,
-        quotaStatus: { used: ent.quotaStatus.used + 1, limit: ent.quotaStatus.limit },
+        quotaStatus: { used: ent.quotaStatus.used, limit: ent.quotaStatus.limit },
       };
     }
     throw guarded.error ?? new Error('Draft refine failed');
