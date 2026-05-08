@@ -262,3 +262,60 @@ describe('resolveEntitlements — mailbox quota', () => {
     expect(ent.mailboxStatus.limit).toBe(1);
   });
 });
+
+describe('resolveEntitlements — isSyncSuspended', () => {
+  it('false during trial_active', async () => {
+    const now = new Date('2026-05-08T12:00:00Z');
+    await setInstallDate(TEST_SHOP, new Date(now.getTime() - 2 * DAY_MS));
+    const ent = await resolveEntitlements({ shop: TEST_SHOP, admin: makeAdmin([]) as any, now });
+    expect(ent.isSyncSuspended).toBe(false);
+  });
+
+  it('true when trial_expired', async () => {
+    const now = new Date('2026-05-08T12:00:00Z');
+    await setInstallDate(TEST_SHOP, new Date(now.getTime() - 30 * DAY_MS));
+    const ent = await resolveEntitlements({ shop: TEST_SHOP, admin: makeAdmin([]) as any, now });
+    expect(ent.isSyncSuspended).toBe(true);
+  });
+
+  it('false on paid_active with quota OK', async () => {
+    const now = new Date('2026-05-08T12:00:00Z');
+    await setInstallDate(TEST_SHOP, new Date(now.getTime() - 30 * DAY_MS));
+    await testDb.billingUsage.create({
+      data: { shop: TEST_SHOP, periodStart: new Date('2026-05-01T00:00:00Z'), draftsCount: 10 },
+    });
+    const ent = await resolveEntitlements({
+      shop: TEST_SHOP,
+      admin: makeAdmin([
+        { id: 'gid://1', name: 'starter', status: 'ACTIVE', trialDays: 14, createdAt: '2026-05-01T00:00:00Z', currentPeriodEnd: '2026-06-01T00:00:00Z' },
+      ]) as any,
+      now,
+    });
+    expect(ent.isSyncSuspended).toBe(false);
+  });
+
+  it('true on paid_active with quota exceeded', async () => {
+    const now = new Date('2026-05-08T12:00:00Z');
+    await setInstallDate(TEST_SHOP, new Date(now.getTime() - 30 * DAY_MS));
+    await testDb.billingUsage.create({
+      data: { shop: TEST_SHOP, periodStart: new Date('2026-05-01T00:00:00Z'), draftsCount: 50 },
+    });
+    const ent = await resolveEntitlements({
+      shop: TEST_SHOP,
+      admin: makeAdmin([
+        { id: 'gid://1', name: 'starter', status: 'ACTIVE', trialDays: 14, createdAt: '2026-05-01T00:00:00Z', currentPeriodEnd: '2026-06-01T00:00:00Z' },
+      ]) as any,
+      now,
+    });
+    expect(ent.isSyncSuspended).toBe(true);
+  });
+
+  it('false for internal (bypass)', async () => {
+    const now = new Date('2026-05-08T12:00:00Z');
+    await testDb.billingShopFlag.create({
+      data: { shop: TEST_SHOP, isInternal: true, installDate: new Date(now.getTime() - 30 * DAY_MS) },
+    });
+    const ent = await resolveEntitlements({ shop: TEST_SHOP, admin: makeAdmin([]) as any, now });
+    expect(ent.isSyncSuspended).toBe(false);
+  });
+});

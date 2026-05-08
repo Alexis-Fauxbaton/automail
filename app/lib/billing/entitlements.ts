@@ -52,6 +52,8 @@ export interface Entitlements {
   canGenerateDraft: boolean;
   canConnectMailbox: boolean;
   canViewAdvancedDashboard: boolean;
+  /** True when auto-sync should pause for this shop. Derived from state + quota. */
+  isSyncSuspended: boolean;
   trialDaysRemaining: number | null;
   trialExpiresAt: Date | null;
   quotaStatus: QuotaStatus;
@@ -145,6 +147,7 @@ function buildInternalEntitlements(shop: string, now: Date): Entitlements {
     canGenerateDraft: true,
     canConnectMailbox: true,
     canViewAdvancedDashboard: true,
+    isSyncSuspended: false,
     trialDaysRemaining: null,
     trialExpiresAt: null,
     quotaStatus: { used: 0, limit: Infinity, pct: 0, level: 'ok', periodStart },
@@ -171,6 +174,7 @@ async function buildPaidEntitlements(input: {
     canGenerateDraft: quotaStatus.level !== 'exceeded',
     canConnectMailbox: input.mailboxCount < plan.maxMailboxes,
     canViewAdvancedDashboard: plan.advancedDashboard,
+    isSyncSuspended: quotaStatus.level === 'exceeded',
     trialDaysRemaining: null,
     trialExpiresAt: null,
     quotaStatus,
@@ -196,6 +200,7 @@ async function buildTrialActiveEntitlements(input: {
     canGenerateDraft: true,
     canConnectMailbox: input.mailboxCount < plan.maxMailboxes,
     canViewAdvancedDashboard: true,
+    isSyncSuspended: false,
     trialDaysRemaining: input.trialDaysRemaining,
     trialExpiresAt: input.trialExpiresAt,
     quotaStatus: { used: usage.count, limit: Infinity, pct: 0, level: 'ok', periodStart: usage.periodStart },
@@ -219,6 +224,7 @@ async function buildTrialExpiredEntitlements(input: {
     canGenerateDraft: false,
     canConnectMailbox: false,
     canViewAdvancedDashboard: false,
+    isSyncSuspended: true,
     trialDaysRemaining: 0,
     trialExpiresAt: input.trialExpiresAt,
     quotaStatus: { used: usage.count, limit: 0, pct: 0, level: 'exceeded', periodStart: usage.periodStart },
