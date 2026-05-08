@@ -1402,6 +1402,21 @@ const ThreadCard = memo(function ThreadCard({
   const reanalyzeFetcher = useFetcher();
   const isGenerating = reanalyzeFetcher.state !== "idle";
   const [showSignals, setShowSignals] = useState(false);
+  const [quotaModal, setQuotaModal] = useState<{
+    open: boolean;
+    used: number;
+    limit: number;
+    variant: 'exceeded' | 'just_used_last';
+  }>({ open: false, used: 0, limit: 0, variant: 'exceeded' });
+  useEffect(() => {
+    const data = reanalyzeFetcher.data as { quotaExceeded?: boolean; quotaStatus?: { used: number; limit: number } } | null | undefined;
+    if (!data) return;
+    if (data.quotaExceeded) {
+      setQuotaModal({ open: true, used: data.quotaStatus?.used ?? 0, limit: data.quotaStatus?.limit ?? 0, variant: 'exceeded' });
+    } else if (data.quotaStatus && data.quotaStatus.used === data.quotaStatus.limit && data.quotaStatus.limit > 0) {
+      setQuotaModal({ open: true, used: data.quotaStatus.used, limit: data.quotaStatus.limit, variant: 'just_used_last' });
+    }
+  }, [reanalyzeFetcher.data]);
   const hasSignals =
     (bucket === "to_process" || bucket === "waiting_merchant" || bucket === "waiting_customer") &&
     (previousContact.recentReply || previousContact.byAddress || previousContact.byOrder);
@@ -1598,6 +1613,13 @@ const ThreadCard = memo(function ThreadCard({
           <span className="ui-pill ui-pill--success" style={{ fontSize: "11px", padding: "2px 8px" }}>{t("inbox.pillDraftGenerated")}</span>
         </div>
       )}
+      <QuotaExceededModal
+        open={quotaModal.open}
+        onClose={() => setQuotaModal({ ...quotaModal, open: false })}
+        variant={quotaModal.variant}
+        used={quotaModal.used}
+        limit={quotaModal.limit}
+      />
     </div>
   );
 });
@@ -1983,6 +2005,21 @@ function ThreadDetailPanel({
   const noReplyNeeded = latest.analysisResult?.conversation?.noReplyNeeded === true;
   const reanalyzeFetcher = useFetcher();
   const isGenerating = reanalyzeFetcher.state !== "idle";
+  const [quotaModal, setQuotaModal] = useState<{
+    open: boolean;
+    used: number;
+    limit: number;
+    variant: 'exceeded' | 'just_used_last';
+  }>({ open: false, used: 0, limit: 0, variant: 'exceeded' });
+  useEffect(() => {
+    const data = reanalyzeFetcher.data as { quotaExceeded?: boolean; quotaStatus?: { used: number; limit: number } } | null | undefined;
+    if (!data) return;
+    if (data.quotaExceeded) {
+      setQuotaModal({ open: true, used: data.quotaStatus?.used ?? 0, limit: data.quotaStatus?.limit ?? 0, variant: 'exceeded' });
+    } else if (data.quotaStatus && data.quotaStatus.used === data.quotaStatus.limit && data.quotaStatus.limit > 0) {
+      setQuotaModal({ open: true, used: data.quotaStatus.used, limit: data.quotaStatus.limit, variant: 'just_used_last' });
+    }
+  }, [reanalyzeFetcher.data]);
   const [showThread, setShowThread] = useState(false);
   const [showSignals, setShowSignals] = useState(false);
   const hasSignals =
@@ -2422,6 +2459,13 @@ function ThreadDetailPanel({
           </div>
         )}
       </div>
+      <QuotaExceededModal
+        open={quotaModal.open}
+        onClose={() => setQuotaModal({ ...quotaModal, open: false })}
+        variant={quotaModal.variant}
+        used={quotaModal.used}
+        limit={quotaModal.limit}
+      />
     </div>
   );
 }
