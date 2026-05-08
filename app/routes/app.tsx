@@ -64,6 +64,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       canGenerateDraft: ent.canGenerateDraft,
       canConnectMailbox: ent.canConnectMailbox,
       canViewAdvancedDashboard: ent.canViewAdvancedDashboard,
+      isSyncSuspended: ent.isSyncSuspended,
       trialDaysRemaining: ent.trialDaysRemaining,
       trialExpiresAt: ent.trialExpiresAt?.toISOString() ?? null,
       quotaStatus: { ...ent.quotaStatus, periodStart: ent.quotaStatus.periodStart.toISOString() },
