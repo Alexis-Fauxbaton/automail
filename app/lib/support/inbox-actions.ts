@@ -156,8 +156,54 @@ export async function handleReanalyze(params: {
   skipDraft: boolean;
 }) {
   const { shop, admin, emailId, skipDraft } = params;
-  const analysis = await reanalyzeEmail(emailId, admin, shop, { skipDraft });
-  if (skipDraft && analysis) {
+
+  // skipDraft=true → analysis only, no quota consumed (refresh stale, error retry).
+  // skipDraft=false → analysis + draft generated → 1 unit consumed, must be gated.
+  if (!skipDraft) {
+    const ent = await resolveEntitlements({ shop, admin });
+    if (!ent.canGenerateDraft) {
+      return {
+        reanalyzed: null,
+        report: null,
+        disconnected: false,
+        refined: null,
+        quotaExceeded: true,
+        quotaStatus: { used: ent.quotaStatus.used, limit: ent.quotaStatus.limit },
+      };
+    }
+
+    const guarded = await withDraftQuota({
+      shop,
+      limit: ent.quotaStatus.limit,
+      generator: () => reanalyzeEmail(emailId, admin, shop, { skipDraft: false }),
+    });
+
+    if (!guarded.ok) {
+      if (guarded.reason === 'quota_exceeded') {
+        return {
+          reanalyzed: null,
+          report: null,
+          disconnected: false,
+          refined: null,
+          quotaExceeded: true,
+          quotaStatus: { used: ent.quotaStatus.used, limit: ent.quotaStatus.limit },
+        };
+      }
+      throw guarded.error ?? new Error('Reanalyze with draft generation failed');
+    }
+
+    return {
+      reanalyzed: { emailId, analysis: guarded.value },
+      report: null,
+      disconnected: false,
+      refined: null,
+      quotaStatus: { used: guarded.newCount, limit: ent.quotaStatus.limit },
+    };
+  }
+
+  // skipDraft=true path: analysis only, no quota gating.
+  const analysis = await reanalyzeEmail(emailId, admin, shop, { skipDraft: true });
+  if (analysis) {
     (analysis as { draftReply?: string }).draftReply = undefined;
   }
   return { reanalyzed: { emailId, analysis }, report: null, disconnected: false, refined: null };

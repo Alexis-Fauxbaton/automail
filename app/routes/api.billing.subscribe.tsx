@@ -37,17 +37,28 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   // eslint-disable-next-line no-undef
   const isTest = process.env.NODE_ENV !== "production";
 
-  const result = await createSubscription({
-    admin,
-    planId,
-    returnUrl,
-    test: isTest,
-  });
+  console.log(`[billing] ${session.shop} subscribe attempt: planId=${planId}, returnUrl=${returnUrl}, test=${isTest}`);
 
-  console.log(`[billing] ${session.shop} subscribed to ${planId} (test=${isTest})`);
+  try {
+    const result = await createSubscription({
+      admin,
+      planId,
+      returnUrl,
+      test: isTest,
+    });
 
-  return new Response(JSON.stringify({ confirmationUrl: result.confirmationUrl }), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
+    console.log(`[billing] ${session.shop} subscribed to ${planId} (test=${isTest}) → ${result.subscriptionId}`);
+
+    return new Response(JSON.stringify({ confirmationUrl: result.confirmationUrl }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[billing] ${session.shop} subscribe FAILED: ${message}`);
+    return new Response(JSON.stringify({ error: "subscribe_failed", message }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
 };
