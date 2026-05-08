@@ -176,6 +176,13 @@ export async function refreshThreadAnalysis(
     manualOverrides: previousAnalysis?.manualOverrides,
   };
 
+  // Restore overrides snapshotted by handleResync, if any. No-op when the
+  // thread has no snapshot (the common case).
+  if (record.canonicalThreadId) {
+    const { applyPreservedOverridesIfAny } = await import("./preserved-overrides");
+    await applyPreservedOverridesIfAny(merged, record.canonicalThreadId, shop);
+  }
+
   // Persist the merged analysis
   await prisma.incomingEmail.update({
     where: { id: emailId },

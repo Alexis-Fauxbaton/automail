@@ -77,7 +77,7 @@ export interface ClassificationEdit {
   order?: OrderFacts | null;
   /** Set order to null while keeping the override marker (manual detach). */
   detachOrder?: boolean;
-  /** Clear order and remove the order override. */
+  /** Clear order AND remove the override marker — let the app re-derive. */
   resetOrder?: boolean;
   /** Injected for deterministic tests. */
   now?: Date;

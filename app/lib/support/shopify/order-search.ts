@@ -188,24 +188,49 @@ async function runSearch(
   admin: AdminGraphqlClient,
   query: string,
 ): Promise<RawOrderNode[]> {
-  const response = await admin.graphql(SEARCH_QUERY, {
-    variables: { query },
-  });
-  const json = (await response.json()) as {
-    data?: { orders?: { edges: Array<{ node: RawOrderNode }> } };
-    errors?: Array<{ message: string }>;
-  };
-  if (json.errors && json.errors.length > 0) {
-    const msg = json.errors.map((e) => e.message).join(" | ");
-    console.error("[order-search] GraphQL errors:", msg, "| query:", query);
-    throw new Error(`Shopify GraphQL error: ${msg}`);
+  // Backoff schedule for THROTTLED errors. Shopify's leaky-bucket allows
+  // recovery within ~1s for typical query costs, but big bursts (resync of
+  // hundreds of resolved threads) can saturate it. Three retries with
+  // exponential backoff cover the realistic worst case without stalling.
+  const RETRY_DELAYS_MS = [400, 1000, 2500];
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    const response = await admin.graphql(SEARCH_QUERY, {
+      variables: { query },
+    });
+    const json = (await response.json()) as {
+      data?: { orders?: { edges: Array<{ node: RawOrderNode }> } };
+      errors?: Array<{ message: string; extensions?: { code?: string } }>;
+    };
+
+    if (json.errors && json.errors.length > 0) {
+      const throttled = json.errors.some(
+        (e) => e.extensions?.code === "THROTTLED" || /throttled/i.test(e.message),
+      );
+      const msg = json.errors.map((e) => e.message).join(" | ");
+      lastError = new Error(`Shopify GraphQL error: ${msg}`);
+      if (throttled && attempt < RETRY_DELAYS_MS.length) {
+        const delay = RETRY_DELAYS_MS[attempt];
+        console.warn(
+          `[order-search] Throttled (attempt ${attempt + 1}), retrying in ${delay}ms | query: ${query}`,
+        );
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
+      console.error("[order-search] GraphQL errors:", msg, "| query:", query);
+      throw lastError;
+    }
+
+    if (!json.data) {
+      console.error("[order-search] Unexpected response (no data):", JSON.stringify(json).slice(0, 500));
+    }
+    if (!json.data?.orders) return [];
+    return json.data.orders.edges.map((e) => e.node);
   }
-  // Log unexpected empty data structure for debugging
-  if (!json.data) {
-    console.error("[order-search] Unexpected response (no data):", JSON.stringify(json).slice(0, 500));
-  }
-  if (!json.data?.orders) return [];
-  return json.data.orders.edges.map((e) => e.node);
+
+  // Exhausted retries on throttle.
+  throw lastError ?? new Error("Shopify GraphQL throttle: retries exhausted");
 }
 
 // Exported for potential reuse / tests.

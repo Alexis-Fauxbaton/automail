@@ -253,7 +253,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "moveThread") {
     const canonicalThreadId = String(formData.get("canonicalThreadId") ?? "");
     const target = String(formData.get("target") ?? "");
-    return handleMoveThread({ shop, canonicalThreadId, target });
+    return handleMoveThread({ shop, canonicalThreadId, target, admin });
   }
 
   if (intent === "editThreadIdentifiers") {
@@ -559,6 +559,42 @@ function getOpsBucket(
 
 function hasLinkedOrder(state: SerializedThreadState | null): boolean {
   return !!state?.resolvedOrderNumber;
+}
+
+/** Rounded pill with an alert-triangle icon — clickable trigger for the
+ *  thread-level signals tooltip (replied elsewhere, ambiguous order, etc). */
+function SignalPill() {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "#fef3c7",
+        color: "#a86600",
+        borderRadius: "999px",
+        padding: "4px",
+        cursor: "help",
+        lineHeight: 0,
+      }}
+    >
+      <svg
+        aria-hidden
+        width="14"
+        height="14"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+        <line x1="12" y1="9" x2="12" y2="13" />
+        <line x1="12" y1="17" x2="12.01" y2="17" />
+      </svg>
+    </span>
+  );
 }
 
 function filterReason(email: SerializedEmail): string | null {
@@ -1373,6 +1409,12 @@ const ThreadCard = memo(function ThreadCard({
   // after a customer reply). Find the most recent email that actually has
   // an analysisResult so we can still show the LLM context and the draft.
   const analysisEmail = [...emails].reverse().find((e) => e.analysisResult) ?? null;
+  const ambiguousOrderCount =
+    !analysisEmail?.analysisResult?.order &&
+    (analysisEmail?.analysisResult?.orderCandidates?.length ?? 0) > 1
+      ? analysisEmail!.analysisResult!.orderCandidates!.length
+      : 0;
+  const hasAnySignal = hasSignals || ambiguousOrderCount > 0;
   // For draft display, prefer the latest email's draft (freshly generated),
   // fall back to the analysisEmail's draft if latest has none yet.
   const draftEmail = latest.draftReply ? latest : (analysisEmail?.draftReply ? analysisEmail : null);
@@ -1441,14 +1483,14 @@ const ThreadCard = memo(function ThreadCard({
         {threadState?.historyStatus === "partial" && <span className="ui-pill ui-pill--warning">{t("inbox.pillPartialHistory")}</span>}
         {latest.processingStatus === "error" && <span className="ui-pill ui-pill--danger">{t("inbox.pillError")}</span>}
 
-        {hasSignals && (
+        {hasAnySignal && (
           <span
             style={{ position: "relative", display: "inline-flex", alignItems: "center" }}
             onMouseEnter={(e) => { e.stopPropagation(); setShowSignals(true); }}
             onMouseLeave={() => setShowSignals(false)}
             onClick={(e) => e.stopPropagation()}
           >
-            <span style={{ color: "var(--ui-amber-700)", fontSize: "14px", cursor: "help" }}>⚠</span>
+            <SignalPill />
             {showSignals && (
               <div style={{
                 position: "absolute", bottom: "calc(100% + 6px)", right: 0,
@@ -1459,10 +1501,13 @@ const ThreadCard = memo(function ThreadCard({
                 display: "flex", flexDirection: "column", gap: "4px",
                 fontSize: "12px", color: "var(--ui-slate-700)", fontWeight: 400,
               }}>
-                {previousContact.recentReply && <span>↩ {t("inbox.signalRepliedElsewhere")}</span>}
-                {previousContact.byAddress && previousContact.byOrder && <span>◎ {t("inbox.signalPriorContactBoth")}</span>}
-                {previousContact.byOrder && !previousContact.byAddress && <span>◎ {t("inbox.signalPriorContactOrder")}</span>}
-                {previousContact.byAddress && !previousContact.byOrder && <span>◎ {t("inbox.signalPriorContactAddress")}</span>}
+                {hasSignals && previousContact.recentReply && <span>{t("inbox.signalRepliedElsewhere")}</span>}
+                {hasSignals && previousContact.byAddress && previousContact.byOrder && <span>{t("inbox.signalPriorContactBoth")}</span>}
+                {hasSignals && previousContact.byOrder && !previousContact.byAddress && <span>{t("inbox.signalPriorContactOrder")}</span>}
+                {hasSignals && previousContact.byAddress && !previousContact.byOrder && <span>{t("inbox.signalPriorContactAddress")}</span>}
+                {ambiguousOrderCount > 0 && (
+                  <span>{t("inbox.signalAmbiguousOrder", { count: ambiguousOrderCount })}</span>
+                )}
               </div>
             )}
           </span>
@@ -1976,6 +2021,15 @@ function ThreadDetailPanel({
     ? (analysisEmail.analysisResult.intents?.length ? analysisEmail.analysisResult.intents : [analysisEmail.analysisResult.intent])
     : [];
 
+  // Ambiguous order match: orchestrator left `order = null` because the match
+  // was too weak (multiple email candidates / name-only). Surface it in the
+  // same ⚠ tooltip as other thread-level signals.
+  const ambiguousOrderCount =
+    !order && (analysisEmail?.analysisResult?.orderCandidates?.length ?? 0) > 1
+      ? analysisEmail!.analysisResult!.orderCandidates!.length
+      : 0;
+  const hasAnySignal = hasSignals || ambiguousOrderCount > 0;
+
   const bucketPill =
     bucket === "to_process" ? <span className="ui-pill ui-pill--warning">{t("inbox.stateWaitingMerchant")}</span>
     : bucket === "waiting_merchant" ? <span className="ui-pill ui-pill--warning">{t("inbox.stateWaitingMerchant")}</span>
@@ -2017,13 +2071,13 @@ function ThreadDetailPanel({
               {t(`analysis.intent_${intent}`, { defaultValue: intent.replace(/_/g, " ") })}
             </span>
           ))}
-          {hasSignals && (
+          {hasAnySignal && (
             <span
               style={{ position: "relative", display: "inline-flex", alignItems: "center" }}
               onMouseEnter={() => setShowSignals(true)}
               onMouseLeave={() => setShowSignals(false)}
             >
-              <span style={{ color: "var(--ui-amber-700)", fontSize: "14px", cursor: "help" }}>⚠</span>
+              <SignalPill />
               {showSignals && (
                 <div style={{
                   position: "absolute", top: "calc(100% + 6px)", left: 0,
@@ -2034,10 +2088,13 @@ function ThreadDetailPanel({
                   display: "flex", flexDirection: "column", gap: "4px",
                   fontSize: "12px", color: "var(--ui-slate-700)", fontWeight: 400,
                 }}>
-                  {previousContact.recentReply && <span>↩ {t("inbox.signalRepliedElsewhere")}</span>}
-                  {previousContact.byAddress && previousContact.byOrder && <span>◎ {t("inbox.signalPriorContactBoth")}</span>}
-                  {previousContact.byOrder && !previousContact.byAddress && <span>◎ {t("inbox.signalPriorContactOrder")}</span>}
-                  {previousContact.byAddress && !previousContact.byOrder && <span>◎ {t("inbox.signalPriorContactAddress")}</span>}
+                  {hasSignals && previousContact.recentReply && <span>{t("inbox.signalRepliedElsewhere")}</span>}
+                  {hasSignals && previousContact.byAddress && previousContact.byOrder && <span>{t("inbox.signalPriorContactBoth")}</span>}
+                  {hasSignals && previousContact.byOrder && !previousContact.byAddress && <span>{t("inbox.signalPriorContactOrder")}</span>}
+                  {hasSignals && previousContact.byAddress && !previousContact.byOrder && <span>{t("inbox.signalPriorContactAddress")}</span>}
+                  {ambiguousOrderCount > 0 && (
+                    <span>{t("inbox.signalAmbiguousOrder", { count: ambiguousOrderCount })}</span>
+                  )}
                 </div>
               )}
             </span>
@@ -2188,6 +2245,7 @@ function ThreadDetailPanel({
               <AnalysisDisplay
                 analysis={analysisEmail.analysisResult}
                 lastAnalyzedAt={analysisEmail.lastAnalyzedAt}
+                threadOperationalState={threadState?.operationalState ?? null}
               />
             </div>
           )}

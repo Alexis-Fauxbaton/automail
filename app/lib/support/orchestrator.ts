@@ -44,10 +44,12 @@ export interface AnalyzeInput {
    */
   skipDraft?: boolean;
   /**
-   * When true, skip Shopify order search, tracking lookup, and context
-   * crawler (steps 2-4). Intent and identifiers are still extracted.
-   * Use this for resolved threads during resync — we want to restore
-   * intent badges without hitting external APIs unnecessarily.
+   * When true, skip the tracking lookup (17track) and the live context
+   * crawler. Shopify order search still runs so the matched order remains
+   * displayable. Intent and identifiers are always extracted.
+   * Use this for resolved threads during resync — tracking freshness has
+   * no value once the conversation is closed, but seeing the linked order
+   * stays useful.
    */
   skipTracking?: boolean;
   /**
@@ -151,7 +153,7 @@ export async function analyzeSupportEmail(
     candidates = input.reuseOrder.orderCandidates;
     // matchedBy stays null — we don't know the original match method,
     // but confidence scoring handles null matchedBy gracefully.
-  } else if (!input.skipTracking) {
+  } else {
     try {
       const result = await searchOrders(input.admin, identifiers);
       matchedBy = result.matchedBy;

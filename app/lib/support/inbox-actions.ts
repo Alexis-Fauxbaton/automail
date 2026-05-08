@@ -71,6 +71,21 @@ export async function handleResync(params: { shop: string }) {
     ),
   );
 
+  // Snapshot manual overrides (intent / order picks the user explicitly
+  // made) onto Thread BEFORE wiping IncomingEmail rows — they live inside
+  // `analysisResult` JSON which is about to be deleted. The next analysis
+  // pass on each thread will restore them.
+  try {
+    const { snapshotManualOverridesForShop } = await import("./preserved-overrides");
+    const n = await snapshotManualOverridesForShop(shop);
+    if (n > 0) {
+      console.log(`[resync] shop=${shop} snapshotted manualOverrides for ${n} thread(s)`);
+    }
+  } catch (err) {
+    console.error("[resync] manual-overrides snapshot failed:", err);
+    // Continue — losing overrides is bad UX but not a blocker for resync.
+  }
+
   await prisma.incomingEmail.deleteMany({ where: { shop } });
   await prisma.thread.updateMany({
     where: {
@@ -230,8 +245,9 @@ export async function handleMoveThread(params: {
   shop: string;
   canonicalThreadId: string;
   target: string;
+  admin: AdminGraphqlClient;
 }) {
-  const { shop, canonicalThreadId, target } = params;
+  const { shop, canonicalThreadId, target, admin } = params;
   const ALLOWED_STATES = new Set([
     "waiting_merchant",
     "waiting_customer",
@@ -250,6 +266,7 @@ export async function handleMoveThread(params: {
   }
   const previousOperationalState =
     target === "resolved" ? (thread.operationalState ?? null) : null;
+  const isReopen = thread.operationalState === "resolved" && target !== "resolved";
   await prisma.thread.update({
     where: { id: canonicalThreadId },
     data: {
@@ -267,6 +284,35 @@ export async function handleMoveThread(params: {
     fromState: thread.operationalState ?? null,
     toState: target,
   });
+
+  // On reopen, refresh tracking + crawl on the thread anchor immediately.
+  // Resolved threads skip those steps during auto-sync (orchestrator's
+  // skipTracking flag), so without this hook a freshly-reopened thread
+  // would show stale tracking until the next refresh-stale tick (~1h).
+  if (isReopen) {
+    try {
+      const anchor = await prisma.incomingEmail.findFirst({
+        where: { canonicalThreadId, shop, processingStatus: "analyzed" },
+        orderBy: { receivedAt: "desc" },
+        select: { id: true },
+      });
+      if (anchor) {
+        const { refreshThreadAnalysis } = await import("./refresh-thread-analysis");
+        // reSearchOrder: true — the previous analysis (taken while resolved)
+        // had `orderCandidates: []` because Shopify search was skipped. We
+        // must force a fresh search; otherwise reuseOrder would replay the
+        // empty result.
+        await refreshThreadAnalysis(anchor.id, admin, shop, {
+          reclassifyIntent: false,
+          reSearchOrder: true,
+          refreshTracking: true,
+        });
+      }
+    } catch (err) {
+      console.error("[moveThread] reopen refresh failed:", err);
+    }
+  }
+
   return { movedThread: { canonicalThreadId, target }, report: null, disconnected: false, reanalyzed: null, refined: null };
 }
 
@@ -379,15 +425,23 @@ export async function handleUpdateClassification(params: {
     const orderTouched =
       orderChangeType === "candidate" ||
       orderChangeType === "search" ||
-      orderChangeType === "detach";
+      orderChangeType === "detach" ||
+      orderChangeType === "reset";
+    const isReset = orderChangeType === "reset";
     if (orderTouched) {
       try {
         const { refreshThreadAnalysis } = await import("./refresh-thread-analysis");
+        // On reset: re-derive order from scratch (reSearchOrder=true) and
+        // re-classify intent if the user also asked to reset intents.
         analysis = await refreshThreadAnalysis(
           persisted.emailId,
           admin,
           shop,
-          { reclassifyIntent: false, reSearchOrder: false, refreshTracking: true },
+          {
+            reclassifyIntent: isReset && edit.resetIntents === true,
+            reSearchOrder: isReset,
+            refreshTracking: true,
+          },
         ) as typeof analysis;
       } catch (err) {
         console.error("[updateClassification] tracking refresh failed:", err);

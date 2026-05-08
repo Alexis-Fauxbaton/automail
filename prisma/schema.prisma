@@ -127,6 +127,11 @@ model Thread {
   historyStatus          String   @default("unknown") // complete | partial | unknown
   oldestSyncedMessageAt  DateTime?
   backfillAttemptedAt    DateTime?
+  // --- Manual override snapshot (survives `handleResync`) --------------
+  // JSON shape: { intents?: SupportIntent[]; intentsAt?: ISO; order?: OrderFacts|null; orderAt?: ISO }
+  // Captured by handleResync before wiping IncomingEmail rows; consumed
+  // by the next analysis pass for this thread, then cleared.
+  preservedManualOverridesJson String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
