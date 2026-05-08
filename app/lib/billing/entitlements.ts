@@ -204,13 +204,13 @@ async function buildTrialActiveEntitlements(input: {
   };
 }
 
-function buildTrialExpiredEntitlements(input: {
+async function buildTrialExpiredEntitlements(input: {
   shop: string;
   mailboxCount: number;
   trialExpiresAt: Date;
   now: Date;
-}): Entitlements {
-  const periodStart = getCurrentPeriodStart(input.now);
+}): Promise<Entitlements> {
+  const usage = await getUsage(input.shop, input.now);
   return {
     shop: input.shop,
     state: 'trial_expired',
@@ -221,7 +221,7 @@ function buildTrialExpiredEntitlements(input: {
     canViewAdvancedDashboard: false,
     trialDaysRemaining: 0,
     trialExpiresAt: input.trialExpiresAt,
-    quotaStatus: { used: 0, limit: 0, pct: 0, level: 'exceeded', periodStart },
+    quotaStatus: { used: usage.count, limit: 0, pct: 0, level: 'exceeded', periodStart: usage.periodStart },
     mailboxStatus: { used: input.mailboxCount, limit: 0 },
     dashboardMaxRangeDays: PLANS.starter.dashboardMaxRangeDays,
   };

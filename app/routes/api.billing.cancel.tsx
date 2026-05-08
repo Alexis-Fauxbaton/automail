@@ -2,7 +2,7 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { resolveActivePlan } from "../lib/billing/subscription";
 import { cancelSubscription } from "../lib/billing/shopify-billing";
-import { scheduleDowngrade } from "../lib/billing/scheduled-changes";
+import { scheduleDowngrade, cancelScheduledChange } from "../lib/billing/scheduled-changes";
 
 const VALID_DOWNGRADE_TARGETS = ['starter'] as const;
 
@@ -62,6 +62,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       scheduled: true,
       effectiveAt: change.effectiveAt.toISOString(),
     }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  if (mode === 'cancel_scheduled') {
+    await cancelScheduledChange(session.shop);
+    console.log(`[billing] ${session.shop} cancelled their scheduled change`);
+    return new Response(JSON.stringify({ cancelledScheduled: true }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });

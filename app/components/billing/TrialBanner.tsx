@@ -1,16 +1,30 @@
 import { useEntitlements } from "../../lib/billing/entitlements-context";
 import { useTranslation } from "react-i18next";
+import { useState, useEffect } from "react";
+
+const DISMISS_KEY = (shop: string) => `automail_trial_active_dismissed_${shop}`;
 
 /**
  * Banner shown during trial states.
- * - trial_active: blue info banner with countdown + CTA to choose plan
- * - trial_expired: red blocking banner with CTA
+ * - trial_active: blue info banner with countdown + CTA to choose plan, dismissible (1×, persists in localStorage)
+ * - trial_expired: red blocking banner with CTA, NOT dismissible
  */
 export function TrialBanner() {
   const ent = useEntitlements();
   const { t } = useTranslation();
+  const [dismissed, setDismissed] = useState(false);
 
-  if (ent.state === 'trial_active') {
+  const storageKey = DISMISS_KEY(ent.shop);
+
+  useEffect(() => {
+    setDismissed(localStorage.getItem(storageKey) === '1');
+  }, [storageKey]);
+
+  if (ent.state === 'trial_active' && !dismissed) {
+    const handleDismiss = () => {
+      localStorage.setItem(storageKey, '1');
+      setDismissed(true);
+    };
     return (
       <div role="status" style={{
         background: '#dbeafe',
@@ -23,9 +37,19 @@ export function TrialBanner() {
         fontSize: 14,
       }}>
         <span>{t('billing.trial.activeBanner', { count: ent.trialDaysRemaining ?? 0 })}</span>
-        <a href="/app/billing" style={{ color: 'inherit', fontWeight: 600 }}>
-          {t('billing.choosePlan')}
-        </a>
+        <span style={{ display: 'flex', gap: 12 }}>
+          <a href="/app/billing" style={{ color: 'inherit', fontWeight: 600 }}>
+            {t('billing.choosePlan')}
+          </a>
+          <button onClick={handleDismiss} style={{
+            background: 'transparent',
+            border: 'none',
+            color: 'inherit',
+            cursor: 'pointer',
+            fontSize: 16,
+            lineHeight: 1,
+          }} aria-label="Dismiss">×</button>
+        </span>
       </div>
     );
   }

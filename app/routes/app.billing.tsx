@@ -35,7 +35,7 @@ export default function BillingPage() {
   const { entitlements, pendingChange } = useLoaderData<typeof loader>();
   const { t } = useTranslation();
   const subscribeFetcher = useFetcher<{ confirmationUrl?: string; error?: string }>();
-  const cancelFetcher = useFetcher<{ cancelled?: boolean; scheduled?: boolean; error?: string }>();
+  const cancelFetcher = useFetcher<{ cancelled?: boolean; scheduled?: boolean; cancelledScheduled?: boolean; error?: string }>();
   const [searchParams] = useSearchParams();
   const justSubscribed = searchParams.get('subscribed') === '1';
 
@@ -45,6 +45,12 @@ export default function BillingPage() {
       window.top.location.href = url;
     }
   }, [subscribeFetcher.data]);
+
+  useEffect(() => {
+    if (cancelFetcher.data && 'cancelledScheduled' in cancelFetcher.data && cancelFetcher.data.cancelledScheduled) {
+      if (typeof window !== 'undefined') window.location.reload();
+    }
+  }, [cancelFetcher.data]);
 
   const subscribe = (planId: 'starter' | 'pro') => {
     const fd = new FormData();
@@ -72,12 +78,25 @@ export default function BillingPage() {
       )}
 
       {pendingChange && (
-        <div style={{ background: '#fef9c3', color: '#854d0e', padding: '10px 14px', borderRadius: 6, marginBottom: 20 }}>
-          {t('billing.page.scheduledChangeNotice', {
-            fromPlan: pendingChange.fromPlan,
-            toPlan: pendingChange.toPlan,
-            date: new Date(pendingChange.effectiveAt).toLocaleDateString(),
-          })}
+        <div style={{ background: '#fef9c3', color: '#854d0e', padding: '10px 14px', borderRadius: 6, marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+          <span>
+            {t('billing.page.scheduledChangeNotice', {
+              fromPlan: pendingChange.fromPlan,
+              toPlan: pendingChange.toPlan,
+              date: new Date(pendingChange.effectiveAt).toLocaleDateString(),
+            })}
+          </span>
+          <button
+            onClick={() => {
+              const fd = new FormData();
+              fd.set('mode', 'cancel_scheduled');
+              cancelFetcher.submit(fd, { method: 'POST', action: '/api/billing/cancel' });
+            }}
+            disabled={loading}
+            style={{ fontWeight: 600, background: 'transparent', border: '1px solid #854d0e', borderRadius: 4, padding: '4px 10px', color: 'inherit', cursor: 'pointer' }}
+          >
+            {t('billing.page.cancelScheduled')}
+          </button>
         </div>
       )}
 

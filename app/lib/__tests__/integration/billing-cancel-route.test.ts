@@ -134,3 +134,50 @@ describe('api.billing.cancel — scheduled downgrade', () => {
     expect(response.status).toBe(400);
   });
 });
+
+describe('api.billing.cancel — cancel scheduled change', () => {
+  it('marks the pending scheduled change as cancelled', async () => {
+    const adminGraphql = vi.fn().mockResolvedValue({
+      json: async () => ({
+        data: {
+          currentAppInstallation: {
+            activeSubscriptions: [
+              { id: 'gid://1', name: 'pro', status: 'ACTIVE', trialDays: 14, createdAt: '2026-05-01T00:00:00Z', currentPeriodEnd: '2026-06-01T00:00:00Z' },
+            ],
+          },
+        },
+      }),
+    });
+    const { authenticate } = await import('../../../shopify.server');
+    (authenticate.admin as any).mockResolvedValue({
+      session: { shop: TEST_SHOP },
+      admin: { graphql: adminGraphql },
+    });
+
+    // Pre-create a pending scheduled change.
+    const { scheduleDowngrade } = await import('../../billing/scheduled-changes');
+    await scheduleDowngrade({
+      shop: TEST_SHOP,
+      fromPlan: 'pro',
+      toPlan: 'starter',
+      effectiveAt: new Date('2026-06-01T00:00:00Z'),
+    });
+
+    const { action } = await import('../../../routes/api.billing.cancel');
+
+    const fd = new FormData();
+    fd.set('mode', 'cancel_scheduled');
+    const response = await action({
+      request: new Request('https://x/api/billing/cancel', { method: 'POST', body: fd }),
+    } as any);
+
+    expect(response.status).toBe(200);
+    const json = await response.json();
+    expect(json.cancelledScheduled).toBe(true);
+
+    const pending = await testDb.billingScheduledChange.findFirst({
+      where: { shop: TEST_SHOP, appliedAt: null, cancelledAt: null },
+    });
+    expect(pending).toBeNull();
+  });
+});
