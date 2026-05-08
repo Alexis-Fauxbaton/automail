@@ -364,6 +364,14 @@
     "draftsCount": "{{used}} / {{limit}} brouillons",
     "upgradeCta": "Passer à Pro",
     "choosePlan": "Choisir un plan",
+    "dashboard": {
+      "gated": {
+        "default": "Disponible sur Pro",
+        "heatmap": "La heatmap d'activité est disponible sur Pro",
+        "alerts": "Les alertes d'anomalies sont disponibles sur Pro",
+        "reopened": "Les threads rouverts sont disponibles sur Pro"
+      }
+    },
     "trial": {
       "activeBanner_one": "Il te reste {{count}} jour d'essai. Choisis un plan pour continuer au-delà.",
       "activeBanner_other": "Il te reste {{count}} jours d'essai. Choisis un plan pour continuer au-delà.",

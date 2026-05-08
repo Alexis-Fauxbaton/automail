@@ -364,6 +364,14 @@
     "draftsCount": "{{used}} / {{limit}} drafts",
     "upgradeCta": "Upgrade",
     "choosePlan": "Choose a plan",
+    "dashboard": {
+      "gated": {
+        "default": "Available on Pro",
+        "heatmap": "Activity heatmap is available on Pro",
+        "alerts": "Anomaly alerts are available on Pro",
+        "reopened": "Reopened threads insight is available on Pro"
+      }
+    },
     "trial": {
       "activeBanner_one": "You have {{count}} day left in your trial. Choose a plan to continue past it.",
       "activeBanner_other": "You have {{count}} days left in your trial. Choose a plan to continue past it.",
