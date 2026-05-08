@@ -1,0 +1,53 @@
+import type { ActionFunctionArgs } from "react-router";
+import { authenticate } from "../shopify.server";
+import { createSubscription } from "../lib/billing/shopify-billing";
+
+const VALID_PLAN_IDS = ['starter', 'pro'] as const;
+type ValidPlanId = (typeof VALID_PLAN_IDS)[number];
+
+function isValidPlanId(id: string): id is ValidPlanId {
+  return (VALID_PLAN_IDS as readonly string[]).includes(id);
+}
+
+/**
+ * POST /api/billing/subscribe
+ *
+ * Body: planId=starter|pro
+ *
+ * Returns: { confirmationUrl: string }
+ *
+ * The client should navigate to confirmationUrl (top-level redirect, not iframe)
+ * to let the merchant complete the Shopify confirmation flow. Shopify will
+ * redirect back to returnUrl after.
+ */
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { session, admin } = await authenticate.admin(request);
+  const formData = await request.formData();
+  const planId = String(formData.get("planId") ?? "");
+
+  if (!planId || !isValidPlanId(planId)) {
+    return new Response(JSON.stringify({ error: "invalid_plan_id" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  const appUrl = process.env.SHOPIFY_APP_URL || process.env.HOST || "";
+  const returnUrl = `${appUrl}/app/billing?subscribed=1`;
+  // eslint-disable-next-line no-undef
+  const isTest = process.env.NODE_ENV !== "production";
+
+  const result = await createSubscription({
+    admin,
+    planId,
+    returnUrl,
+    test: isTest,
+  });
+
+  console.log(`[billing] ${session.shop} subscribed to ${planId} (test=${isTest})`);
+
+  return new Response(JSON.stringify({ confirmationUrl: result.confirmationUrl }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+};
