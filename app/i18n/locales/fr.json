@@ -373,19 +373,19 @@
       }
     },
     "trial": {
-      "activeBanner_one": "Il te reste {{count}} jour d'essai. Choisis un plan pour continuer au-delà.",
-      "activeBanner_other": "Il te reste {{count}} jours d'essai. Choisis un plan pour continuer au-delà.",
-      "expiredBanner": "Ton essai est terminé. Choisis un plan pour continuer à utiliser Automail."
+      "activeBanner_one": "Il vous reste {{count}} jour d'essai. Choisissez un plan pour continuer au-delà.",
+      "activeBanner_other": "Il vous reste {{count}} jours d'essai. Choisissez un plan pour continuer au-delà.",
+      "expiredBanner": "Votre essai est terminé. Choisissez un plan pour continuer à utiliser Automail."
     },
     "banner": {
-      "warning": "Tu as utilisé {{used}} de tes {{limit}} brouillons ce mois-ci.",
+      "warning": "Vous avez utilisé {{used}} de vos {{limit}} brouillons ce mois-ci.",
       "critical": "Presque à court : {{used}} brouillons utilisés sur {{limit}} ce mois-ci.",
       "exceeded": "Quota atteint ({{used}} / {{limit}}) — sync suspendue. Upgrade pour continuer."
     },
     "modal": {
       "exceededTitle": "Quota atteint pour ce mois ({{used}} / {{limit}} brouillons)",
-      "exceededBody": "Upgrade vers Pro pour continuer immédiatement, ou attends le 1er du mois prochain pour le reset.",
-      "lastUsedTitle": "Tu viens d'utiliser ton dernier brouillon du mois",
+      "exceededBody": "Passez à Pro pour continuer immédiatement, ou attendez le 1er du mois prochain pour le reset.",
+      "lastUsedTitle": "Vous venez d'utiliser votre dernier brouillon du mois",
       "lastUsedBody": "{{used}} brouillons utilisés sur {{limit}}. Génération en pause jusqu'au prochain mois ou upgrade.",
       "later": "Plus tard",
       "viewPlans": "Voir les plans"
