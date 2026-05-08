@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router";
 
 /**
  * Controlled modal shown by call sites when a generation attempt is blocked.
@@ -31,9 +32,9 @@ export function QuotaExceededModal(props: {
           <button onClick={props.onClose} style={btnSecondary}>
             {t('billing.modal.later')}
           </button>
-          <a href="/app/billing" style={btnPrimary}>
+          <Link to="/app/billing" style={btnPrimary}>
             {t('billing.modal.viewPlans')}
-          </a>
+          </Link>
         </div>
       </div>
     </div>

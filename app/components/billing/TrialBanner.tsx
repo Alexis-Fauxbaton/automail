@@ -1,6 +1,7 @@
 import { useEntitlements } from "../../lib/billing/entitlements-context";
 import { useTranslation } from "react-i18next";
 import { useState, useEffect } from "react";
+import { Link } from "react-router";
 
 const DISMISS_KEY = (shop: string) => `automail_trial_active_dismissed_${shop}`;
 
@@ -38,9 +39,9 @@ export function TrialBanner() {
       }}>
         <span>{t('billing.trial.activeBanner', { count: ent.trialDaysRemaining ?? 0 })}</span>
         <span style={{ display: 'flex', gap: 12 }}>
-          <a href="/app/billing" style={{ color: 'inherit', fontWeight: 600 }}>
+          <Link to="/app/billing" style={{ color: 'inherit', fontWeight: 600 }}>
             {t('billing.choosePlan')}
-          </a>
+          </Link>
           <button onClick={handleDismiss} style={{
             background: 'transparent',
             border: 'none',
@@ -67,9 +68,9 @@ export function TrialBanner() {
         fontSize: 14,
       }}>
         <span>{t('billing.trial.expiredBanner')}</span>
-        <a href="/app/billing" style={{ color: 'inherit', fontWeight: 600 }}>
+        <Link to="/app/billing" style={{ color: 'inherit', fontWeight: 600 }}>
           {t('billing.choosePlan')}
-        </a>
+        </Link>
       </div>
     );
   }

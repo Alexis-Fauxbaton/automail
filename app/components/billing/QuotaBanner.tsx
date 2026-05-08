@@ -1,6 +1,7 @@
 import { useEntitlements } from "../../lib/billing/entitlements-context";
 import { useTranslation } from "react-i18next";
 import { useState, useEffect } from "react";
+import { Link } from "react-router";
 
 const DISMISS_KEY = (shop: string, periodStart: string, level: string) =>
   `automail_quota_dismiss_${shop}_${periodStart}_${level}`;
@@ -59,9 +60,9 @@ export function QuotaBanner() {
     }}>
       <span>{t(`billing.banner.${level}`, { used: ent.quotaStatus.used, limit: ent.quotaStatus.limit })}</span>
       <span style={{ display: 'flex', gap: 12 }}>
-        <a href="/app/billing" style={{ color: 'inherit', fontWeight: 600 }}>
+        <Link to="/app/billing" style={{ color: 'inherit', fontWeight: 600 }}>
           {t('billing.upgradeCta')}
-        </a>
+        </Link>
         {level !== 'exceeded' && (
           <button onClick={handleDismiss} style={{
             background: 'transparent',

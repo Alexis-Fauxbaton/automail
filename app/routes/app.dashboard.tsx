@@ -1,6 +1,6 @@
 import { useEffect, useState, Suspense, lazy } from "react";
 import type { LoaderFunctionArgs } from "react-router";
-import { useLoaderData, useSearchParams } from "react-router";
+import { useLoaderData, useSearchParams, Link } from "react-router";
 import { useTranslation } from "react-i18next";
 import { authenticate } from "../shopify.server";
 import { resolveEntitlements } from "../lib/billing/entitlements";
@@ -390,9 +390,9 @@ function PlanGatePlaceholder({ feature }: { feature: string }) {
       }}
     >
       <p>{t(`billing.dashboard.gated.${feature}`, { defaultValue: fallback })}</p>
-      <a href="/app/billing" style={{ fontWeight: 600 }}>
+      <Link to="/app/billing" style={{ fontWeight: 600 }}>
         {t("billing.upgradeCta", { defaultValue: "Upgrade" })}
-      </a>
+      </Link>
     </div>
   );
 }
