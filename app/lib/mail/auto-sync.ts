@@ -20,6 +20,7 @@
 import prisma from "../../db.server";
 import { processNewEmails } from "../gmail/pipeline";
 import { unauthenticated } from "../../shopify.server";
+import { resolveEntitlements } from "../billing/entitlements";
 import { runManualBackfill, runOnboardingBackfill } from "./backfill";
 import { recomputeAllOpenThreads, recomputeAllThreadsForShop } from "../support/thread-state";
 import { ANALYSIS_FRESHNESS_MS, refreshStaleAnalysesForShop } from "../support/refresh-stale-analyses";
@@ -96,7 +97,7 @@ async function tick(): Promise<void> {
  * `autoSyncIntervalMinutes`, enqueue one "sync" job (de-dup is handled
  * inside `enqueueJob`, so a pending/running job blocks repeats).
  */
-async function enqueueDuePeriodicSyncs(): Promise<void> {
+export async function enqueueDuePeriodicSyncs(): Promise<void> {
   try {
   const now = new Date();
   // Coarse pre-filter: only fetch connections whose lastSyncAt is null OR
@@ -145,6 +146,18 @@ async function enqueueDuePeriodicSyncs(): Promise<void> {
     const due =
       !c.lastSyncAt || now.getTime() - c.lastSyncAt.getTime() >= intervalMs;
     if (!due) continue;
+    // Entitlement gate: skip shops whose billing state suspends sync.
+    try {
+      const { admin } = await unauthenticated.admin(c.shop);
+      const ent = await resolveEntitlements({ shop: c.shop, admin });
+      if (ent.isSyncSuspended) {
+        console.log(`[auto-sync] skipping ${c.shop} — sync suspended (state=${ent.state})`);
+        continue;
+      }
+    } catch (err) {
+      console.error(`[auto-sync] entitlement lookup failed for ${c.shop}:`, err);
+      // Fail-open: if entitlements are unreachable, don't block sync.
+    }
     // First-run onboarding is still done inline inside `runSyncForShop`
     // when it sees the connection flag — no separate job type needed.
     await enqueueJob(c.shop, "sync").catch((err) =>
