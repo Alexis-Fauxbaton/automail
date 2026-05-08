@@ -105,6 +105,27 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { provider, shop } = verified;
   console.log(`[mail-auth] ${provider} callback for shop=${shop}`);
 
+  // Enforce mailbox limit before any token exchange or DB write.
+  try {
+    const { unauthenticated } = await import("../shopify.server");
+    const { admin } = await unauthenticated.admin(shop);
+    const { resolveEntitlements } = await import("../lib/billing/entitlements");
+    const ent = await resolveEntitlements({ shop, admin });
+    if (!ent.canConnectMailbox) {
+      return errorPage(
+        "Mailbox limit reached",
+        `Plan limit reached: ${ent.mailboxStatus.used} / ${ent.mailboxStatus.limit} mailboxes connected. Upgrade to Pro to connect more.`,
+      );
+    }
+  } catch (entErr) {
+    const correlationId = Date.now().toString(36);
+    console.error(`[mail-auth] entitlements check failed [ref=${correlationId}]:`, entErr);
+    return errorPage(
+      "Entitlements check failed",
+      `Unable to verify plan limits. Reference: ${correlationId}`,
+    );
+  }
+
   try {
     if (provider === "zoho") {
       const { exchangeZohoCode, saveZohoConnection } = await import(
