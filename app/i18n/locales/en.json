@@ -334,6 +334,26 @@
     "cancel": "Cancel",
     "save": "Save"
   },
+  "billing": {
+    "page": {
+      "title": "Billing & plan",
+      "subscribedSuccess": "Subscription confirmed — your plan is now active.",
+      "scheduledChangeNotice": "Scheduled change: {{fromPlan}} → {{toPlan}} on {{date}}.",
+      "currentState": "Current status: {{state}} (plan: {{plan}})",
+      "cancelSubscription": "Cancel subscription"
+    },
+    "plan": {
+      "draftsPerMonth": "{{count}} drafts / month",
+      "maxMailboxes": "{{count}} mailbox(es)",
+      "advancedDashboard": "Advanced dashboard (90 days)",
+      "basicDashboard": "Basic dashboard (7 days)",
+      "dashboardRange": "Up to {{count}}-day history",
+      "currentPlan": "Current plan",
+      "subscribeBtn": "Subscribe",
+      "downgradeBtn": "Downgrade to this plan",
+      "processing": "Processing…"
+    }
+  },
   "classification": {
     "editTitle": "Edit details",
     "intents": "Intents",

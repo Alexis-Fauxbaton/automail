@@ -334,6 +334,26 @@
     "cancel": "Annuler",
     "save": "Enregistrer"
   },
+  "billing": {
+    "page": {
+      "title": "Facturation & abonnement",
+      "subscribedSuccess": "Abonnement confirmé — votre plan est maintenant actif.",
+      "scheduledChangeNotice": "Changement planifié : {{fromPlan}} → {{toPlan}} le {{date}}.",
+      "currentState": "Statut actuel : {{state}} (plan : {{plan}})",
+      "cancelSubscription": "Annuler l'abonnement"
+    },
+    "plan": {
+      "draftsPerMonth": "{{count}} brouillons / mois",
+      "maxMailboxes": "{{count}} boîte(s) mail",
+      "advancedDashboard": "Dashboard avancé (90 jours)",
+      "basicDashboard": "Dashboard de base (7 jours)",
+      "dashboardRange": "Historique jusqu'à {{count}} jours",
+      "currentPlan": "Plan actuel",
+      "subscribeBtn": "S'abonner",
+      "downgradeBtn": "Passer à ce plan",
+      "processing": "Traitement…"
+    }
+  },
   "classification": {
     "editTitle": "Modifier les informations",
     "intents": "Intentions",
