@@ -18,6 +18,7 @@ import { decodeHtmlEntities } from "../lib/gmail/client";
 import { sanitizeEmailHtml, buildCidMap } from "../lib/mail/sanitize-html";
 import { buildReplySubject } from "../lib/support/draft-subject";
 import { RichDraftEditor } from "../components/RichDraftEditor";
+import { QuotaExceededModal } from "../components/billing/QuotaExceededModal";
 import prisma from "../db.server";
 import { computePriorContact } from "../lib/support/prior-contact";
 import {
@@ -1684,6 +1685,33 @@ function DraftBlock({ email, threadSenderEmail }: {
   const refining = refineFetcher.state !== "idle";
   const redrafting = redraftFetcher.state !== "idle";
 
+  const [quotaModal, setQuotaModal] = useState<{
+    open: boolean;
+    used: number;
+    limit: number;
+    variant: 'exceeded' | 'just_used_last';
+  }>({ open: false, used: 0, limit: 0, variant: 'exceeded' });
+
+  useEffect(() => {
+    const data = refineFetcher.data as { quotaExceeded?: boolean; quotaStatus?: { used: number; limit: number } } | null | undefined;
+    if (!data) return;
+    if (data.quotaExceeded) {
+      setQuotaModal({ open: true, used: data.quotaStatus?.used ?? 0, limit: data.quotaStatus?.limit ?? 0, variant: 'exceeded' });
+    } else if (data.quotaStatus && data.quotaStatus.used === data.quotaStatus.limit && data.quotaStatus.limit > 0) {
+      setQuotaModal({ open: true, used: data.quotaStatus.used, limit: data.quotaStatus.limit, variant: 'just_used_last' });
+    }
+  }, [refineFetcher.data]);
+
+  useEffect(() => {
+    const data = redraftFetcher.data as { quotaExceeded?: boolean; quotaStatus?: { used: number; limit: number } } | null | undefined;
+    if (!data) return;
+    if (data.quotaExceeded) {
+      setQuotaModal({ open: true, used: data.quotaStatus?.used ?? 0, limit: data.quotaStatus?.limit ?? 0, variant: 'exceeded' });
+    } else if (data.quotaStatus && data.quotaStatus.used === data.quotaStatus.limit && data.quotaStatus.limit > 0) {
+      setQuotaModal({ open: true, used: data.quotaStatus.used, limit: data.quotaStatus.limit, variant: 'just_used_last' });
+    }
+  }, [redraftFetcher.data]);
+
   async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1851,6 +1879,14 @@ function DraftBlock({ email, threadSenderEmail }: {
         </div>
 
       </s-stack>
+
+      <QuotaExceededModal
+        open={quotaModal.open}
+        onClose={() => setQuotaModal({ ...quotaModal, open: false })}
+        variant={quotaModal.variant}
+        used={quotaModal.used}
+        limit={quotaModal.limit}
+      />
     </s-box>
   );
 }
