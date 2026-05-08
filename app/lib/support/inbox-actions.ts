@@ -14,6 +14,8 @@ import { recordStateTransition } from "./thread-state-history";
 import { isAnalysisStale, ANALYSIS_FRESHNESS_MS, refreshStaleAnalysesForShop } from "./refresh-stale-analyses";
 import type { AdminGraphqlClient } from "./shopify/order-search";
 import type { ClassificationEdit } from "./manual-classification";
+import { withDraftQuota } from "../billing/draft-guard";
+import { resolveEntitlements } from "../billing/entitlements";
 
 async function maybeRefreshAnalysis(
   emailId: string,
@@ -167,9 +169,48 @@ export async function handleRedraft(params: {
   emailId: string;
 }) {
   const { shop, admin, emailId } = params;
+
+  const ent = await resolveEntitlements({ shop, admin });
+  if (!ent.canGenerateDraft) {
+    return {
+      reanalyzed: null,
+      report: null,
+      disconnected: false,
+      refined: null,
+      quotaExceeded: true,
+      quotaStatus: { used: ent.quotaStatus.used, limit: ent.quotaStatus.limit },
+    };
+  }
+
   await maybeRefreshAnalysis(emailId, admin, shop);
-  await redraftEmail(emailId, shop);
-  return { reanalyzed: null, report: null, disconnected: false, refined: null };
+
+  const guarded = await withDraftQuota({
+    shop,
+    limit: ent.quotaStatus.limit,
+    generator: () => redraftEmail(emailId, shop),
+  });
+
+  if (!guarded.ok) {
+    if (guarded.reason === 'quota_exceeded') {
+      return {
+        reanalyzed: null,
+        report: null,
+        disconnected: false,
+        refined: null,
+        quotaExceeded: true,
+        quotaStatus: { used: ent.quotaStatus.used + 1, limit: ent.quotaStatus.limit },
+      };
+    }
+    throw guarded.error ?? new Error('Draft generation failed');
+  }
+
+  return {
+    reanalyzed: null,
+    report: null,
+    disconnected: false,
+    refined: null,
+    quotaStatus: { used: guarded.newCount, limit: ent.quotaStatus.limit },
+  };
 }
 
 export async function handleRefreshEmailHtml(params: {
@@ -220,25 +261,67 @@ export async function handleRefine(params: {
   if (!record || record.shop !== shop || !currentDraft || !instructions) {
     return { report: null, disconnected: false, reanalyzed: null, refined: null };
   }
+
+  const ent = await resolveEntitlements({ shop, admin });
+  if (!ent.canGenerateDraft) {
+    return {
+      report: null,
+      disconnected: false,
+      reanalyzed: null,
+      refined: null,
+      quotaExceeded: true,
+      quotaStatus: { used: ent.quotaStatus.used, limit: ent.quotaStatus.limit },
+    };
+  }
+
   await maybeRefreshAnalysis(emailId, admin, shop);
-  const newDraft = await refineDraft(currentDraft, instructions, {
-    subject: record.subject,
-    body: record.bodyText,
-  }, {
+
+  const guarded = await withDraftQuota({
     shop,
-    emailId,
-    threadId: record.threadId,
+    limit: ent.quotaStatus.limit,
+    generator: async () => {
+      const newDraft = await refineDraft(currentDraft, instructions, {
+        subject: record.subject,
+        body: record.bodyText,
+      }, {
+        shop,
+        emailId,
+        threadId: record.threadId,
+      });
+      const { upsertReplyDraftBody } = await import("./reply-draft");
+      await upsertReplyDraftBody(emailId, shop, newDraft);
+      const updatedRD = await prisma.replyDraft.findUnique({
+        where: { emailId },
+        select: { bodyHistory: true },
+      });
+      const history = Array.isArray(updatedRD?.bodyHistory)
+        ? (updatedRD!.bodyHistory as string[])
+        : [];
+      return { newDraft, history };
+    },
   });
-  const { upsertReplyDraftBody } = await import("./reply-draft");
-  await upsertReplyDraftBody(emailId, shop, newDraft);
-  const updatedRD = await prisma.replyDraft.findUnique({
-    where: { emailId },
-    select: { bodyHistory: true },
-  });
-  const history = Array.isArray(updatedRD?.bodyHistory)
-    ? (updatedRD!.bodyHistory as string[])
-    : [];
-  return { refined: { emailId, newDraft, draftHistory: history }, report: null, disconnected: false, reanalyzed: null };
+
+  if (!guarded.ok) {
+    if (guarded.reason === 'quota_exceeded') {
+      return {
+        report: null,
+        disconnected: false,
+        reanalyzed: null,
+        refined: null,
+        quotaExceeded: true,
+        quotaStatus: { used: ent.quotaStatus.used + 1, limit: ent.quotaStatus.limit },
+      };
+    }
+    throw guarded.error ?? new Error('Draft refine failed');
+  }
+
+  return {
+    refined: { emailId, newDraft: guarded.value.newDraft, draftHistory: guarded.value.history },
+    report: null,
+    disconnected: false,
+    reanalyzed: null,
+    quotaStatus: { used: guarded.newCount, limit: ent.quotaStatus.limit },
+  };
 }
 
 export async function handleMoveThread(params: {
