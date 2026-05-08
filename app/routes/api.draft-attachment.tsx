@@ -6,6 +6,12 @@ import { storage } from "../lib/attachments/storage";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 
+/**
+ * CSRF model: see api.reply-draft.tsx for the full rationale. In short,
+ * Shopify session-token validation inside `authenticate.admin(request)`
+ * is the anti-CSRF mechanism — the Authorization Bearer JWT is per-app +
+ * per-merchant + ≤ 1 min lifetime and cannot be replayed cross-origin.
+ */
 export async function action({ request }: ActionFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;

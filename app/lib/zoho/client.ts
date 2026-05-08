@@ -1,13 +1,12 @@
 import prisma from "../../db.server";
-import { getZohoAccessToken } from "./auth";
+import { getZohoAccessToken, getZohoApiDomain } from "./auth";
 import type { MailAttachment, MailMessage, MailClient } from "../mail/types";
 
 // Reuse cleanHtml and decodeHtmlEntities from gmail client
 import { cleanHtml, decodeHtmlEntities } from "../gmail/client";
 
-function getApiDomain(): string {
-  return process.env.ZOHO_API_DOMAIN || "mail.zoho.com";
-}
+// Re-exported under the canonical name for clarity within this module.
+const getApiDomain = getZohoApiDomain;
 
 async function zohoFetch(
   accessToken: string,

@@ -193,7 +193,7 @@ describe("applyClassificationEditToAnalysis", () => {
     expect(out.manualOverrides?.order?.editedAt).toBeDefined();
   });
 
-  test("resetting order clears value AND override", () => {
+  test("resetting order clears value AND override marker", () => {
     const a = baseAnalysis({
       manualOverrides: { order: { editedAt: "2026-05-02T00:00:00.000Z" } },
     });

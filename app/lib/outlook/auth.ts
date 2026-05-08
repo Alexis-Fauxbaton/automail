@@ -51,7 +51,8 @@ export async function exchangeCodeForTokens(code: string) {
 
   if (!tokenRes.ok) {
     const err = await tokenRes.json().catch(() => ({})) as { error?: string; error_description?: string };
-    console.error("[outlook/auth] token exchange error:", err.error, err.error_description);
+    // Log only the error code — error_description may echo back secret/PII fragments.
+    console.error(`[outlook/auth] token exchange error (${tokenRes.status}): ${err.error ?? "unknown"}`);
     throw new Error(`Microsoft token exchange failed (${tokenRes.status})`);
   }
 
@@ -99,7 +100,7 @@ async function refreshAccessToken(refreshToken: string): Promise<{
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({})) as { error?: string; error_description?: string };
-    console.error("[outlook/auth] token refresh error:", err.error, err.error_description);
+    console.error(`[outlook/auth] token refresh error (${res.status}): ${err.error ?? "unknown"}`);
     throw new Error(`Microsoft token refresh failed (${res.status})`);
   }
 
@@ -163,7 +164,8 @@ export async function getAuthenticatedClient(shop: string): Promise<OutlookToken
   const conn = await prisma.mailConnection.findUnique({ where: { shop } });
   if (!conn) throw new Error("No Outlook connection for this shop");
 
-  if (conn.tokenExpiry.getTime() > Date.now() + 60_000) {
+  // 120 s buffer protects against clock skew and request-in-flight expiry.
+  if (conn.tokenExpiry.getTime() > Date.now() + 120_000) {
     return { accessToken: decrypt(conn.accessToken) };
   }
 

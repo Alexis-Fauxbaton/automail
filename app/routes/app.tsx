@@ -8,11 +8,22 @@ import { useEffect } from "react";
 import { authenticate } from "../shopify.server";
 import { getUiLanguage } from "../lib/user-preferences";
 
+// Strict shape check: we only accept canonical Shopify shop domains for
+// the synthetic-host fallback below. Anything else (typos, attempted host
+// injection, custom domains) bails out and triggers Shopify's normal
+// install/auth redirect.
+const SHOP_DOMAIN_RE = /^[a-z0-9][a-z0-9-]{0,59}\.myshopify\.com$/i;
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
   let effectiveRequest = request;
   const shop = url.searchParams.get("shop");
-  if (shop && !url.searchParams.get("host")) {
+  // Shopify normally provides BOTH `shop` and `host` in the iframe URL.
+  // Some entry paths (bookmarks, deep links, manual navigation) may carry
+  // only `shop`. We synthesize a plausible `host` so authenticate.admin
+  // doesn't bounce the user to the install flow needlessly. We refuse the
+  // fallback for anything that doesn't look like a real myshopify.com host.
+  if (shop && SHOP_DOMAIN_RE.test(shop) && !url.searchParams.get("host")) {
     const shopId = shop.split(".")[0];
     const host = Buffer.from(`admin.shopify.com/store/${shopId}`).toString("base64");
     url.searchParams.set("host", host);
@@ -48,11 +59,12 @@ export default function App() {
 
   return (
     <AppProvider embedded={!isE2E} apiKey={apiKey}>
-      <s-app-nav>
+      <s-app-nav name="Automail">
         <s-link href="/app">{t("nav.home")}</s-link>
         <s-link href="/app/inbox">{t("nav.emailInbox")}</s-link>
         <s-link href="/app/dashboard">{t("nav.dashboard")}</s-link>
         <s-link href="/app/settings">{t("nav.settings")}</s-link>
+        <s-link href="/app/help">{t("nav.help")}</s-link>
       </s-app-nav>
       <Outlet />
     </AppProvider>

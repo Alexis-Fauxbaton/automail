@@ -1,6 +1,7 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { redirect } from "react-router";
 import { verifyOAuthState } from "../lib/mail/oauth-state";
+import { checkRateLimit, getClientIp } from "../lib/rate-limit";
 
 /**
  * Public OAuth callback for Gmail / Zoho.
@@ -39,6 +40,23 @@ h1{color:#b91c1c}pre{background:#f1f5f9;padding:12px;border-radius:6px;white-spa
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
+  // Public endpoint — Google/Zoho/Microsoft redirect users here. Cap per-IP
+  // request volume so a hostile actor can't spray invalid `state` values to
+  // grow our log surface or trip downstream provider quotas.
+  const ip = getClientIp(request);
+  const ipLimit = await checkRateLimit({
+    key: ip,
+    kind: "mail-auth",
+    limit: 30,
+    windowMs: 60_000,
+  });
+  if (!ipLimit.ok) {
+    return new Response("Too many requests", {
+      status: 429,
+      headers: { "Retry-After": String(Math.ceil(ipLimit.resetMs / 1000)) },
+    });
+  }
+
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const rawState = url.searchParams.get("state") ?? "";

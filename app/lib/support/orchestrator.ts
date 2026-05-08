@@ -5,7 +5,7 @@ import { detectEndOfLoop } from "./end-of-loop";
 import { llmParseEmail } from "./llm-parser";
 import { generateLLMDraft } from "./llm-draft";
 import { parseMessage } from "./message-parser";
-import { getSettings, type SupportSettings } from "./settings";
+import { DEFAULT_SETTINGS, getSettings, type SupportSettings } from "./settings";
 import type { TrackedCallContext } from "../llm/client";
 import {
   type AdminGraphqlClient,
@@ -44,10 +44,12 @@ export interface AnalyzeInput {
    */
   skipDraft?: boolean;
   /**
-   * When true, skip Shopify order search, tracking lookup, and context
-   * crawler (steps 2-4). Intent and identifiers are still extracted.
-   * Use this for resolved threads during resync — we want to restore
-   * intent badges without hitting external APIs unnecessarily.
+   * When true, skip the tracking lookup (17track) and the live context
+   * crawler. Shopify order search still runs so the matched order remains
+   * displayable. Intent and identifiers are always extracted.
+   * Use this for resolved threads during resync — tracking freshness has
+   * no value once the conversation is closed, but seeing the linked order
+   * stays useful.
    */
   skipTracking?: boolean;
   /**
@@ -100,17 +102,8 @@ export async function analyzeSupportEmail(
       console.error("[orchestrator] Could not load settings:", err);
     }
   }
-  const resolvedSettings: SupportSettings = settings ?? {
-    shop: input.shop ?? "",
-    signatureName: "Customer Support",
-    brandName: "",
-    tone: "friendly",
-    language: "auto",
-    closingPhrase: "",
-    shareTrackingNumber: true,
-    customerGreetingStyle: "auto",
-    refundPolicy: "",
-  };
+  const resolvedSettings: SupportSettings =
+    settings ?? { shop: input.shop ?? "", ...DEFAULT_SETTINGS };
 
   const tctx: Partial<TrackedCallContext> = { shop: input.shop, ...input.trackedCallContext };
 
@@ -160,7 +153,7 @@ export async function analyzeSupportEmail(
     candidates = input.reuseOrder.orderCandidates;
     // matchedBy stays null — we don't know the original match method,
     // but confidence scoring handles null matchedBy gracefully.
-  } else if (!input.skipTracking) {
+  } else {
     try {
       const result = await searchOrders(input.admin, identifiers);
       matchedBy = result.matchedBy;
@@ -174,7 +167,24 @@ export async function analyzeSupportEmail(
     }
   }
 
-  const order = input.reuseOrder ? input.reuseOrder.order : (candidates[0] ?? null);
+  // Auto-select the matched order only when we're confident it's the right
+  // one. When the match is weak (multiple email candidates, or any name-only
+  // match — names can collide between distinct customers), leave `order =
+  // null` and force the agent to pick manually from `orderCandidates`.
+  let order: ReturnType<typeof normalizeOrder> | null;
+  if (input.reuseOrder) {
+    order = input.reuseOrder.order;
+  } else if (candidates.length === 0) {
+    order = null;
+  } else if (matchedBy === "orderNumber" || matchedBy === "trackingNumber") {
+    order = candidates[0];
+  } else if (matchedBy === "email" && candidates.length === 1) {
+    order = candidates[0];
+  } else {
+    // matchedBy === "customerName" (always manual) or
+    // matchedBy === "email" with >1 candidate (ambiguous).
+    order = null;
+  }
 
   // 3. Tracking facts — one entry per fulfillment, 17track first
   let trackings: FulfillmentTrackingFacts[] = [];

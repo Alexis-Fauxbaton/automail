@@ -235,4 +235,17 @@ describe("classifyIntent", () => {
     expect(classifyAll("Question produit", "Quelle taille dois-je choisir ?")).toEqual(["pre_purchase_question"]);
     expect(classifyAll("Refund", "I want a refund and I have a product question too.")).toEqual(["refund_request"]);
   });
+
+  // --- Pass 2 edge cases ---
+  describe("whitespace and emoji", () => {
+    it("returns unknown for whitespace-only inputs", () => {
+      expect(classify("   ", "   ")).toBe("unknown");
+      expect(classify("\t\n", "")).toBe("unknown");
+      expect(classify("", "\n\n")).toBe("unknown");
+    });
+
+    it("classifies correctly when subject contains an emoji", () => {
+      expect(classify("📦 where is my order", "")).toBe("where_is_my_order");
+    });
+  });
 });

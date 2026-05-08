@@ -41,10 +41,26 @@ export type MailProvider = "gmail" | "zoho" | "outlook";
 
 /**
  * Interface that each mail provider client must implement.
+ *
+ * ## Error contract (all methods)
+ * - **Network/auth errors throw.** Callers should wrap calls in try/catch and
+ *   treat any thrown error as transient unless it's a `401`-shaped failure
+ *   (in which case the connection should be marked as needing re-auth).
+ * - **Empty results do NOT throw.** Methods that return arrays return `[]`
+ *   when nothing matches; methods returning a single message throw a clear
+ *   `not found` error when the ID does not exist.
+ * - **Cursor staleness** (`listNewMessages`): when the cursor is no longer
+ *   valid (Gmail history expired, Zoho cursor irrelevant), the method
+ *   returns `{ messageIds: [], latestCursor: null }`. Callers must detect
+ *   this and fall back to a date-based `listRecentMessages` query.
+ * - **Provider absence of feature**: `getSyncCursor()` returns `null` when
+ *   the provider has no incremental cursor (Zoho today). Callers MUST handle
+ *   `null` and use `listRecentMessages` with `afterDate` instead.
  */
 export interface MailClient {
   /**
    * List message IDs received after a given date.
+   * @returns array of message IDs (empty if none, never null).
    */
   listRecentMessages(opts: {
     afterDate?: Date;
@@ -53,12 +69,15 @@ export interface MailClient {
 
   /**
    * Fetch a single message by ID with full body.
+   * @throws when the message ID does not exist or the provider rejects the call.
    */
   getMessage(messageId: string): Promise<MailMessage>;
 
   /**
    * Incremental sync: return new message IDs since the given cursor.
-   * Returns null for latestCursor if the provider doesn't support cursors.
+   * @returns `latestCursor === null` signals the cursor is stale or the
+   *          provider does not support cursors — caller should fall back
+   *          to a date-based fetch.
    */
   listNewMessages(cursor: string): Promise<{
     messageIds: string[];
@@ -67,13 +86,14 @@ export interface MailClient {
 
   /**
    * Get the current sync cursor (e.g. Gmail historyId).
-   * Returns null if the provider doesn't support cursors.
+   * @returns `null` when the provider doesn't support cursors (Zoho today).
    */
   getSyncCursor(): Promise<string | null>;
 
   /**
    * Fetch ALL messages in a thread — inbox AND sent — ordered chronologically.
    * Used to build the full conversation context including outgoing replies.
+   * @returns empty array if the threadId is unknown.
    */
   getThreadMessages(threadId: string): Promise<MailMessage[]>;
 }

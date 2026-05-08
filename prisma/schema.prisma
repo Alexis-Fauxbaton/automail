@@ -127,6 +127,11 @@ model Thread {
   historyStatus          String   @default("unknown") // complete | partial | unknown
   oldestSyncedMessageAt  DateTime?
   backfillAttemptedAt    DateTime?
+  // --- Manual override snapshot (survives `handleResync`) --------------
+  // JSON shape: { intents?: SupportIntent[]; intentsAt?: ISO; order?: OrderFacts|null; orderAt?: ISO }
+  // Captured by handleResync before wiping IncomingEmail rows; consumed
+  // by the next analysis pass for this thread, then cleared.
+  preservedManualOverridesJson String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -135,9 +140,12 @@ model Thread {
   stateHistory ThreadStateHistory[]
 
   @@index([shop, lastMessageAt])
+  @@index([shop, firstMessageAt])
   @@index([shop, supportNature])
   @@index([shop, operationalState])
   @@index([shop, operationalState, operationalStateUpdatedAt])
+  // Helps detect duplicate canonical threads when ThreadProviderId backfill races.
+  @@index([shop, provider, subjectKey])
 }
 
 // Mapping from a provider-native threadId to the canonical Thread.id.
@@ -216,10 +224,17 @@ model IncomingEmail {
   @@index([shop, processingStatus])
   @@index([shop, receivedAt])
   @@index([canonicalThreadId, receivedAt])
+  // Plain canonicalThreadId index for COUNT(*) / simple lookups that don't
+  // need the receivedAt suffix.
+  @@index([canonicalThreadId])
   @@index([shop, rfcMessageId])
   @@index([shop, detectedIntent])
   @@index([shop, analysisConfidence])
   @@index([shop, lastAnalyzedAt])
+  // Covers `refresh-stale-analyses` query that filters on processingStatus
+  // AND lastAnalyzedAt — pure lastAnalyzedAt index leaves the status filter
+  // to a heap scan.
+  @@index([shop, processingStatus, lastAnalyzedAt])
 }
 
 // Attachments and inline images extracted from incoming emails.
@@ -333,6 +348,8 @@ model ThreadStateHistory {
 
   @@index([shop, changedAt])
   @@index([threadId, changedAt])
+  // Covering index for dashboard `getAlerts` (filters on fromState + toState).
+  @@index([shop, fromState, toState, changedAt])
 }
 
 // Per-user preference (UI language, etc.). Keyed by Shopify userId + shop
@@ -370,4 +387,22 @@ model SyncJob {
 
   @@index([shop, status])
   @@index([status, nextRetryAt])
+}
+
+// Sliding-window rate-limit counters. One row per (key, kind) — the
+// rate-limit module increments `count` and resets when `windowStart` is
+// older than the window. Cheap because all access goes through one upsert
+// + at most one delete-old-rows housekeeping query.
+model RateLimitBucket {
+  // Logical key, e.g. shop domain for per-shop limits, or IP address for
+  // per-IP limits on public routes.
+  key         String
+  // Free-form identifier for what's being rate-limited
+  // (e.g. "reply-draft", "mail-auth").
+  kind        String
+  count       Int       @default(0)
+  windowStart DateTime  @default(now())
+
+  @@id([key, kind])
+  @@index([windowStart])
 }

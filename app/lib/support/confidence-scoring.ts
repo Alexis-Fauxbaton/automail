@@ -28,7 +28,15 @@ export function scoreConfidence(input: ScoringInput): ScoringOutput {
   const warnings: Warning[] = [];
 
   if (!input.order) {
-    if (
+    if (input.candidatesCount > 0) {
+      // Order was deliberately left unselected by the orchestrator because
+      // the match was too weak to auto-pick (ambiguous email match or
+      // name-only match). Surface ambiguity, not absence.
+      warnings.push({
+        code: "ambiguous_match",
+        message: `Multiple orders matched (${input.candidatesCount}). Verify the right one before replying.`,
+      });
+    } else if (
       !input.identifiers.orderNumber &&
       !input.identifiers.email &&
       !input.identifiers.customerName &&

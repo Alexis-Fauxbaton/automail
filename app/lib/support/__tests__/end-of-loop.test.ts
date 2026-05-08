@@ -101,4 +101,25 @@ describe("detectEndOfLoop", () => {
     });
     expect(result.noReplyNeeded).toBe(true);
   });
+
+  // --- Pass 2 ---
+  it("plain 'thanks' with no real action marker is end of loop", () => {
+    const result = detectEndOfLoop({
+      latestMessageBody: "Thanks!",
+      incomingCount: 2,
+      lastMessageDirection: "incoming",
+    });
+    expect(result.noReplyNeeded).toBe(true);
+  });
+
+  it("returns a non-empty reason when classified as end-of-loop", () => {
+    const result = detectEndOfLoop({
+      latestMessageBody: "Merci beaucoup, parfait !",
+      incomingCount: 3,
+      lastMessageDirection: "incoming",
+    });
+    expect(result.noReplyNeeded).toBe(true);
+    // Stronger than `toBeDefined`: assert reason text is meaningful.
+    expect(result.reason).toMatch(/.{10,}/);
+  });
 });

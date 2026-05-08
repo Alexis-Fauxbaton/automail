@@ -528,13 +528,14 @@ export async function ingestAndPrefilter(
  *
  * The inbox list badge reads intent from analysisResult JSON (not detectedIntent).
  * Threads that were resolved before Tier 3 ran have no analysisResult and therefore
- * no badge. This function runs a lightweight analysis (skipTracking + skipDraft) on
- * those threads and stores the result so the badge appears.
+ * no badge. This function runs `analyzeSupportEmail` with `skipTracking + skipDraft`
+ * (intent + identifiers + Shopify order search, no 17track / crawler / draft) on
+ * those threads and stores the result so the badge and matched-order context appear.
  *
  * Per-thread strategy:
  *   1. Skip threads that already have at least one email with analysisResult.
  *   2. For the remaining threads, find the latest incoming email that passed Tier 1.
- *   3. Run analyzeSupportEmail (intent + identifiers only, no Shopify/tracking).
+ *   3. Run analyzeSupportEmail (intent + identifiers + Shopify, no tracking/crawler/draft).
  *   4. Persist analysisResult + detectedIntent + processingStatus="analyzed".
  */
 export async function backfillResolvedIntents(
@@ -623,7 +624,7 @@ export async function backfillResolvedIntents(
 
   // Process in parallel chunks of 5 — each thread is independent
   // (different canonicalThreadId, no shared state). skipTracking means each
-  // iteration is just a few DB reads + one LLM call (~1-2s).
+  // iteration is one LLM call + 1-2 Shopify Admin queries (~1-2s).
   // Kept at 5 (not 10) to avoid hitting OpenAI rate limits when
   // backfillResolvedIntents runs right after a heavy processNewEmails Pass 2
   // (which may have already made 50-80 LLM calls during a resync).
@@ -757,6 +758,9 @@ export async function backfillResolvedIntents(
       admin,
       shop,
       skipDraft: true,
+      // Run the Shopify order search even for resolved threads — the
+      // matched order remains useful context. Tracking lookup + crawler
+      // stay skipped (no value once the conversation is closed).
       skipTracking: true,
       trackedCallContext: { shop, emailId: anchor.id, threadId: anchor.threadId },
       threadResolution: threadResolution
@@ -772,6 +776,13 @@ export async function backfillResolvedIntents(
         : undefined,
     });
     console.log(`[pipeline] processThread: analyze done intent=${analysis.intent} usedLLM=${analysis.warnings?.some(w => w.code === 'llm_fallback') ? 'no' : 'yes'} thread=${canonicalThreadId.substring(0,20)}`);
+
+    // Restore overrides snapshotted by handleResync, if any.
+    if (anchor.canonicalThreadId) {
+      const { applyPreservedOverridesIfAny } = await import("../support/preserved-overrides");
+      await applyPreservedOverridesIfAny(analysis, anchor.canonicalThreadId, shop);
+    }
+
     await prisma.incomingEmail.update({
       where: { id: anchor.id },
       data: {
@@ -1084,7 +1095,14 @@ export async function classifyAndDraft(
       analysis.manualOverrides = prevAnalysis.manualOverrides;
     }
 
-    if (record.canonicalThreadId && prevAnalysis?.manualOverrides?.order) {
+    // Restore overrides snapshotted by handleResync, if any. No-op when
+    // there's no snapshot (regular sync path).
+    if (record.canonicalThreadId) {
+      const { applyPreservedOverridesIfAny } = await import("../support/preserved-overrides");
+      await applyPreservedOverridesIfAny(analysis, record.canonicalThreadId, shop);
+    }
+
+    if (record.canonicalThreadId && analysis.manualOverrides?.order) {
       const finalOrderNumber = analysis.order?.name?.replace(/^#/, "") ?? null;
       await prisma.thread.update({
         where: { id: record.canonicalThreadId, shop },
@@ -1403,6 +1421,12 @@ export async function reanalyzeEmail(
     analysis.manualOverrides = previous.manualOverrides;
   }
 
+  // Restore overrides snapshotted by handleResync, if any.
+  if (record.canonicalThreadId) {
+    const { applyPreservedOverridesIfAny } = await import("../support/preserved-overrides");
+    await applyPreservedOverridesIfAny(analysis, record.canonicalThreadId, shop);
+  }
+
   await prisma.incomingEmail.update({
     where: { id: emailId },
     data: {
@@ -1418,7 +1442,7 @@ export async function reanalyzeEmail(
   // If the user manually set the order, re-apply it on Thread now that
   // mergeThreadIdentifiers may have pulled an old order number out of
   // the email body again.
-  if (record.canonicalThreadId && previous?.manualOverrides?.order) {
+  if (record.canonicalThreadId && analysis.manualOverrides?.order) {
     const finalOrderNumber = analysis.order?.name?.replace(/^#/, "") ?? null;
     await prisma.thread.update({
       where: { id: record.canonicalThreadId },

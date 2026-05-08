@@ -8,11 +8,12 @@ import type { FulfillmentTrackingFacts, TrackingFacts } from "../lib/support/typ
 export function PencilButton({ onClick, hasOverrides }: { onClick: () => void; hasOverrides: boolean }) {
   const { t } = useTranslation();
   const [hover, setHover] = useState(false);
-  const baseColor = hasOverrides ? "#5c5f62" : "#6d7175";
-  const hoverColor = "#202223";
   const label = hasOverrides
     ? t("classification.manuallyEdited", "Modifié manuellement")
-    : t("classification.editTitle", "Modifier la classification");
+    : t("classification.editTitle", "Modifier les informations");
+  const baseBg = hasOverrides ? "#fef4e1" : "#eef2f7";
+  const hoverBg = hasOverrides ? "#fbe7c0" : "#dde6f1";
+  const iconColor = hasOverrides ? "#a86600" : "#2f4a6b";
   return (
     <button
       type="button"
@@ -24,24 +25,49 @@ export function PencilButton({ onClick, hasOverrides }: { onClick: () => void; h
       aria-label={label}
       title={label}
       style={{
-        background: hover ? "#f1f2f3" : "transparent",
-        border: "1px solid",
-        borderColor: hover ? "#c9cccf" : "transparent",
-        borderRadius: "6px",
+        background: hover ? hoverBg : baseBg,
+        border: "none",
+        borderRadius: "999px",
         cursor: "pointer",
-        padding: "2px 6px",
+        padding: hover ? "4px 10px 4px 8px" : "4px",
         display: "inline-flex",
         alignItems: "center",
-        gap: "4px",
-        color: hover ? hoverColor : baseColor,
-        fontSize: "13px",
+        gap: "6px",
+        color: iconColor,
+        fontSize: "12px",
+        fontWeight: 500,
         lineHeight: 1,
-        transition: "background 0.12s, border-color 0.12s, color 0.12s",
+        transition: "background 0.15s, padding 0.15s",
       }}
     >
-      <span aria-hidden>✎</span>
-      {hasOverrides && <span aria-hidden style={{ fontSize: "9px", color: "#bf8b00" }}>●</span>}
-      {hover && <span style={{ fontSize: "11px" }}>{label}</span>}
+      <svg
+        aria-hidden
+        width="14"
+        height="14"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4Z" />
+      </svg>
+      {hasOverrides && (
+        <span
+          aria-hidden
+          style={{
+            width: "6px",
+            height: "6px",
+            borderRadius: "999px",
+            background: "#e8973b",
+            display: "inline-block",
+            marginLeft: hover ? 0 : "-2px",
+          }}
+        />
+      )}
+      {hover && <span>{label}</span>}
     </button>
   );
 }
@@ -183,10 +209,22 @@ function SingleFulfillmentTracking({ tracking, label }: { tracking: FulfillmentT
   );
 }
 
-export function TrackingsBlock({ trackings }: { trackings: FulfillmentTrackingFacts[] }) {
+export function TrackingsBlock({
+  trackings,
+  threadOperationalState,
+}: {
+  trackings: FulfillmentTrackingFacts[];
+  threadOperationalState?: string | null;
+}) {
   const { t } = useTranslation();
   if (trackings.length === 0) {
-    return <span style={{ fontSize: "13px", color: "#8c9196" }}>{t("analysis.noTrackingData")}</span>;
+    const skipped =
+      threadOperationalState === "resolved" || threadOperationalState === "no_reply_needed";
+    return (
+      <span style={{ fontSize: "13px", color: "#8c9196" }}>
+        {skipped ? t("analysis.noTrackingResolved") : t("analysis.noTrackingData")}
+      </span>
+    );
   }
   const multi = trackings.length > 1;
   return (
@@ -236,10 +274,13 @@ export function WarningsBlock({ warnings }: { warnings: SupportAnalysisExtended[
 export function AnalysisDisplay({
   analysis,
   lastAnalyzedAt,
+  threadOperationalState,
 }: {
   analysis: SupportAnalysisExtended;
   /** ISO timestamp of the last full analysis (Shopify + tracking). */
   lastAnalyzedAt?: string | null;
+  /** Used to explain why tracking may not be refreshed on resolved threads. */
+  threadOperationalState?: string | null;
 }) {
   const { t } = useTranslation();
 
@@ -301,7 +342,11 @@ export function AnalysisDisplay({
         <Card
           title={t("analysis.matchedOrderTitle")}
           footer={orderCandidates.length > 1
-            ? <span style={{ fontSize: "12px", color: "#b98900" }}>⚠ {t("analysis.ordersMatchedWarning_other", { count: orderCandidates.length })}</span>
+            ? <span style={{ fontSize: "12px", color: "#b98900" }}>
+                ⚠ {analysis.order
+                  ? t("analysis.ordersMatchedWarning_other", { count: orderCandidates.length })
+                  : t("analysis.orderToConfirm", { count: orderCandidates.length })}
+              </span>
             : undefined
           }
         >
@@ -327,7 +372,7 @@ export function AnalysisDisplay({
           : undefined
         }
       >
-        <TrackingsBlock trackings={trackings} />
+        <TrackingsBlock trackings={trackings} threadOperationalState={threadOperationalState} />
       </Card>
 
       <WarningsBlock warnings={warnings} />

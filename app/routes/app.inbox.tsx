@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useFetcher, useLoaderData, useNavigation, useRevalidator, useSearchParams } from "react-router";
 import { useTranslation } from "react-i18next";
@@ -101,6 +101,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         },
         orderBy: { receivedAt: "desc" },
         distinct: ["canonicalThreadId"],
+        // Hard cap as a defence-in-depth: distinct + canonicalIds already
+        // bounds this to the page size, but a future refactor that drops
+        // distinct shouldn't suddenly fetch the whole table.
+        take: canonicalIds.length,
         include: {
           replyDraft: { include: { attachments: true } },
           incomingAttachments: {
@@ -249,7 +253,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "moveThread") {
     const canonicalThreadId = String(formData.get("canonicalThreadId") ?? "");
     const target = String(formData.get("target") ?? "");
-    return handleMoveThread({ shop, canonicalThreadId, target });
+    return handleMoveThread({ shop, canonicalThreadId, target, admin });
   }
 
   if (intent === "editThreadIdentifiers") {
@@ -503,6 +507,9 @@ type OpsBucket =
   | "resolved"         // closed, no reply needed, or conversation ended
   | "other";           // filtered / non-support / unknown
 
+// Threads with no recent activity for this many ms are auto-bucketed as resolved.
+const AUTO_RESOLVE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
 function getOpsBucket(
   thread: EmailThread,
   state: SerializedThreadState | null,
@@ -524,18 +531,13 @@ function getOpsBucket(
   // DB state is stale (thread was not recomputed after we sent a reply).
   // Override to a direction-consistent bucket so the UI is never wrong.
   const lastDir = getMessageDirection(thread.latest, connectedEmail);
+  const ageMs = Date.now() - new Date(thread.latest.receivedAt).getTime();
   if (op === "waiting_merchant" && lastDir === "outgoing") {
-    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
-    const age = Date.now() - new Date(thread.latest.receivedAt).getTime();
-    return age >= sevenDaysMs ? "resolved" : "waiting_customer";
+    return ageMs >= AUTO_RESOLVE_AGE_MS ? "resolved" : "waiting_customer";
   }
   if (op === "waiting_merchant") return "waiting_merchant";
   if (op === "waiting_customer") {
-    // Auto-resolve threads where the customer hasn't replied in 7 days
-    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
-    const age = Date.now() - new Date(thread.latest.receivedAt).getTime();
-    if (age >= sevenDaysMs) return "resolved";
-    return "waiting_customer";
+    return ageMs >= AUTO_RESOLVE_AGE_MS ? "resolved" : "waiting_customer";
   }
   if (thread.latest.analysisResult?.conversation?.noReplyNeeded === true) return "resolved";
   // Support/uncertain threads with no explicit operational state yet
@@ -548,9 +550,7 @@ function getOpsBucket(
     (!state && getThreadClassification(thread) === "support");
   if (isLikelySupport) {
     if (lastDir === "outgoing") {
-      const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
-      const age = Date.now() - new Date(thread.latest.receivedAt).getTime();
-      return age >= sevenDaysMs ? "resolved" : "waiting_customer";
+      return ageMs >= AUTO_RESOLVE_AGE_MS ? "resolved" : "waiting_customer";
     }
     return "waiting_merchant";
   }
@@ -559,6 +559,42 @@ function getOpsBucket(
 
 function hasLinkedOrder(state: SerializedThreadState | null): boolean {
   return !!state?.resolvedOrderNumber;
+}
+
+/** Rounded pill with an alert-triangle icon — clickable trigger for the
+ *  thread-level signals tooltip (replied elsewhere, ambiguous order, etc). */
+function SignalPill() {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "#fef3c7",
+        color: "#a86600",
+        borderRadius: "999px",
+        padding: "4px",
+        cursor: "help",
+        lineHeight: 0,
+      }}
+    >
+      <svg
+        aria-hidden
+        width="14"
+        height="14"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+        <line x1="12" y1="9" x2="12" y2="13" />
+        <line x1="12" y1="17" x2="12.01" y2="17" />
+      </svg>
+    </span>
+  );
 }
 
 function filterReason(email: SerializedEmail): string | null {
@@ -753,7 +789,16 @@ function ConnectionCard({
                 {t("inbox.backfill")}
               </s-button>
             </Form>
-            <Form method="post">
+            <Form
+              method="post"
+              onSubmit={(e) => {
+                // Resync wipes ALL ingested email rows for the shop. Make
+                // sure a misclick doesn't destroy the merchant's history.
+                if (!window.confirm(t("inbox.resyncConfirm"))) {
+                  e.preventDefault();
+                }
+              }}
+            >
               <input type="hidden" name="_action" value="resync" />
               <s-button variant="tertiary" type="submit" {...(isSyncing ? { loading: true } : {})}>
                 {t("inbox.resyncAll")}
@@ -1154,9 +1199,20 @@ function EmailHtmlBody({ html }: { html: string }) {
 
   useEffect(() => {
     const handler = (event: MessageEvent) => {
-      if (event.data?.type !== "email-height") return;
+      // The iframe is sandboxed without allow-same-origin → its origin is "null".
+      // Reject any message that doesn't come from a null-origin frame to
+      // prevent Shopify's parent frame, dev-tools panels, or other iframes
+      // on the page from spoofing height-resize messages.
+      if (event.origin !== "null") return;
+      if (event.source !== iframeRef.current?.contentWindow) return;
+      const data = event.data as { type?: unknown; height?: unknown };
+      if (data?.type !== "email-height") return;
+      if (typeof data.height !== "number" || !Number.isFinite(data.height)) return;
       if (iframeRef.current) {
-        iframeRef.current.style.height = event.data.height + 4 + "px";
+        // Cap the height to defend against a malicious email setting an
+        // absurd scrollHeight that would create a giant scroll trap.
+        const safe = Math.min(Math.max(data.height + 4, 60), 8000);
+        iframeRef.current.style.height = safe + "px";
       }
     };
     window.addEventListener("message", handler);
@@ -1180,14 +1236,17 @@ function EmailHtmlBody({ html }: { html: string }) {
     <iframe
       ref={iframeRef}
       srcDoc={srcDoc}
-      sandbox="allow-scripts allow-popups"
+      // allow-scripts only — emails should never need to open popups,
+      // and allow-same-origin is intentionally absent so the iframe
+      // runs in a null origin (no DOM/cookies/storage from the parent).
+      sandbox="allow-scripts"
       title="Email body"
       style={{ border: "none", width: "100%", minHeight: "60px", display: "block" }}
     />
   );
 }
 
-function EmailMessageBlock({
+const EmailMessageBlock = memo(function EmailMessageBlock({
   email,
   idx,
   total,
@@ -1204,8 +1263,13 @@ function EmailMessageBlock({
   const body = normalizeEmailBody(email.bodyText);
   const PREVIEW_LENGTH = 300;
 
-  const cidMap = buildCidMap(email.incomingAttachments);
-  const sanitizedHtml = email.bodyHtml ? sanitizeEmailHtml(email.bodyHtml, cidMap) : null;
+  // Memoize per-email — sanitize-html is expensive (O(html_size)) and EmailMessageBlock
+  // re-renders any time the parent loader data changes, even if THIS email is unchanged.
+  const cidMap = useMemo(() => buildCidMap(email.incomingAttachments), [email.incomingAttachments]);
+  const sanitizedHtml = useMemo(
+    () => (email.bodyHtml ? sanitizeEmailHtml(email.bodyHtml, cidMap) : null),
+    [email.bodyHtml, cidMap],
+  );
   const hasHtmlBody = !!sanitizedHtml;
   const hasUnresolvedZohoImages = !!email.bodyHtml?.includes("/mail/ImageDisplay?");
 
@@ -1301,9 +1365,9 @@ function EmailMessageBlock({
       </s-stack>
     </s-box>
   );
-}
+});
 
-function ThreadCard({
+const ThreadCard = memo(function ThreadCard({
   thread,
   threadState,
   isSelected,
@@ -1345,6 +1409,12 @@ function ThreadCard({
   // after a customer reply). Find the most recent email that actually has
   // an analysisResult so we can still show the LLM context and the draft.
   const analysisEmail = [...emails].reverse().find((e) => e.analysisResult) ?? null;
+  const ambiguousOrderCount =
+    !analysisEmail?.analysisResult?.order &&
+    (analysisEmail?.analysisResult?.orderCandidates?.length ?? 0) > 1
+      ? analysisEmail!.analysisResult!.orderCandidates!.length
+      : 0;
+  const hasAnySignal = hasSignals || ambiguousOrderCount > 0;
   // For draft display, prefer the latest email's draft (freshly generated),
   // fall back to the analysisEmail's draft if latest has none yet.
   const draftEmail = latest.draftReply ? latest : (analysisEmail?.draftReply ? analysisEmail : null);
@@ -1413,14 +1483,14 @@ function ThreadCard({
         {threadState?.historyStatus === "partial" && <span className="ui-pill ui-pill--warning">{t("inbox.pillPartialHistory")}</span>}
         {latest.processingStatus === "error" && <span className="ui-pill ui-pill--danger">{t("inbox.pillError")}</span>}
 
-        {hasSignals && (
+        {hasAnySignal && (
           <span
             style={{ position: "relative", display: "inline-flex", alignItems: "center" }}
             onMouseEnter={(e) => { e.stopPropagation(); setShowSignals(true); }}
             onMouseLeave={() => setShowSignals(false)}
             onClick={(e) => e.stopPropagation()}
           >
-            <span style={{ color: "var(--ui-amber-700)", fontSize: "14px", cursor: "help" }}>⚠</span>
+            <SignalPill />
             {showSignals && (
               <div style={{
                 position: "absolute", bottom: "calc(100% + 6px)", right: 0,
@@ -1431,10 +1501,13 @@ function ThreadCard({
                 display: "flex", flexDirection: "column", gap: "4px",
                 fontSize: "12px", color: "var(--ui-slate-700)", fontWeight: 400,
               }}>
-                {previousContact.recentReply && <span>↩ {t("inbox.signalRepliedElsewhere")}</span>}
-                {previousContact.byAddress && previousContact.byOrder && <span>◎ {t("inbox.signalPriorContactBoth")}</span>}
-                {previousContact.byOrder && !previousContact.byAddress && <span>◎ {t("inbox.signalPriorContactOrder")}</span>}
-                {previousContact.byAddress && !previousContact.byOrder && <span>◎ {t("inbox.signalPriorContactAddress")}</span>}
+                {hasSignals && previousContact.recentReply && <span>{t("inbox.signalRepliedElsewhere")}</span>}
+                {hasSignals && previousContact.byAddress && previousContact.byOrder && <span>{t("inbox.signalPriorContactBoth")}</span>}
+                {hasSignals && previousContact.byOrder && !previousContact.byAddress && <span>{t("inbox.signalPriorContactOrder")}</span>}
+                {hasSignals && previousContact.byAddress && !previousContact.byOrder && <span>{t("inbox.signalPriorContactAddress")}</span>}
+                {ambiguousOrderCount > 0 && (
+                  <span>{t("inbox.signalAmbiguousOrder", { count: ambiguousOrderCount })}</span>
+                )}
               </div>
             )}
           </span>
@@ -1526,7 +1599,19 @@ function ThreadCard({
       )}
     </div>
   );
-}
+});
+
+// Hoisted out of DraftBlock so they aren't reallocated on every render.
+const DRAFT_LABEL_STYLE: React.CSSProperties = {
+  fontSize: "12px",
+  color: "var(--p-color-text-subdued)",
+  minWidth: "52px",
+};
+const DRAFT_ROW_STYLE: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: "8px",
+};
 
 function DraftBlock({ email, threadSenderEmail }: {
   email: SerializedEmail;
@@ -1622,21 +1707,18 @@ function DraftBlock({ email, threadSenderEmail }: {
     if (res.ok) setAttachments((prev) => prev.filter((a) => a.id !== attId));
   }
 
-  const labelStyle: React.CSSProperties = { fontSize: "12px", color: "var(--p-color-text-subdued)", minWidth: "52px" };
-  const rowStyle: React.CSSProperties = { display: "flex", alignItems: "center", gap: "8px" };
-
   return (
     <s-box padding="base" borderWidth="base" borderRadius="base">
       <s-stack direction="block" gap="base">
 
         {/* Compose header */}
         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <div style={rowStyle}>
-            <span style={labelStyle}>À</span>
+          <div style={DRAFT_ROW_STYLE}>
+            <span style={DRAFT_LABEL_STYLE}>À</span>
             <span style={{ fontSize: "13px", color: "var(--p-color-text-subdued)" }}>{threadSenderEmail}</span>
           </div>
-          <div style={rowStyle}>
-            <span style={labelStyle}>Objet</span>
+          <div style={DRAFT_ROW_STYLE}>
+            <span style={DRAFT_LABEL_STYLE}>Objet</span>
             <input
               style={{ flex: 1, border: "none", borderBottom: "1px solid var(--p-color-border)", padding: "2px 0", fontSize: "13px", background: "transparent", outline: "none" }}
               value={subject}
@@ -1646,8 +1728,8 @@ function DraftBlock({ email, threadSenderEmail }: {
               }}
             />
           </div>
-          <div style={rowStyle}>
-            <span style={labelStyle}>CC</span>
+          <div style={DRAFT_ROW_STYLE}>
+            <span style={DRAFT_LABEL_STYLE}>CC</span>
             <input
               style={{ flex: 1, border: "none", borderBottom: "1px solid var(--p-color-border)", padding: "2px 0", fontSize: "13px", background: "transparent", outline: "none" }}
               placeholder="email@exemple.com"
@@ -1667,8 +1749,8 @@ function DraftBlock({ email, threadSenderEmail }: {
             )}
           </div>
           {showBCC && (
-            <div style={rowStyle}>
-              <span style={labelStyle}>BCC</span>
+            <div style={DRAFT_ROW_STYLE}>
+              <span style={DRAFT_LABEL_STYLE}>BCC</span>
               <input
                 style={{ flex: 1, border: "none", borderBottom: "1px solid var(--p-color-border)", padding: "2px 0", fontSize: "13px", background: "transparent", outline: "none" }}
                 placeholder="email@exemple.com"
@@ -1939,6 +2021,15 @@ function ThreadDetailPanel({
     ? (analysisEmail.analysisResult.intents?.length ? analysisEmail.analysisResult.intents : [analysisEmail.analysisResult.intent])
     : [];
 
+  // Ambiguous order match: orchestrator left `order = null` because the match
+  // was too weak (multiple email candidates / name-only). Surface it in the
+  // same ⚠ tooltip as other thread-level signals.
+  const ambiguousOrderCount =
+    !order && (analysisEmail?.analysisResult?.orderCandidates?.length ?? 0) > 1
+      ? analysisEmail!.analysisResult!.orderCandidates!.length
+      : 0;
+  const hasAnySignal = hasSignals || ambiguousOrderCount > 0;
+
   const bucketPill =
     bucket === "to_process" ? <span className="ui-pill ui-pill--warning">{t("inbox.stateWaitingMerchant")}</span>
     : bucket === "waiting_merchant" ? <span className="ui-pill ui-pill--warning">{t("inbox.stateWaitingMerchant")}</span>
@@ -1980,13 +2071,13 @@ function ThreadDetailPanel({
               {t(`analysis.intent_${intent}`, { defaultValue: intent.replace(/_/g, " ") })}
             </span>
           ))}
-          {hasSignals && (
+          {hasAnySignal && (
             <span
               style={{ position: "relative", display: "inline-flex", alignItems: "center" }}
               onMouseEnter={() => setShowSignals(true)}
               onMouseLeave={() => setShowSignals(false)}
             >
-              <span style={{ color: "var(--ui-amber-700)", fontSize: "14px", cursor: "help" }}>⚠</span>
+              <SignalPill />
               {showSignals && (
                 <div style={{
                   position: "absolute", top: "calc(100% + 6px)", left: 0,
@@ -1997,10 +2088,13 @@ function ThreadDetailPanel({
                   display: "flex", flexDirection: "column", gap: "4px",
                   fontSize: "12px", color: "var(--ui-slate-700)", fontWeight: 400,
                 }}>
-                  {previousContact.recentReply && <span>↩ {t("inbox.signalRepliedElsewhere")}</span>}
-                  {previousContact.byAddress && previousContact.byOrder && <span>◎ {t("inbox.signalPriorContactBoth")}</span>}
-                  {previousContact.byOrder && !previousContact.byAddress && <span>◎ {t("inbox.signalPriorContactOrder")}</span>}
-                  {previousContact.byAddress && !previousContact.byOrder && <span>◎ {t("inbox.signalPriorContactAddress")}</span>}
+                  {hasSignals && previousContact.recentReply && <span>{t("inbox.signalRepliedElsewhere")}</span>}
+                  {hasSignals && previousContact.byAddress && previousContact.byOrder && <span>{t("inbox.signalPriorContactBoth")}</span>}
+                  {hasSignals && previousContact.byOrder && !previousContact.byAddress && <span>{t("inbox.signalPriorContactOrder")}</span>}
+                  {hasSignals && previousContact.byAddress && !previousContact.byOrder && <span>{t("inbox.signalPriorContactAddress")}</span>}
+                  {ambiguousOrderCount > 0 && (
+                    <span>{t("inbox.signalAmbiguousOrder", { count: ambiguousOrderCount })}</span>
+                  )}
                 </div>
               )}
             </span>
@@ -2151,6 +2245,7 @@ function ThreadDetailPanel({
               <AnalysisDisplay
                 analysis={analysisEmail.analysisResult}
                 lastAnalyzedAt={analysisEmail.lastAnalyzedAt}
+                threadOperationalState={threadState?.operationalState ?? null}
               />
             </div>
           )}
@@ -2402,30 +2497,35 @@ export default function InboxPage() {
     return e;
   });
 
-  const threads = groupByThread(displayEmails);
+  const threads = useMemo(() => groupByThread(displayEmails), [displayEmails]);
 
   // Precompute each thread's bucket + classification once for reuse in
   // counts and filtering. Cheaper than calling the helpers repeatedly.
-  const threadMeta = threads.map((t) => {
-    const state =
-      (t.latest.canonicalThreadId &&
-        loaderData.threadStates?.[t.latest.canonicalThreadId]) ||
-      null;
-    const pc = (t.latest.canonicalThreadId && loaderData.priorContact?.[t.latest.canonicalThreadId]) || null;
-    return {
-      thread: t,
-      state,
-      bucket: getOpsBucket(t, state, loaderData.connectedEmail),
-      nature: getThreadClassification(t),
-      linkedOrder: hasLinkedOrder(state),
-      previousContact: {
-        byAddress: pc?.byAddress ?? false,
-        byOrder: pc?.byOrder ?? false,
-        recentReply: (pc as { recentReply?: boolean } | null)?.recentReply ?? false,
-        matchedAddress: (pc as { matchedAddress?: string | null } | null)?.matchedAddress ?? null,
-      },
-    };
-  });
+  // Memoized so 100+ threads aren't re-derived on every unrelated state change.
+  const threadMeta = useMemo(
+    () =>
+      threads.map((t) => {
+        const state =
+          (t.latest.canonicalThreadId &&
+            loaderData.threadStates?.[t.latest.canonicalThreadId]) ||
+          null;
+        const pc = (t.latest.canonicalThreadId && loaderData.priorContact?.[t.latest.canonicalThreadId]) || null;
+        return {
+          thread: t,
+          state,
+          bucket: getOpsBucket(t, state, loaderData.connectedEmail),
+          nature: getThreadClassification(t),
+          linkedOrder: hasLinkedOrder(state),
+          previousContact: {
+            byAddress: pc?.byAddress ?? false,
+            byOrder: pc?.byOrder ?? false,
+            recentReply: (pc as { recentReply?: boolean } | null)?.recentReply ?? false,
+            matchedAddress: (pc as { matchedAddress?: string | null } | null)?.matchedAddress ?? null,
+          },
+        };
+      }),
+    [threads, loaderData.threadStates, loaderData.priorContact, loaderData.connectedEmail],
+  );
 
   const bucketCounts: Record<OpsBucket | "all" | "to_handle", number> = {
     all: threadMeta.length,

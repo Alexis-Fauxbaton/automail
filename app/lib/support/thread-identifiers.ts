@@ -137,10 +137,21 @@ export async function mergeThreadIdentifiers(
     resolution.confidence = "low";
   }
 
+  // Respect manual order overrides. The user's pick (or detach) must win
+  // over per-message extraction — otherwise every new message that mentions
+  // an order number resets `Thread.resolvedOrderNumber` to the parsed value
+  // and silently undoes the user's decision. Two sources of truth, in order:
+  //   1. `Thread.preservedManualOverridesJson` — the resync snapshot, set
+  //      while the post-resync analyses haven't yet re-applied it.
+  //   2. The latest analyzed email's `analysisResult.manualOverrides.order`.
+  const manualOrderName = await readManualOrderOverride(canonicalThreadId, shop);
+  const finalResolvedOrderNumber =
+    manualOrderName !== undefined ? manualOrderName : (resolution.orderNumber ?? null);
+
   await prisma.thread.update({
     where: { id: canonicalThreadId, shop },
     data: {
-      resolvedOrderNumber:    resolution.orderNumber    ?? null,
+      resolvedOrderNumber:    finalResolvedOrderNumber,
       resolvedTrackingNumber: resolution.trackingNumber ?? null,
       resolvedEmail:          resolution.email          ?? null,
       resolvedCustomerName:   resolution.customerName   ?? null,
@@ -150,6 +161,63 @@ export async function mergeThreadIdentifiers(
   });
 
   return resolution;
+}
+
+/**
+ * Returns the user's manually-set order number for the thread (or `null`
+ * for a manual detach). Returns `undefined` when there is no manual
+ * override at all — caller should then use the auto-derived value.
+ */
+async function readManualOrderOverride(
+  canonicalThreadId: string,
+  shop: string,
+): Promise<string | null | undefined> {
+  // 1. Resync snapshot — applies until the next analysis pass consumes it.
+  const thread = await prisma.thread
+    .findUnique({
+      where: { id: canonicalThreadId },
+      select: { preservedManualOverridesJson: true },
+    })
+    .catch(() => null);
+  if (thread?.preservedManualOverridesJson) {
+    try {
+      const snap = JSON.parse(thread.preservedManualOverridesJson) as {
+        order?: { name?: string } | null;
+        orderAt?: string;
+      };
+      if (snap.orderAt !== undefined) {
+        return snap.order?.name?.replace(/^#/, "") ?? null;
+      }
+    } catch {
+      // Corrupt snapshot — fall through to the analysisResult source.
+    }
+  }
+
+  // 2. Latest analyzed email's manualOverrides marker.
+  const latest = await prisma.incomingEmail
+    .findFirst({
+      where: {
+        canonicalThreadId,
+        shop,
+        analysisResult: { not: null },
+      },
+      orderBy: { receivedAt: "desc" },
+      select: { analysisResult: true },
+    })
+    .catch(() => null);
+  if (!latest?.analysisResult) return undefined;
+  try {
+    const parsed = JSON.parse(latest.analysisResult) as {
+      manualOverrides?: { order?: unknown };
+      order?: { name?: string } | null;
+    };
+    if (parsed.manualOverrides?.order) {
+      return parsed.order?.name?.replace(/^#/, "") ?? null;
+    }
+  } catch {
+    // Ignore — corrupt analysis JSON shouldn't lock writes.
+  }
+  return undefined;
 }
 
 function isStronger(a: ResolutionConfidence, b: ResolutionConfidence): boolean {

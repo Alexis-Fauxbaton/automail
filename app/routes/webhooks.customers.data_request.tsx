@@ -23,8 +23,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const customer = (payload as { customer?: { email?: string; id?: number } })
     .customer;
 
+  // Hash customerId too — even numeric IDs are PII when correlated with logs.
+  const customerIdHash = customer?.id != null ? piiHash(String(customer.id)) : "?";
   console.log(
-    `[webhook] ${topic} shop=${shop} customerHash=${piiHash(customer?.email)} customerId=${customer?.id ?? "?"}`,
+    `[webhook] ${topic} shop=${shop} customerHash=${piiHash(customer?.email)} customerIdHash=${customerIdHash}`,
   );
 
   // The webhook is authenticated (signature verified by authenticate.webhook).

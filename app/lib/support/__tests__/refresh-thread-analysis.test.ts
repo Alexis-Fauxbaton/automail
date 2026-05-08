@@ -30,6 +30,10 @@ vi.mock("../../../db.server", () => ({
     mailConnection: {
       findUnique: vi.fn(),
     },
+    thread: {
+      findUnique: vi.fn().mockResolvedValue(null),
+      update: vi.fn().mockResolvedValue({}),
+    },
   },
 }));
 

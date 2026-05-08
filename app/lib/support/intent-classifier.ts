@@ -60,6 +60,11 @@ const RULES: Rule[] = [
       /vous vous [êe]tes tromp[ée]s?/i,
     ],
   },
+  // The two `delivery_delay` rules below are split intentionally:
+  // - "stuck / no movement" keywords are very specific and must win over
+  //   refund_request when both signals appear
+  // - "late / overdue" keywords are generic and lose to an explicit refund ask
+  // Do not merge them. Order matters; CODE2-M1 was a false positive.
   {
     intent: "delivery_delay",
     keywords: [

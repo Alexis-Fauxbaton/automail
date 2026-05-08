@@ -63,7 +63,15 @@ export async function llmParseEmail(
   }
 
   try {
-    const userMessage = `Subject: ${parsed.subject}\n\nBody:\n${parsed.body}`;
+    // Cap input size to bound LLM cost. Anything past 30 KB is almost certainly
+    // quoted history or a malicious payload — the parser only needs the visible
+    // text to extract identifiers and intent.
+    const MAX_BODY_BYTES = 30_000;
+    const truncatedBody =
+      parsed.body.length > MAX_BODY_BYTES
+        ? parsed.body.slice(0, MAX_BODY_BYTES) + "\n\n[... body truncated for analysis]"
+        : parsed.body;
+    const userMessage = `Subject: ${parsed.subject.slice(0, 500)}\n\nBody:\n${truncatedBody}`;
 
     const response = await trackedChatCompletion(
       client,
@@ -81,7 +89,11 @@ export async function llmParseEmail(
     );
 
     const raw = response.choices[0]?.message?.content ?? "";
-    const parsed_json = JSON.parse(raw) as Record<string, unknown>;
+    const candidate: unknown = JSON.parse(raw);
+    if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
+      throw new Error("LLM did not return a JSON object");
+    }
+    const parsed_json = candidate as Record<string, unknown>;
 
     const parsedIntent = coerceIntent(parsed_json.intent);
 

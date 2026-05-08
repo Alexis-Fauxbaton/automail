@@ -226,6 +226,18 @@ const styles: Record<string, CSSProperties> = {
     color: "#fff",
     cursor: "pointer",
   },
+  btnReset: {
+    padding: "8px 14px",
+    fontSize: "13px",
+    fontWeight: 500,
+    border: "1px solid transparent",
+    borderRadius: "8px",
+    background: "transparent",
+    color: "var(--ui-slate-600)",
+    cursor: "pointer",
+    textDecoration: "underline",
+    textUnderlineOffset: "3px",
+  },
   btnDisabled: { opacity: 0.5, cursor: "not-allowed" },
 };
 
@@ -249,7 +261,7 @@ export function ClassificationEditModal({
   const [resetIntents, setResetIntents] = useState(false);
 
   const initialOrderId = analysis.order?.id ?? null;
-  const [orderMode, setOrderMode] = useState<"candidate" | "search" | "detach" | "reset">(
+  const [orderMode, setOrderMode] = useState<"candidate" | "search" | "detach">(
     initialOrderId ? "candidate" : "detach",
   );
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(initialOrderId);
@@ -302,14 +314,15 @@ export function ClassificationEditModal({
       payload.orderChange = { type: "search", orderNumber: searchInput.trim() };
     } else if (orderMode === "detach" && initialOrderId) {
       payload.orderChange = { type: "detach" };
-    } else if (orderMode === "reset") {
-      payload.orderChange = { type: "reset" };
     }
 
     onSubmit(payload);
   };
 
   const canSubmit = !resetIntents ? intents.length > 0 : true;
+  const hasAnyOverride =
+    analysis.manualOverrides?.intents !== undefined ||
+    analysis.manualOverrides?.order !== undefined;
   const candidateRows: { order: OrderFacts; isCurrent: boolean }[] = [
     ...(analysis.order ? [{ order: analysis.order, isCurrent: true }] : []),
     ...analysis.orderCandidates
@@ -322,7 +335,7 @@ export function ClassificationEditModal({
       <div onClick={(e) => e.stopPropagation()} style={styles.panel}>
         <div style={styles.header}>
           <h2 style={styles.title}>
-            {t("classification.editTitle", "Modifier la classification")}
+            {t("classification.editTitle", "Modifier les informations")}
           </h2>
           <button
             type="button"
@@ -512,22 +525,6 @@ export function ClassificationEditModal({
                 </span>
               </label>
 
-              {analysis.manualOverrides?.order && (
-                <label
-                  style={{ ...styles.radioRow, ...(orderMode === "reset" ? styles.radioRowSelected : {}) }}
-                >
-                  <input
-                    type="radio"
-                    name="orderChoice"
-                    checked={orderMode === "reset"}
-                    onChange={() => setOrderMode("reset")}
-                    style={styles.radioInput}
-                  />
-                  <span style={styles.radioLabel}>
-                    {t("classification.resetOrder", "Réinitialiser (laisser l'app rechercher)")}
-                  </span>
-                </label>
-              )}
             </div>
           </section>
 
@@ -539,6 +536,18 @@ export function ClassificationEditModal({
         </div>
 
         <div style={styles.footer}>
+          {hasAnyOverride && (
+            <button
+              type="button"
+              onClick={() => onSubmit({ resetIntents: true, orderChange: { type: "reset" } })}
+              disabled={isSubmitting}
+              style={{ ...styles.btnReset, ...(isSubmitting ? styles.btnDisabled : {}) }}
+              title={t("classification.resetAllTitle", "Effacer toutes vos modifications manuelles et re-déduire l'analyse depuis zéro")}
+            >
+              {t("classification.resetAll", "Réinitialiser")}
+            </button>
+          )}
+          <div style={{ flex: 1 }} />
           <button
             type="button"
             onClick={onClose}

@@ -119,10 +119,17 @@ function buildUserMessage(
 ): string {
   const sections: string[] = [];
 
+  // Cap each body to bound LLM cost. The latest message keeps a larger budget;
+  // older history messages are aggressively truncated since they're context only.
+  const MAX_LATEST_BYTES = 30_000;
+  const MAX_HISTORY_BYTES = 8_000;
+  const cap = (s: string, max: number): string =>
+    s.length > max ? s.slice(0, max) + "\n[... truncated]" : s;
+
   if (conversationMessages && conversationMessages.length > 1) {
     // Multi-message thread: render each message explicitly
     sections.push("## Conversation history (full thread, chronological order)");
-    sections.push(`Subject: ${parsed.subject}`);
+    sections.push(`Subject: ${parsed.subject.slice(0, 500)}`);
     for (const msg of conversationMessages) {
       const label =
         msg.direction === "outgoing"
@@ -132,13 +139,14 @@ function buildUserMessage(
       const attachLine = msg.attachmentFileNames?.length
         ? `Attachments: ${msg.attachmentFileNames.join(", ")}`
         : null;
+      const cappedBody = cap(msg.body, msg.isLatest ? MAX_LATEST_BYTES : MAX_HISTORY_BYTES);
       sections.push(
         [
           `--- ${label}${latestMarker} ---`,
           `Date: ${msg.receivedAt}`,
           `From: ${msg.fromAddress}`,
           ...(attachLine ? [attachLine] : []),
-          `Body:\n${msg.body}`,
+          `Body:\n${cappedBody}`,
         ].join("\n"),
       );
     }
@@ -149,12 +157,12 @@ function buildUserMessage(
   } else {
     // Single email
     sections.push("## Customer email");
-    sections.push(`Subject: ${parsed.subject}`);
+    sections.push(`Subject: ${parsed.subject.slice(0, 500)}`);
     const singleMsg = conversationMessages?.[0];
     if (singleMsg?.attachmentFileNames?.length) {
       sections.push(`Attachments: ${singleMsg.attachmentFileNames.join(", ")}`);
     }
-    sections.push(`Body:\n${parsed.body}`);
+    sections.push(`Body:\n${cap(parsed.body, MAX_LATEST_BYTES)}`);
   }
 
   sections.push("## Detected intent");

@@ -2,7 +2,7 @@
 
 client_id = "01efe84af5b21eb4f61fe827ef194448"
 name = "automail-test"
-application_url = "https://classifieds-purchased-literally-novel.trycloudflare.com/app/inbox"
+application_url = "https://foods-enhancing-toilet-distinguished.trycloudflare.com/app/inbox"
 embedded = true
 
 [webhooks]
@@ -36,9 +36,9 @@ use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [
-  "https://classifieds-purchased-literally-novel.trycloudflare.com/",
-  "https://classifieds-purchased-literally-novel.trycloudflare.com/auth/callback",
-  "https://classifieds-purchased-literally-novel.trycloudflare.com/auth/shopify/callback"
+  "https://foods-enhancing-toilet-distinguished.trycloudflare.com/",
+  "https://foods-enhancing-toilet-distinguished.trycloudflare.com/auth/callback",
+  "https://foods-enhancing-toilet-distinguished.trycloudflare.com/auth/shopify/callback"
 ]
 
 [build]

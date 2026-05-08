@@ -2,9 +2,26 @@ import { data } from "react-router";
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+import { checkRateLimit } from "../lib/rate-limit";
 
 const VALID_REPLY_MODES = ["thread", "new_thread"] as const;
 
+// Per-shop rate limit. Caps draft mutation churn from a single shop to
+// guard against accidental loops or session-replay abuse on a hot path
+// (each save can trigger an LLM redraft downstream).
+const REPLY_DRAFT_LIMIT = 120; // events per window
+const REPLY_DRAFT_WINDOW_MS = 60_000; // 1 minute
+
+/**
+ * CSRF model: this endpoint is only callable from inside the embedded
+ * Shopify admin via App Bridge `fetch`. Shopify session-token validation
+ * inside `authenticate.admin(request)` rejects any request whose
+ * `Authorization: Bearer <token>` header doesn't carry a valid, current
+ * JWT signed for THIS app + THIS merchant. The token is per-app +
+ * per-merchant + short-lived (≤ 1 min) and cannot be obtained or replayed
+ * cross-origin. No additional anti-CSRF token is therefore required.
+ * If you ever serve this endpoint outside the embedded admin, revisit.
+ */
 export async function action({ request }: ActionFunctionArgs) {
   if (request.method !== "POST") {
     return data({ error: "Method not allowed" }, { status: 405 });
@@ -12,6 +29,25 @@ export async function action({ request }: ActionFunctionArgs) {
 
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
+
+  const limit = await checkRateLimit({
+    key: shop,
+    kind: "reply-draft",
+    limit: REPLY_DRAFT_LIMIT,
+    windowMs: REPLY_DRAFT_WINDOW_MS,
+  });
+  if (!limit.ok) {
+    return data(
+      { error: "Too many draft updates — slow down and retry shortly." },
+      {
+        status: 429,
+        headers: {
+          "Retry-After": String(Math.ceil(limit.resetMs / 1000)),
+          "X-RateLimit-Remaining": String(limit.remaining),
+        },
+      },
+    );
+  }
 
   const body = await request.json() as {
     emailId?: string;

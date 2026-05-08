@@ -14,7 +14,7 @@ function getZohoAccountsDomain(): string {
 
 const SCOPES = "ZohoMail.messages.ALL,ZohoMail.accounts.READ,ZohoMail.folders.READ";
 
-function getZohoApiDomain(): string {
+export function getZohoApiDomain(): string {
   return process.env.ZOHO_API_DOMAIN || "mail.zoho.com";
 }
 
@@ -172,8 +172,8 @@ export async function getZohoAccessToken(shop: string): Promise<string> {
   const conn = await prisma.mailConnection.findUnique({ where: { shop } });
   if (!conn || conn.provider !== "zoho") throw new Error("No Zoho connection");
 
-  // Refresh if expired or about to expire
-  if (conn.tokenExpiry.getTime() < Date.now() + 60_000) {
+  // 120 s buffer guards against clock skew and request-in-flight expiry.
+  if (conn.tokenExpiry.getTime() < Date.now() + 120_000) {
     return refreshZohoToken(shop);
   }
   return decrypt(conn.accessToken);

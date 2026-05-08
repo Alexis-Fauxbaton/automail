@@ -5,11 +5,16 @@
     "emailInbox": "Boîte mail",
     "dashboard": "Dashboard",
     "settings": "Paramètres",
+    "help": "Aide",
     "languageLabel": "Langue",
     "errorTitle": "Une erreur s'est produite",
     "errorDesc": "Une erreur inattendue s'est produite. Veuillez rafraîchir la page.",
     "errorContact": "Si le problème persiste, contactez le support.",
     "errorDevTitle": "Erreur applicative"
+  },
+  "help": {
+    "title": "Aide & support",
+    "contactHeading": "Nous contacter"
   },
   "support": {
     "pageHeading": "Copilot support",
@@ -43,6 +48,7 @@
     "matchedOrderTitle": "Commande trouvée",
     "ordersMatchedWarning_one": "{{count}} commande trouvée — vérifiez avant de répondre.",
     "ordersMatchedWarning_other": "{{count}} commandes trouvées — vérifiez avant de répondre.",
+    "orderToConfirm": "Commande à confirmer ({{count}} candidates).",
     "noIdentifiers": "Aucun identifiant extrait.",
     "noOrder": "Aucune commande trouvée.",
     "fieldOrder": "Commande",
@@ -63,6 +69,7 @@
     "trackingLastEvent": "Dernier événement",
     "trackingLocation": "Localisation",
     "noTrackingData": "Pas de données de suivi disponibles.",
+    "noTrackingResolved": "Suivi non rafraîchi : ce thread est résolu. Réouvrez-le pour relancer la mise à jour.",
     "openTracking": "Voir le suivi →",
     "liveContextTitle": "Contexte récupéré en direct",
     "source": "Source",
@@ -205,6 +212,7 @@
     "hideAdvanced": "Masquer avancé",
     "backfill": "Récupérer 60 jours",
     "resyncAll": "Re-synchroniser tout",
+    "resyncConfirm": "Cette action va supprimer tous les emails ingérés pour cette boutique et les re-récupérer depuis votre boîte mail. Les brouillons déjà commencés sont conservés. Continuer ?",
     "reclassify": "Re-classer",
     "diagnose": "Diagnostiquer",
     "searchLabel": "Recherche",
@@ -309,6 +317,7 @@
     "signalPriorContactBoth": "Contact récurrent (adresse + commande)",
     "signalPriorContactOrder": "Contact récurrent (même commande)",
     "signalPriorContactAddress": "Contact récurrent (même adresse)",
+    "signalAmbiguousOrder": "Commande à confirmer ({{count}} candidates)",
     "backToList": "Retour à la liste"
   },
   "login": {
@@ -326,14 +335,15 @@
     "save": "Enregistrer"
   },
   "classification": {
-    "editTitle": "Modifier la classification",
+    "editTitle": "Modifier les informations",
     "intents": "Intentions",
     "addIntent": "Ajouter une intention",
     "resetIntents": "Réinitialiser les intentions",
+    "resetAll": "Réinitialiser",
+    "resetAllTitle": "Effacer toutes vos modifications manuelles et re-déduire l'analyse depuis zéro",
     "linkedOrder": "Commande liée",
     "otherOrderNumber": "Autre numéro de commande",
     "detach": "Aucune commande (détacher)",
-    "resetOrder": "Réinitialiser (laisser l'app rechercher)",
     "manuallyEdited": "Modifié manuellement",
     "errors": {
       "missing_thread_id": "Erreur interne : identifiant de fil manquant.",

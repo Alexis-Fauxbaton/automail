@@ -23,6 +23,7 @@ import { unauthenticated } from "../../shopify.server";
 import { runManualBackfill, runOnboardingBackfill } from "./backfill";
 import { recomputeAllOpenThreads, recomputeAllThreadsForShop } from "../support/thread-state";
 import { ANALYSIS_FRESHNESS_MS, refreshStaleAnalysesForShop } from "../support/refresh-stale-analyses";
+import { pruneOldRateLimitBuckets } from "../rate-limit";
 import {
   claimNextJob,
   enqueueJob,
@@ -83,6 +84,11 @@ async function tick(): Promise<void> {
   await enqueueRecomputeIfNeeded();
   // 4. Execute pending jobs up to the concurrency limit.
   await drainJobQueue();
+  // 5. Best-effort cleanup of stale rate-limit buckets. Cheap, idempotent,
+  //    and prevents the table from growing unbounded over time.
+  await pruneOldRateLimitBuckets().catch((err) =>
+    console.error("[auto-sync] rate-limit prune failed:", err),
+  );
 }
 
 /**

@@ -5,11 +5,16 @@
     "emailInbox": "Email inbox",
     "dashboard": "Dashboard",
     "settings": "Settings",
+    "help": "Help",
     "languageLabel": "Language",
     "errorTitle": "Something went wrong",
     "errorDesc": "An unexpected error occurred. Please try refreshing the page.",
     "errorContact": "If the problem persists, contact support.",
     "errorDevTitle": "Application Error"
+  },
+  "help": {
+    "title": "Help & support",
+    "contactHeading": "Contact us"
   },
   "support": {
     "pageHeading": "Support copilot",
@@ -43,6 +48,7 @@
     "matchedOrderTitle": "Matched order",
     "ordersMatchedWarning_one": "{{count}} order matched — verify before replying.",
     "ordersMatchedWarning_other": "{{count}} orders matched — verify before replying.",
+    "orderToConfirm": "Order to confirm ({{count}} candidates).",
     "noIdentifiers": "No identifiers extracted.",
     "noOrder": "No matching order found.",
     "fieldOrder": "Order",
@@ -63,6 +69,7 @@
     "trackingLastEvent": "Last event",
     "trackingLocation": "Location",
     "noTrackingData": "No tracking data available yet.",
+    "noTrackingResolved": "Tracking is not refreshed for resolved threads. Reopen the thread to refresh.",
     "openTracking": "Open tracking page →",
     "liveContextTitle": "Live context retrieved",
     "source": "Source",
@@ -205,6 +212,7 @@
     "hideAdvanced": "Hide advanced",
     "backfill": "Backfill 60 days",
     "resyncAll": "Re-sync all",
+    "resyncConfirm": "This will delete all ingested emails for this shop and re-fetch them from your mailbox. Drafts you've already started are preserved. Continue?",
     "reclassify": "Re-classify",
     "diagnose": "Diagnose",
     "searchLabel": "Search",
@@ -309,6 +317,7 @@
     "signalPriorContactBoth": "Prior contact (address + order)",
     "signalPriorContactOrder": "Prior contact (same order)",
     "signalPriorContactAddress": "Prior contact (same address)",
+    "signalAmbiguousOrder": "Order to confirm ({{count}} candidates)",
     "backToList": "Back to inbox"
   },
   "login": {
@@ -326,14 +335,15 @@
     "save": "Save"
   },
   "classification": {
-    "editTitle": "Edit classification",
+    "editTitle": "Edit details",
     "intents": "Intents",
     "addIntent": "Add an intent",
     "resetIntents": "Reset intents",
+    "resetAll": "Reset",
+    "resetAllTitle": "Clear all your manual edits and re-derive the analysis from scratch",
     "linkedOrder": "Linked order",
     "otherOrderNumber": "Other order number",
     "detach": "No order (detach)",
-    "resetOrder": "Reset (let the app search)",
     "manuallyEdited": "Manually edited",
     "errors": {
       "missing_thread_id": "Internal error: missing thread id.",
