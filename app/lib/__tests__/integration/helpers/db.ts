@@ -27,6 +27,9 @@ export async function cleanTestShop() {
     await tx.threadProviderId.deleteMany({ where: { shop: TEST_SHOP } });
     await tx.thread.deleteMany({ where: { shop: TEST_SHOP } });
     await tx.syncJob.deleteMany({ where: { shop: TEST_SHOP } });
+    await tx.billingUsage.deleteMany({ where: { shop: TEST_SHOP } });
+    await tx.billingScheduledChange.deleteMany({ where: { shop: TEST_SHOP } });
+    await tx.billingShopFlag.deleteMany({ where: { shop: TEST_SHOP } });
     await tx.mailConnection.deleteMany({ where: { shop: TEST_SHOP } });
     await tx.supportSettings.deleteMany({ where: { shop: TEST_SHOP } });
   });
