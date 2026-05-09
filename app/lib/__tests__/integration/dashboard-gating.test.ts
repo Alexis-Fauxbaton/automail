@@ -18,7 +18,11 @@ vi.mock('../../../shopify.server', () => ({
 describe('dashboard loader — Starter gating', () => {
   it('strips advanced data and clamps range to 7d', async () => {
     await testDb.shopFlag.create({
-      data: { shop: TEST_SHOP, installDate: new Date(Date.now() - 30 * 86400000) },
+      data: {
+        shop: TEST_SHOP,
+        installDate: new Date(Date.now() - 30 * 86400000),
+        onboardingCompletedAt: new Date(Date.now() - 30 * 86400000),
+      },
     });
 
     const adminGraphql = vi.fn().mockResolvedValue({
