@@ -52,13 +52,20 @@ export function TopBarCounter() {
 
 const styles: Record<string, React.CSSProperties> = {
   wrapper: {
+    flexShrink: 0,
+    marginLeft: 'auto',
     display: 'inline-flex',
     alignItems: 'center',
-    gap: 6,
-    padding: '4px 10px',
+    gap: 8,
+    padding: '6px 12px',
     fontSize: 13,
+    fontWeight: 600,
     fontFamily: 'system-ui, sans-serif',
     color: '#1f2937',
+    background: 'white',
+    border: '1px solid #e2e8f0',
+    borderRadius: 999,
+    boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
   },
   label: { fontVariantNumeric: 'tabular-nums' },
   dotOk:        { width: 8, height: 8, borderRadius: '50%', background: '#16a34a' },

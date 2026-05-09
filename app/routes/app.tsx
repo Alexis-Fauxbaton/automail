@@ -109,12 +109,22 @@ export default function App() {
             <s-link href="/app/billing">{t("nav.billing")}</s-link>
             <s-link href="/app/help">{t("nav.help")}</s-link>
           </s-app-nav>
-          <div style={{ position: "sticky", top: 0, zIndex: 100, background: "white" }}>
+          <div style={{
+            position: "sticky",
+            top: 0,
+            zIndex: 100,
+            background: "rgba(248, 250, 252, 0.92)",
+            backdropFilter: "saturate(180%) blur(8px)",
+            WebkitBackdropFilter: "saturate(180%) blur(8px)",
+            padding: "10px 16px",
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            borderBottom: "1px solid #e2e8f0",
+          }}>
             <TrialBanner />
             <QuotaBanner />
-            <div style={{ display: "flex", justifyContent: "flex-end", padding: "4px 14px" }}>
-              <TopBarCounter />
-            </div>
+            <TopBarCounter />
           </div>
           <Outlet />
         </EntitlementsProvider>
