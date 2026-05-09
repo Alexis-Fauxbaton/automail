@@ -11,7 +11,7 @@ import { SettingsIcon } from "../components/ui";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session, sessionToken } = await authenticate.admin(request);
-  await requireOnboardingComplete(session.shop);
+  await requireOnboardingComplete(session.shop, request);
   const settings = await getSettings(session.shop);
   const userId = sessionToken?.sub ?? null;
   const uiLanguage = userId ? await getUiLanguage(userId, session.shop) : "en";

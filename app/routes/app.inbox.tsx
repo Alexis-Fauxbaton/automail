@@ -68,7 +68,7 @@ const _refreshedEmailIds = new Set<string>();
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
-  await requireOnboardingComplete(session.shop);
+  await requireOnboardingComplete(session.shop, request);
   const shop = session.shop;
   const onboardingFlag = await getShopFlag(shop);
   const onboardingChecklist = {

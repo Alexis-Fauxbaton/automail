@@ -4,7 +4,7 @@ import { requireOnboardingComplete } from "../lib/onboarding/guard";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
-  await requireOnboardingComplete(session.shop);
+  await requireOnboardingComplete(session.shop, request);
   return null;
 };
 

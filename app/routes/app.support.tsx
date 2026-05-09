@@ -13,7 +13,7 @@ import { SparklesIcon } from "../components/ui";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
-  await requireOnboardingComplete(session.shop);
+  await requireOnboardingComplete(session.shop, request);
   return null;
 };
 

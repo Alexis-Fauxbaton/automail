@@ -44,7 +44,7 @@ import {
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session, admin } = await authenticate.admin(request);
-  await requireOnboardingComplete(session.shop);
+  await requireOnboardingComplete(session.shop, request);
   const shop = session.shop;
 
   const ent = await resolveEntitlements({ shop, admin });

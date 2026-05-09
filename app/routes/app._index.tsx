@@ -9,6 +9,6 @@ import { requireOnboardingComplete } from "../lib/onboarding/guard";
 // so the merchant has a clear onboarding path (Gmail / Zoho / Outlook).
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
-  await requireOnboardingComplete(session.shop);
+  await requireOnboardingComplete(session.shop, request);
   return redirect("/app/inbox");
 };
