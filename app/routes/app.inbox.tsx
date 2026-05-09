@@ -6,6 +6,13 @@ import { useMobile } from "../hooks/useMobile";
 
 import { authenticate } from "../shopify.server";
 import { requireOnboardingComplete } from "../lib/onboarding/guard";
+import {
+  hasGeneratedAnyDraft,
+  hasCustomizedSupportSettings,
+  getShopFlag,
+} from "../lib/onboarding/repo";
+import { deriveChecklistState, isChecklistDismissed } from "../lib/onboarding/state";
+import { OnboardingChecklist } from "../components/onboarding/OnboardingChecklist";
 import { getAuthUrl as getGmailAuthUrl, getConnection } from "../lib/gmail/auth";
 import { getZohoAuthUrl } from "../lib/zoho/auth";
 import { getAuthUrl as getOutlookAuthUrl } from "../lib/outlook/auth";
@@ -63,6 +70,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   await requireOnboardingComplete(session.shop);
   const shop = session.shop;
+  const onboardingFlag = await getShopFlag(shop);
+  const onboardingChecklist = {
+    state: deriveChecklistState({
+      hasDraft: await hasGeneratedAnyDraft(shop),
+      hasCustomizedSettings: await hasCustomizedSupportSettings(shop),
+    }),
+    dismissed: isChecklistDismissed(onboardingFlag),
+  };
   const connection = await getConnection(shop);
 
   let emails: SerializedEmail[] = [];
@@ -184,6 +199,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     threadStates,
     priorContact,
     syncInProgress,
+    onboardingChecklist,
   };
 };
 
@@ -2715,6 +2731,14 @@ export default function InboxPage() {
     <div className="ui-inbox-root">
       <SyncSuspendedBanner />
       <div className="ui-inbox-heading"><h1>Email inbox</h1></div>
+
+      {/* Onboarding checklist (auto-hides when dismissed or complete) */}
+      <div className="ui-inbox-section">
+        <OnboardingChecklist
+          state={loaderData.onboardingChecklist.state}
+          dismissed={loaderData.onboardingChecklist.dismissed}
+        />
+      </div>
 
       {/* Connection */}
       <div className="ui-inbox-section">
