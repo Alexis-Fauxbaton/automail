@@ -55,7 +55,37 @@ function PrivacyEn() {
         </ul>
       </Section>
 
-      <Section title="3. How we use your data">
+      <Section title="3. Subscription and usage data">
+        <p>
+          To operate the paid plans (Starter, Pro), we store the following data per shop:
+        </p>
+        <ul style={styles.ul}>
+          <li>
+            <strong>Subscription state</strong> — read on demand from Shopify's Billing API
+            (active plan name, billing period end). We do not store this; Shopify is the source
+            of truth.
+          </li>
+          <li>
+            <strong>Monthly draft counter</strong> — an integer per shop per calendar month,
+            incremented each time the AI generates a reply draft. Used to enforce plan quotas.
+            Retained for billing audit purposes.
+          </li>
+          <li>
+            <strong>Install date</strong> — to compute trial expiry. Stored once when the app
+            is first installed.
+          </li>
+          <li>
+            <strong>Scheduled plan changes</strong> — when a merchant requests a downgrade,
+            we record the target plan and effective date until the change is applied.
+          </li>
+        </ul>
+        <p>
+          No payment card details ever transit through our servers. All charges are processed
+          by Shopify's Billing API directly between the merchant and Shopify.
+        </p>
+      </Section>
+
+      <Section title="4. How we use your data">
         <p>We use the data described above exclusively to:</p>
         <ul style={styles.ul}>
           <li>Identify the Shopify order related to a customer email.</li>
@@ -66,7 +96,7 @@ function PrivacyEn() {
         <p>We do not use your data for advertising, profiling, or any purpose unrelated to the App&rsquo;s core function.</p>
       </Section>
 
-      <Section title="4. Third-party services">
+      <Section title="5. Third-party services">
         <p>To operate, Automail sends data to the following third parties:</p>
         <ul style={styles.ul}>
           <li>
@@ -103,7 +133,7 @@ function PrivacyEn() {
         </ul>
       </Section>
 
-      <Section title="5. Data storage and security">
+      <Section title="6. Data storage and security">
         <ul style={styles.ul}>
           <li>
             App data is stored in a PostgreSQL database hosted on{" "}
@@ -124,16 +154,16 @@ function PrivacyEn() {
         </ul>
       </Section>
 
-      <Section title="6. Data retention">
+      <Section title="7. Data retention">
         <p>
           Processed emails and generated drafts are retained as long as your Automail account
           is active. When you uninstall the App, your session data is deleted immediately via
           Shopify&rsquo;s uninstall webhook. You may request deletion of all remaining data
-          by contacting us (see section 9).
+          by contacting us (see section 10).
         </p>
       </Section>
 
-      <Section title="7. Your rights">
+      <Section title="8. Your rights">
         <p>
           Depending on your jurisdiction, you may have the right to access, correct, or delete
           personal data we hold about you or your customers. To exercise these rights, please
@@ -141,7 +171,7 @@ function PrivacyEn() {
         </p>
       </Section>
 
-      <Section title="8. Shopify merchant responsibilities">
+      <Section title="9. Shopify merchant responsibilities">
         <p>
           As a Shopify merchant using Automail, you are responsible for ensuring that your
           customers are informed about how their data is processed in connection with your
@@ -149,7 +179,7 @@ function PrivacyEn() {
         </p>
       </Section>
 
-      <Section title="9. Contact">
+      <Section title="10. Contact">
         <p>
           For any questions or data requests related to this Privacy Policy, please contact
           us at:{" "}
@@ -194,7 +224,39 @@ function PrivacyFr() {
         </ul>
       </Section>
 
-      <Section title="3. Utilisation de vos données">
+      <Section title="3. Données d'abonnement et d'utilisation">
+        <p>
+          Pour faire fonctionner les plans payants (Starter, Pro), nous stockons les données
+          suivantes par boutique&nbsp;:
+        </p>
+        <ul style={styles.ul}>
+          <li>
+            <strong>État de l'abonnement</strong> — lu à la demande depuis l'API Shopify Billing
+            (nom du plan actif, fin de période de facturation). Nous ne stockons pas cette
+            information&nbsp;; Shopify est la source de vérité.
+          </li>
+          <li>
+            <strong>Compteur mensuel de brouillons</strong> — un entier par boutique et par mois
+            calendaire, incrémenté à chaque génération d'un brouillon de réponse par l'IA.
+            Utilisé pour appliquer les quotas du plan. Conservé pour audit de facturation.
+          </li>
+          <li>
+            <strong>Date d'installation</strong> — pour calculer l'expiration de l'essai.
+            Stockée une seule fois lors de la première installation.
+          </li>
+          <li>
+            <strong>Changements de plan planifiés</strong> — lorsqu'un marchand demande un
+            downgrade, nous enregistrons le plan cible et la date d'application jusqu'à
+            ce que le changement soit appliqué.
+          </li>
+        </ul>
+        <p>
+          Aucune donnée de carte de paiement ne transite par nos serveurs. Tous les paiements
+          sont traités par l'API Shopify Billing directement entre le marchand et Shopify.
+        </p>
+      </Section>
+
+      <Section title="4. Utilisation de vos données">
         <p>Nous utilisons les données décrites ci-dessus exclusivement pour&nbsp;:</p>
         <ul style={styles.ul}>
           <li>Identifier la commande Shopify liée à un email client.</li>
@@ -208,7 +270,7 @@ function PrivacyFr() {
         </p>
       </Section>
 
-      <Section title="4. Services tiers">
+      <Section title="5. Services tiers">
         <p>Automail fait appel aux services tiers suivants&nbsp;:</p>
         <ul style={styles.ul}>
           <li><strong>Shopify</strong> — pour l'authentification et l'accès aux données de commande.</li>
@@ -218,7 +280,7 @@ function PrivacyFr() {
         </ul>
       </Section>
 
-      <Section title="5. Conservation des données">
+      <Section title="6. Conservation des données">
         <p>
           Nous conservons les emails traités et les brouillons générés dans notre base de données tant que
           votre boutique est connectée à Automail. Lorsque vous désinstallez l'application, vos données
@@ -231,7 +293,7 @@ function PrivacyFr() {
         </p>
       </Section>
 
-      <Section title="6. Vos droits">
+      <Section title="7. Vos droits">
         <p>
           Selon votre lieu de résidence, vous pouvez disposer de droits sur vos données personnelles,
           notamment le droit d'accès, de rectification ou de suppression. Pour exercer ces droits,
@@ -239,7 +301,7 @@ function PrivacyFr() {
         </p>
       </Section>
 
-      <Section title="7. Contact">
+      <Section title="8. Contact">
         <p>
           Pour toute question concernant cette politique de confidentialité ou vos données&nbsp;:{" "}
           <a href="mailto:blmcontactpro1@gmail.com" style={styles.a}>
