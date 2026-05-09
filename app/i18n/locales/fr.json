@@ -338,6 +338,8 @@
   "billing": {
     "page": {
       "title": "Facturation & abonnement",
+      "eyebrow": "Abonnement",
+      "lead": "Choisissez le plan adapté au volume d'emails support que vous traitez.",
       "subscribedSuccess": "Abonnement confirmé — votre plan est maintenant actif.",
       "scheduledChangeNotice": "Changement planifié : {{fromPlan}} → {{toPlan}} le {{date}}.",
       "currentState": "Statut actuel : {{state}} (plan : {{plan}})",
@@ -349,14 +351,16 @@
       "draftsPerMonth_other": "{{count}} brouillons / mois",
       "maxMailboxes_one": "{{count}} boîte mail connectée",
       "maxMailboxes_other": "{{count}} boîtes mail connectées",
-      "advancedDashboard": "Dashboard avancé (90 jours)",
-      "basicDashboard": "Dashboard de base (7 jours)",
-      "dashboardRange_one": "Jusqu'à {{count}} jour d'historique",
-      "dashboardRange_other": "Jusqu'à {{count}} jours d'historique",
+      "advancedDashboard_one": "Dashboard avancé — jusqu'à {{count}} jour d'historique",
+      "advancedDashboard_other": "Dashboard avancé — jusqu'à {{count}} jours d'historique",
+      "basicDashboard_one": "Dashboard de base — jusqu'à {{count}} jour d'historique",
+      "basicDashboard_other": "Dashboard de base — jusqu'à {{count}} jours d'historique",
       "currentPlan": "Plan actuel",
       "subscribeBtn": "S'abonner",
       "downgradeBtn": "Passer à ce plan",
-      "processing": "Traitement…"
+      "processing": "Traitement…",
+      "recommended": "Recommandé",
+      "perMonth": "mois"
     },
     "trialDaysLeft_one": "Essai — {{count}} jour restant",
     "trialDaysLeft_other": "Essai — {{count}} jours restants",

@@ -338,6 +338,8 @@
   "billing": {
     "page": {
       "title": "Billing & plan",
+      "eyebrow": "Subscription",
+      "lead": "Choose the plan that fits the volume of support emails you handle.",
       "subscribedSuccess": "Subscription confirmed — your plan is now active.",
       "scheduledChangeNotice": "Scheduled change: {{fromPlan}} → {{toPlan}} on {{date}}.",
       "currentState": "Current status: {{state}} (plan: {{plan}})",
@@ -349,14 +351,16 @@
       "draftsPerMonth_other": "{{count}} drafts / month",
       "maxMailboxes_one": "{{count}} connected mailbox",
       "maxMailboxes_other": "{{count}} connected mailboxes",
-      "advancedDashboard": "Advanced dashboard (90 days)",
-      "basicDashboard": "Basic dashboard (7 days)",
-      "dashboardRange_one": "Up to {{count}} day of history",
-      "dashboardRange_other": "Up to {{count}} days of history",
+      "advancedDashboard_one": "Advanced dashboard — up to {{count}} day of history",
+      "advancedDashboard_other": "Advanced dashboard — up to {{count}} days of history",
+      "basicDashboard_one": "Basic dashboard — up to {{count}} day of history",
+      "basicDashboard_other": "Basic dashboard — up to {{count}} days of history",
       "currentPlan": "Current plan",
       "subscribeBtn": "Subscribe",
       "downgradeBtn": "Downgrade to this plan",
-      "processing": "Processing…"
+      "processing": "Processing…",
+      "recommended": "Recommended",
+      "perMonth": "month"
     },
     "trialDaysLeft_one": "Trial — {{count}} day left",
     "trialDaysLeft_other": "Trial — {{count}} days left",

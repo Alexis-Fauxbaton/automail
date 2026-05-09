@@ -68,17 +68,28 @@ export default function BillingPage() {
   const loading = subscribeFetcher.state !== 'idle' || cancelFetcher.state !== 'idle';
 
   return (
-    <div style={{ padding: '2rem', fontFamily: 'system-ui, sans-serif', maxWidth: 900, margin: '0 auto' }}>
-      <h1 style={{ marginTop: 0 }}>{t('billing.page.title')}</h1>
+    <div style={{ padding: '2.5rem 1.5rem 4rem', fontFamily: 'system-ui, -apple-system, sans-serif', maxWidth: 960, margin: '0 auto', color: '#0f172a' }}>
+      <header style={{ marginBottom: 32, textAlign: 'center' }}>
+        <p style={{ margin: 0, fontSize: 13, fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase', color: '#64748b' }}>
+          {t('billing.page.eyebrow')}
+        </p>
+        <h1 style={{ margin: '8px 0 6px', fontSize: 32, fontWeight: 700, letterSpacing: -0.5 }}>
+          {t('billing.page.title')}
+        </h1>
+        <p style={{ margin: 0, fontSize: 15, color: '#475569', maxWidth: 520, marginInline: 'auto' }}>
+          {t('billing.page.lead')}
+        </p>
+      </header>
 
       {justSubscribed && (
-        <div style={{ background: '#dcfce7', color: '#14532d', padding: '10px 14px', borderRadius: 6, marginBottom: 20 }}>
+        <div style={{ background: '#dcfce7', color: '#14532d', padding: '12px 16px', borderRadius: 8, marginBottom: 20, display: 'flex', alignItems: 'center', gap: 10, fontSize: 14 }}>
+          <span aria-hidden style={{ display: 'inline-flex', width: 20, height: 20, borderRadius: '50%', background: '#16a34a', color: 'white', fontSize: 13, fontWeight: 700, alignItems: 'center', justifyContent: 'center' }}>✓</span>
           {t('billing.page.subscribedSuccess')}
         </div>
       )}
 
       {pendingChange && (
-        <div style={{ background: '#fef9c3', color: '#854d0e', padding: '10px 14px', borderRadius: 6, marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+        <div style={{ background: '#fef9c3', color: '#854d0e', padding: '12px 16px', borderRadius: 8, marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, fontSize: 14 }}>
           <span>
             {t('billing.page.scheduledChangeNotice', {
               fromPlan: pendingChange.fromPlan,
@@ -93,16 +104,14 @@ export default function BillingPage() {
               cancelFetcher.submit(fd, { method: 'POST', action: '/api/billing/cancel' });
             }}
             disabled={loading}
-            style={{ fontWeight: 600, background: 'transparent', border: '1px solid #854d0e', borderRadius: 4, padding: '4px 10px', color: 'inherit', cursor: 'pointer' }}
+            style={{ fontWeight: 600, background: 'transparent', border: '1px solid #854d0e', borderRadius: 6, padding: '6px 12px', color: 'inherit', cursor: loading ? 'not-allowed' : 'pointer', fontSize: 13 }}
           >
             {t('billing.page.cancelScheduled')}
           </button>
         </div>
       )}
 
-      <p>{t('billing.page.currentState', { state: entitlements.state, plan: entitlements.planId ?? '—' })}</p>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, marginTop: 32 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 20, marginTop: 8 }}>
         <PlanCard
           planId="starter"
           isCurrent={entitlements.planId === 'starter'}
@@ -110,6 +119,7 @@ export default function BillingPage() {
           onDowngrade={() => cancel('downgrade', 'starter')}
           loading={loading}
           showDowngrade={entitlements.planId === 'pro'}
+          recommended={false}
         />
         <PlanCard
           planId="pro"
@@ -118,12 +128,17 @@ export default function BillingPage() {
           onDowngrade={() => {}}
           loading={loading}
           showDowngrade={false}
+          recommended={entitlements.planId !== 'pro'}
         />
       </div>
 
       {entitlements.state === 'paid_active' && (
-        <div style={{ marginTop: 32 }}>
-          <button onClick={() => cancel('immediate')} disabled={loading} style={{ color: '#991b1b', background: 'transparent', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>
+        <div style={{ marginTop: 36, textAlign: 'center' }}>
+          <button
+            onClick={() => cancel('immediate')}
+            disabled={loading}
+            style={{ color: '#64748b', background: 'transparent', border: 'none', cursor: loading ? 'not-allowed' : 'pointer', textDecoration: 'underline', fontSize: 13 }}
+          >
             {t('billing.page.cancelSubscription')}
           </button>
         </div>
@@ -139,35 +154,158 @@ function PlanCard(props: {
   onDowngrade: () => void;
   loading: boolean;
   showDowngrade: boolean;
+  recommended: boolean;
 }) {
   const { t } = useTranslation();
   const plan = PLANS[props.planId];
 
+  const accent = props.isCurrent ? '#16a34a' : props.recommended ? '#1f2937' : '#e2e8f0';
+  const features = [
+    t('billing.plan.draftsPerMonth', { count: plan.draftsPerMonth }),
+    t('billing.plan.maxMailboxes', { count: plan.maxMailboxes }),
+    plan.advancedDashboard
+      ? t('billing.plan.advancedDashboard', { count: plan.dashboardMaxRangeDays })
+      : t('billing.plan.basicDashboard', { count: plan.dashboardMaxRangeDays }),
+  ];
+
   return (
     <div style={{
-      border: props.isCurrent ? '2px solid #1f2937' : '1px solid #d1d5db',
-      borderRadius: 8,
-      padding: '20px 24px',
+      position: 'relative',
+      border: `${props.isCurrent || props.recommended ? '2px' : '1px'} solid ${accent}`,
+      borderRadius: 12,
+      padding: '28px 24px 24px',
+      background: 'white',
+      boxShadow: props.recommended || props.isCurrent
+        ? '0 4px 16px rgba(15, 23, 42, 0.06)'
+        : '0 1px 3px rgba(15, 23, 42, 0.04)',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 16,
     }}>
-      <h2 style={{ marginTop: 0, textTransform: 'capitalize' }}>{props.planId}</h2>
-      <p style={{ fontSize: 28, fontWeight: 700 }}>${plan.priceUsd}<span style={{ fontSize: 14, fontWeight: 400 }}>/mo</span></p>
-      <ul style={{ paddingLeft: 18 }}>
-        <li>{t('billing.plan.draftsPerMonth', { count: plan.draftsPerMonth })}</li>
-        <li>{t('billing.plan.maxMailboxes', { count: plan.maxMailboxes })}</li>
-        <li>{plan.advancedDashboard ? t('billing.plan.advancedDashboard') : t('billing.plan.basicDashboard')}</li>
-        <li>{t('billing.plan.dashboardRange', { count: plan.dashboardMaxRangeDays })}</li>
-      </ul>
-      {props.isCurrent ? (
-        <p style={{ color: '#16a34a', fontWeight: 600 }}>{t('billing.plan.currentPlan')}</p>
-      ) : props.showDowngrade ? (
-        <button onClick={props.onDowngrade} disabled={props.loading} style={{ width: '100%', padding: '8px 16px', borderRadius: 6 }}>
-          {t('billing.plan.downgradeBtn')}
-        </button>
-      ) : (
-        <button onClick={props.onSubscribe} disabled={props.loading} style={{ width: '100%', background: '#1f2937', color: 'white', padding: '8px 16px', borderRadius: 6, border: 'none', cursor: 'pointer' }}>
-          {props.loading ? t('billing.plan.processing') : t('billing.plan.subscribeBtn')}
-        </button>
+      {props.recommended && !props.isCurrent && (
+        <span style={{
+          position: 'absolute',
+          top: -10,
+          left: 20,
+          background: '#1f2937',
+          color: 'white',
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: 0.6,
+          textTransform: 'uppercase',
+          padding: '4px 10px',
+          borderRadius: 4,
+        }}>
+          {t('billing.plan.recommended')}
+        </span>
       )}
+      {props.isCurrent && (
+        <span style={{
+          position: 'absolute',
+          top: -10,
+          left: 20,
+          background: '#16a34a',
+          color: 'white',
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: 0.6,
+          textTransform: 'uppercase',
+          padding: '4px 10px',
+          borderRadius: 4,
+        }}>
+          {t('billing.plan.currentPlan')}
+        </span>
+      )}
+
+      <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, textTransform: 'capitalize', letterSpacing: -0.3 }}>
+        {props.planId}
+      </h2>
+
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
+        <span style={{ fontSize: 40, fontWeight: 800, letterSpacing: -1 }}>${plan.priceUsd}</span>
+        <span style={{ fontSize: 15, fontWeight: 500, color: '#64748b' }}>/{t('billing.plan.perMonth')}</span>
+      </div>
+
+      <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {features.map((feature, i) => (
+          <li key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 14, lineHeight: 1.45 }}>
+            <span aria-hidden style={{
+              flexShrink: 0,
+              width: 18, height: 18,
+              borderRadius: '50%',
+              background: '#dcfce7',
+              color: '#16a34a',
+              fontSize: 11,
+              fontWeight: 800,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginTop: 1,
+            }}>✓</span>
+            <span>{feature}</span>
+          </li>
+        ))}
+      </ul>
+
+      <div style={{ marginTop: 'auto', paddingTop: 4 }}>
+        {props.isCurrent ? (
+          <button
+            disabled
+            style={{
+              width: '100%',
+              padding: '10px 16px',
+              borderRadius: 8,
+              border: '1px solid #cbd5e1',
+              background: '#f1f5f9',
+              color: '#64748b',
+              fontWeight: 600,
+              fontSize: 14,
+              cursor: 'not-allowed',
+            }}
+          >
+            {t('billing.plan.currentPlan')}
+          </button>
+        ) : props.showDowngrade ? (
+          <button
+            onClick={props.onDowngrade}
+            disabled={props.loading}
+            style={{
+              width: '100%',
+              padding: '10px 16px',
+              borderRadius: 8,
+              border: '1px solid #cbd5e1',
+              background: 'white',
+              color: '#0f172a',
+              fontWeight: 600,
+              fontSize: 14,
+              cursor: props.loading ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {props.loading ? t('billing.plan.processing') : t('billing.plan.downgradeBtn')}
+          </button>
+        ) : (
+          <button
+            onClick={props.onSubscribe}
+            disabled={props.loading}
+            style={{
+              width: '100%',
+              padding: '10px 16px',
+              borderRadius: 8,
+              border: 'none',
+              background: '#1f2937',
+              color: 'white',
+              fontWeight: 600,
+              fontSize: 14,
+              cursor: props.loading ? 'not-allowed' : 'pointer',
+              transition: 'background 0.15s ease',
+            }}
+            onMouseEnter={(e) => { if (!props.loading) e.currentTarget.style.background = '#0f172a'; }}
+            onMouseLeave={(e) => { if (!props.loading) e.currentTarget.style.background = '#1f2937'; }}
+          >
+            {props.loading ? t('billing.plan.processing') : t('billing.plan.subscribeBtn')}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
