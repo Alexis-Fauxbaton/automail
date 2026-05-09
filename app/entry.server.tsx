@@ -7,6 +7,7 @@ import { isbot } from "isbot";
 import { addDocumentResponseHeaders } from "./shopify.server";
 import { startAutoSyncLoop } from "./lib/mail/auto-sync";
 import { runBootCleanup } from "./lib/attachments/boot-cleanup";
+import { backfillBillingShopFlags } from "./lib/billing/migration";
 
 export const streamTimeout = 5000;
 
@@ -15,6 +16,7 @@ export const streamTimeout = 5000;
 // (HMR, etc.) is safe.
 startAutoSyncLoop();
 runBootCleanup().catch((err) => console.error("[entry.server] boot cleanup failed:", err));
+backfillBillingShopFlags().catch((err) => console.error("[billing-migration] backfill failed at boot:", err));
 
 export default async function handleRequest(
   request: Request,
