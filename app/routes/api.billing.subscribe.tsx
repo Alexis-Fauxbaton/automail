@@ -33,7 +33,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   const appUrl = process.env.SHOPIFY_APP_URL || process.env.HOST || "";
-  const returnUrl = `${appUrl}/app/billing?subscribed=1`;
+  // billing_status=pending lets the billing page distinguish "merchant came
+  // back after approving" from "merchant came back after declining". The loader
+  // checks whether an active subscription now exists to resolve which case it is.
+  const returnUrl = `${appUrl}/app/billing?billing_status=pending`;
   // eslint-disable-next-line no-undef
   const isTest = process.env.NODE_ENV !== "production";
 

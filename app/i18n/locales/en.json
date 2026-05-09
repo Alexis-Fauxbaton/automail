@@ -341,6 +341,7 @@
       "eyebrow": "Subscription",
       "lead": "Choose the plan that fits the volume of support emails you handle.",
       "subscribedSuccess": "Subscription confirmed — your plan is now active.",
+      "subscriptionDeclined": "Your subscription was not activated. You can choose a plan below and try again.",
       "scheduledChangeNotice": "Scheduled change: {{fromPlan}} → {{toPlan}} on {{date}}.",
       "currentState": "Current status: {{state}} (plan: {{plan}})",
       "cancelSubscription": "Cancel subscription",

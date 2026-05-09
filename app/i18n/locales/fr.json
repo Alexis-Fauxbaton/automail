@@ -341,6 +341,7 @@
       "eyebrow": "Abonnement",
       "lead": "Choisissez le plan adapté au volume d'emails support que vous traitez.",
       "subscribedSuccess": "Abonnement confirmé — votre plan est maintenant actif.",
+      "subscriptionDeclined": "Votre abonnement n'a pas été activé. Choisissez un plan ci-dessous et réessayez.",
       "scheduledChangeNotice": "Changement planifié : {{fromPlan}} → {{toPlan}} le {{date}}.",
       "currentState": "Statut actuel : {{state}} (plan : {{plan}})",
       "cancelSubscription": "Annuler l'abonnement",

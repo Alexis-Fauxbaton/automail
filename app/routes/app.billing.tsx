@@ -12,6 +12,21 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session, admin } = await authenticate.admin(request);
   const ent = await resolveEntitlements({ shop: session.shop, admin });
   const pendingChange = await getPendingChange(session.shop);
+
+  // Detect the billing-flow outcome from the URL.
+  // Shopify always redirects back to returnUrl after the billing confirmation
+  // dialog, whether the merchant approved or dismissed it. We set
+  // ?billing_status=pending on the returnUrl and then check whether a paid
+  // plan is active to distinguish approval from decline.
+  const url = new URL(request.url);
+  const billingStatus = url.searchParams.get("billing_status");
+  // If the merchant came back from billing with no active subscription,
+  // they declined (or an error occurred on Shopify's side).
+  const billingDeclined =
+    billingStatus === "pending" && ent.state !== "paid_active";
+  const billingConfirmed =
+    billingStatus === "pending" && ent.state === "paid_active";
+
   return {
     entitlements: {
       state: ent.state,
@@ -28,15 +43,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           effectiveAt: pendingChange.effectiveAt.toISOString(),
         }
       : null,
+    billingDeclined,
+    billingConfirmed,
   };
 };
 
 export default function BillingPage() {
-  const { entitlements, pendingChange } = useLoaderData<typeof loader>();
+  const { entitlements, pendingChange, billingDeclined, billingConfirmed } = useLoaderData<typeof loader>();
   const { t } = useTranslation();
   const subscribeFetcher = useFetcher<{ confirmationUrl?: string; error?: string }>();
   const cancelFetcher = useFetcher<{ cancelled?: boolean; scheduled?: boolean; cancelledScheduled?: boolean; error?: string }>();
   const [searchParams] = useSearchParams();
+  // Legacy ?subscribed=1 kept for backward compat; new flow uses billing_status.
   const justSubscribed = searchParams.get('subscribed') === '1';
 
   useEffect(() => {
@@ -81,10 +99,17 @@ export default function BillingPage() {
         </p>
       </header>
 
-      {justSubscribed && (
-        <div style={{ background: '#dcfce7', color: '#14532d', padding: '12px 16px', borderRadius: 8, marginBottom: 20, display: 'flex', alignItems: 'center', gap: 10, fontSize: 14 }}>
+      {(justSubscribed || billingConfirmed) && (
+        <div role="status" style={{ background: '#dcfce7', color: '#14532d', padding: '12px 16px', borderRadius: 8, marginBottom: 20, display: 'flex', alignItems: 'center', gap: 10, fontSize: 14 }}>
           <span aria-hidden style={{ display: 'inline-flex', width: 20, height: 20, borderRadius: '50%', background: '#16a34a', color: 'white', fontSize: 13, fontWeight: 700, alignItems: 'center', justifyContent: 'center' }}>✓</span>
           {t('billing.page.subscribedSuccess')}
+        </div>
+      )}
+
+      {billingDeclined && (
+        <div role="alert" style={{ background: '#fef2f2', color: '#991b1b', padding: '12px 16px', borderRadius: 8, marginBottom: 20, display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, border: '1px solid #fecaca' }}>
+          <span aria-hidden style={{ display: 'inline-flex', width: 20, height: 20, borderRadius: '50%', background: '#fecaca', color: '#991b1b', fontSize: 13, fontWeight: 700, alignItems: 'center', justifyContent: 'center' }}>!</span>
+          {t('billing.page.subscriptionDeclined')}
         </div>
       )}
 
