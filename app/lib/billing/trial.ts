@@ -2,7 +2,7 @@
  * Trial state derivation. Pure functions — no DB, no network.
  *
  * Trial duration is read from the plans catalog. The caller passes
- * the shop's installDate (looked up from BillingShopFlag) and the
+ * the shop's installDate (looked up from ShopFlag) and the
  * current time; we derive whether the trial is still active and how
  * many days remain.
  */

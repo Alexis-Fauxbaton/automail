@@ -1,5 +1,5 @@
 /**
- * One-time backfill: create a BillingShopFlag for every shop that has a
+ * One-time backfill: create a ShopFlag for every shop that has a
  * Shopify session but no flag yet.
  *
  * Why: the entitlements resolver creates flags lazily on first-touch, so
@@ -24,7 +24,7 @@ export async function backfillBillingShopFlags(): Promise<string[]> {
 
   if (sessions.length === 0) return [];
 
-  const existingFlags = await prisma.billingShopFlag.findMany({
+  const existingFlags = await prisma.shopFlag.findMany({
     where: { shop: { in: sessions.map((s) => s.shop) } },
     select: { shop: true },
   });
@@ -37,11 +37,11 @@ export async function backfillBillingShopFlags(): Promise<string[]> {
   if (missing.length === 0) return [];
 
   const now = new Date();
-  await prisma.billingShopFlag.createMany({
+  await prisma.shopFlag.createMany({
     data: missing.map((shop) => ({ shop, installDate: now, isInternal: false })),
     skipDuplicates: true,
   });
 
-  console.log(`[billing-migration] backfilled ${missing.length} BillingShopFlag rows: ${missing.join(', ')}`);
+  console.log(`[billing-migration] backfilled ${missing.length} ShopFlag rows: ${missing.join(', ')}`);
   return missing;
 }

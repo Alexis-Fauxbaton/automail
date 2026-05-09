@@ -25,7 +25,7 @@ vi.mock('../../mail/job-queue', () => ({
 }));
 
 async function seedShopWithDueSync(shop: string, installDate: Date) {
-  await testDb.billingShopFlag.create({
+  await testDb.shopFlag.create({
     data: { shop, installDate },
   });
   await testDb.mailConnection.create({

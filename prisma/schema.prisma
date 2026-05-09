@@ -439,9 +439,11 @@ model BillingScheduledChange {
 
 // Per-shop billing flags (internal/dev shops bypass entitlement checks).
 // installDate is used to compute trial expiry when no Shopify subscription exists yet.
-model BillingShopFlag {
-  shop        String   @id
-  isInternal  Boolean  @default(false)
-  installDate DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+model ShopFlag {
+  shop                  String    @id
+  isInternal            Boolean   @default(false)
+  installDate           DateTime  @default(now())
+  onboardingCompletedAt DateTime?
+  checklistDismissedAt  DateTime?
+  updatedAt             DateTime  @updatedAt
 }

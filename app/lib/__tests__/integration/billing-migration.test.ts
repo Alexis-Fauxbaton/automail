@@ -8,7 +8,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await cleanTestShop();
-  await testDb.billingShopFlag.deleteMany({ where: { shop: { in: ['legacy-a.myshopify.com', 'legacy-b.myshopify.com'] } } });
+  await testDb.shopFlag.deleteMany({ where: { shop: { in: ['legacy-a.myshopify.com', 'legacy-b.myshopify.com'] } } });
   await testDb.session.deleteMany({ where: { shop: { in: ['legacy-a.myshopify.com', 'legacy-b.myshopify.com'] } } });
 });
 
@@ -27,13 +27,13 @@ describe('backfillBillingShopFlags', () => {
     const created = await backfillBillingShopFlags();
     expect(created).toContain('legacy-a.myshopify.com');
 
-    const flag = await testDb.billingShopFlag.findUnique({
+    const flag = await testDb.shopFlag.findUnique({
       where: { shop: 'legacy-a.myshopify.com' },
     });
     expect(flag).not.toBeNull();
     expect(flag?.isInternal).toBe(false);
 
-    await testDb.billingShopFlag.deleteMany({ where: { shop: 'legacy-a.myshopify.com' } });
+    await testDb.shopFlag.deleteMany({ where: { shop: 'legacy-a.myshopify.com' } });
     await testDb.session.deleteMany({ where: { shop: 'legacy-a.myshopify.com' } });
   });
 
@@ -48,19 +48,19 @@ describe('backfillBillingShopFlags', () => {
         accessToken: 'x',
       },
     });
-    await testDb.billingShopFlag.create({
+    await testDb.shopFlag.create({
       data: { shop: 'legacy-b.myshopify.com', installDate: initial },
     });
 
     const created = await backfillBillingShopFlags();
     expect(created).not.toContain('legacy-b.myshopify.com');
 
-    const flag = await testDb.billingShopFlag.findUnique({
+    const flag = await testDb.shopFlag.findUnique({
       where: { shop: 'legacy-b.myshopify.com' },
     });
     expect(flag?.installDate.toISOString()).toBe(initial.toISOString());
 
-    await testDb.billingShopFlag.deleteMany({ where: { shop: 'legacy-b.myshopify.com' } });
+    await testDb.shopFlag.deleteMany({ where: { shop: 'legacy-b.myshopify.com' } });
     await testDb.session.deleteMany({ where: { shop: 'legacy-b.myshopify.com' } });
   });
 

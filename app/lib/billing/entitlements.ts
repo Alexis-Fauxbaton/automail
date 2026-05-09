@@ -6,7 +6,7 @@
  *   - trial.computeTrialState        → trial active/expired
  *   - usage.getUsage                 → current period draft count
  *   - mailConnection count           → mailbox usage
- *   - BillingShopFlag.isInternal     → bypass for dev/test shops
+ *   - ShopFlag.isInternal     → bypass for dev/test shops
  *
  * Everything is composed into a single `Entitlements` record consumed by
  * route loaders, action handlers, and UI components. Loaders should call
@@ -75,7 +75,7 @@ interface ResolveInput {
 export async function resolveEntitlements(input: ResolveInput): Promise<Entitlements> {
   const now = input.now ?? new Date();
 
-  const flag = await prisma.billingShopFlag.upsert({
+  const flag = await prisma.shopFlag.upsert({
     where: { shop: input.shop },
     create: { shop: input.shop, installDate: now },
     update: {},
