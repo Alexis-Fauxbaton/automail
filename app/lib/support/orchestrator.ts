@@ -7,6 +7,7 @@ import { generateLLMDraft } from "./llm-draft";
 import { parseMessage } from "./message-parser";
 import { DEFAULT_SETTINGS, getSettings, type SupportSettings } from "./settings";
 import type { TrackedCallContext } from "../llm/client";
+import { createLogger } from "../log/logger";
 import {
   type AdminGraphqlClient,
   searchOrders,
@@ -92,6 +93,16 @@ export async function analyzeSupportEmail(
 ): Promise<SupportAnalysisExtended> {
   const warnings: Warning[] = [];
   const conversation = buildConversationMeta(input.conversationMessages);
+  const log = createLogger({
+    shop: input.shop ?? "<unknown>",
+    mod: "orchestrator",
+    ...(input.trackedCallContext?.emailId
+      ? { emailId: input.trackedCallContext.emailId }
+      : {}),
+    ...(input.trackedCallContext?.threadId
+      ? { threadId: input.trackedCallContext.threadId }
+      : {}),
+  });
 
   // 0. Load per-shop settings
   let settings: SupportSettings | undefined = input.settings;
@@ -99,7 +110,7 @@ export async function analyzeSupportEmail(
     try {
       settings = await getSettings(input.shop);
     } catch (err) {
-      console.error("[orchestrator] Could not load settings:", err);
+      log.error({ err }, "Could not load settings");
     }
   }
   const resolvedSettings: SupportSettings =
@@ -163,7 +174,7 @@ export async function analyzeSupportEmail(
         code: "shopify_api_error",
         message: "Shopify order search failed.",
       });
-      console.error("[orchestrator] Shopify search failed:", err);
+      log.error({ err }, "Shopify search failed");
     }
   }
 
@@ -196,7 +207,7 @@ export async function analyzeSupportEmail(
         code: "tracking_lookup_error",
         message: "Tracking lookup failed; using Shopify-only data.",
       });
-      console.error("[orchestrator] Tracking lookup failed:", err);
+      log.error({ err }, "Tracking lookup failed");
     }
   }
 
@@ -218,7 +229,7 @@ export async function analyzeSupportEmail(
         code: "crawl_error",
         message: "Context retrieval failed; draft based on Shopify data only.",
       });
-      console.error("[orchestrator] Crawler failed:", err);
+      log.error({ err }, "Crawler failed");
     }
   }
 
