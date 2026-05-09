@@ -1,4 +1,4 @@
-import { useFetcher } from 'react-router';
+import { Link, useFetcher } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import type { ChecklistState } from '../../lib/onboarding/state';
 
@@ -32,7 +32,7 @@ export function OnboardingChecklist({ state, dismissed }: Props) {
           </s-paragraph>
           <s-paragraph>
             <span aria-hidden>{state.toneAndSignature ? '✅' : '⬜'}</span>{' '}
-            <a href="/app/settings">{t('onboarding.checklist.toneAndSignature')}</a>
+            <Link to="/app/settings">{t('onboarding.checklist.toneAndSignature')}</Link>
           </s-paragraph>
         </s-stack>
         <s-button onClick={onDismiss}>{t('onboarding.checklist.dismiss')}</s-button>
