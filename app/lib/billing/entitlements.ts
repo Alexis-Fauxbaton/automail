@@ -77,10 +77,10 @@ export async function resolveEntitlements(input: ResolveInput): Promise<Entitlem
 
   const flag = await prisma.shopFlag.upsert({
     where: { shop: input.shop },
-    create: { shop: input.shop, installDate: now },
+    create: { shop: input.shop, firstInstallDate: now },
     update: {},
   });
-  const installDate = flag.installDate;
+  const firstInstallDate = flag.firstInstallDate;
   const isInternal = flag.isInternal;
 
   // Internal bypass — pro-level entitlements with infinite quota.
@@ -92,7 +92,7 @@ export async function resolveEntitlements(input: ResolveInput): Promise<Entitlem
   const active = await resolveActivePlan({ shop: input.shop, admin: input.admin });
 
   // Trial state (only relevant if no paid plan).
-  const trial = computeTrialState({ installDate, now });
+  const trial = computeTrialState({ firstInstallDate, now });
 
   // Mailbox usage (always read).
   const mailboxCount = await prisma.mailConnection.count({ where: { shop: input.shop } });

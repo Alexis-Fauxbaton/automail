@@ -2,7 +2,7 @@
  * Trial state derivation. Pure functions — no DB, no network.
  *
  * Trial duration is read from the plans catalog. The caller passes
- * the shop's installDate (looked up from ShopFlag) and the
+ * the shop's firstInstallDate (looked up from ShopFlag) and the
  * current time; we derive whether the trial is still active and how
  * many days remain.
  */
@@ -22,13 +22,13 @@ export interface TrialState {
 }
 
 export interface ComputeTrialStateInput {
-  installDate: Date;
+  firstInstallDate: Date;
   now: Date;
 }
 
-export function computeTrialState({ installDate, now }: ComputeTrialStateInput): TrialState {
+export function computeTrialState({ firstInstallDate, now }: ComputeTrialStateInput): TrialState {
   const durationDays = PLANS.trial.durationDays ?? 14;
-  const expiresAt = new Date(installDate.getTime() + durationDays * DAY_MS);
+  const expiresAt = new Date(firstInstallDate.getTime() + durationDays * DAY_MS);
   const remainingMs = expiresAt.getTime() - now.getTime();
 
   if (remainingMs <= 0) {

@@ -22,7 +22,7 @@ vi.mock('../../gmail/pipeline', async () => {
 describe('handleRedraft — quota enforcement', () => {
   it('refuses when shop is at quota cap on Starter', async () => {
     await testDb.shopFlag.create({
-      data: { shop: TEST_SHOP, installDate: new Date(Date.now() - 30 * 86400000) },
+      data: { shop: TEST_SHOP, firstInstallDate: new Date(Date.now() - 30 * 86400000) },
     });
     const periodStart = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1));
     await testDb.billingUsage.create({

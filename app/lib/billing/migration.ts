@@ -38,7 +38,7 @@ export async function backfillBillingShopFlags(): Promise<string[]> {
 
   const now = new Date();
   await prisma.shopFlag.createMany({
-    data: missing.map((shop) => ({ shop, installDate: now, isInternal: false })),
+    data: missing.map((shop) => ({ shop, firstInstallDate: now, isInternal: false })),
     skipDuplicates: true,
   });
 

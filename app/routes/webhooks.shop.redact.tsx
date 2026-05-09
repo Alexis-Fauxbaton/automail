@@ -28,6 +28,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   await db.mailConnection.deleteMany({ where: { shop } });
   await db.supportSettings.deleteMany({ where: { shop } });
   await db.session.deleteMany({ where: { shop } });
+  // GDPR: full teardown. ShopFlag holds firstInstallDate, onboarding state,
+  // and the isInternal bypass — none of which we may keep after redact.
+  await db.shopFlag.deleteMany({ where: { shop } });
 
   return new Response();
 };

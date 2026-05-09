@@ -13,18 +13,18 @@ beforeEach(cleanTestShop);
 afterAll(disconnectTestDb);
 
 describe('ensureShopFlag', () => {
-  it('creates a row with installDate=now if none exists', async () => {
+  it('creates a row with firstInstallDate=now if none exists', async () => {
     const flag = await ensureShopFlag(TEST_SHOP);
     expect(flag.shop).toBe(TEST_SHOP);
     expect(flag.onboardingCompletedAt).toBeNull();
     expect(flag.checklistDismissedAt).toBeNull();
   });
 
-  it('is idempotent (returns existing row, does not reset installDate)', async () => {
+  it('is idempotent (returns existing row, does not reset firstInstallDate)', async () => {
     const first = await ensureShopFlag(TEST_SHOP);
     await new Promise((r) => setTimeout(r, 10));
     const second = await ensureShopFlag(TEST_SHOP);
-    expect(second.installDate.getTime()).toBe(first.installDate.getTime());
+    expect(second.firstInstallDate.getTime()).toBe(first.firstInstallDate.getTime());
   });
 });
 

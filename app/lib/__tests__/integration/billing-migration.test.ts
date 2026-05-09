@@ -49,7 +49,7 @@ describe('backfillBillingShopFlags', () => {
       },
     });
     await testDb.shopFlag.create({
-      data: { shop: 'legacy-b.myshopify.com', installDate: initial },
+      data: { shop: 'legacy-b.myshopify.com', firstInstallDate: initial },
     });
 
     const created = await backfillBillingShopFlags();
@@ -58,7 +58,7 @@ describe('backfillBillingShopFlags', () => {
     const flag = await testDb.shopFlag.findUnique({
       where: { shop: 'legacy-b.myshopify.com' },
     });
-    expect(flag?.installDate.toISOString()).toBe(initial.toISOString());
+    expect(flag?.firstInstallDate.toISOString()).toBe(initial.toISOString());
 
     await testDb.shopFlag.deleteMany({ where: { shop: 'legacy-b.myshopify.com' } });
     await testDb.session.deleteMany({ where: { shop: 'legacy-b.myshopify.com' } });

@@ -42,7 +42,7 @@ describe('app.onboarding loader', () => {
     await testDb.shopFlag.create({
       data: {
         shop: TEST_SHOP,
-        installDate: new Date(),
+        firstInstallDate: new Date(),
         onboardingCompletedAt: new Date(),
       },
     });
@@ -57,7 +57,7 @@ describe('app.onboarding loader', () => {
 
   it('auto-completes onboarding and redirects to /app/inbox when MailConnection already exists', async () => {
     await testDb.shopFlag.create({
-      data: { shop: TEST_SHOP, installDate: new Date() },
+      data: { shop: TEST_SHOP, firstInstallDate: new Date() },
     });
     await testDb.mailConnection.create({
       data: {
@@ -82,7 +82,7 @@ describe('app.onboarding loader', () => {
 
   it('renders the wizard (returns auth URLs) when not onboarded and no MailConnection', async () => {
     await testDb.shopFlag.create({
-      data: { shop: TEST_SHOP, installDate: new Date() },
+      data: { shop: TEST_SHOP, firstInstallDate: new Date() },
     });
 
     const result = await runLoader();

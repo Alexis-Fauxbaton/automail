@@ -20,7 +20,7 @@ describe('dashboard loader — Starter gating', () => {
     await testDb.shopFlag.create({
       data: {
         shop: TEST_SHOP,
-        installDate: new Date(Date.now() - 30 * 86400000),
+        firstInstallDate: new Date(Date.now() - 30 * 86400000),
         onboardingCompletedAt: new Date(Date.now() - 30 * 86400000),
       },
     });

@@ -442,7 +442,9 @@ model BillingScheduledChange {
 model ShopFlag {
   shop                  String    @id
   isInternal            Boolean   @default(false)
-  installDate           DateTime  @default(now())
+  // First time the shop ever installed the app. Immutable after creation.
+  // Used as trial-start anchor so uninstall/reinstall doesn't reset trial.
+  firstInstallDate      DateTime  @default(now())
   onboardingCompletedAt DateTime?
   checklistDismissedAt  DateTime?
   updatedAt             DateTime  @updatedAt

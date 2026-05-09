@@ -26,11 +26,11 @@ function makeAdmin(activeSubscriptions: any[]) {
   };
 }
 
-async function setInstallDate(shop: string, installDate: Date) {
+async function setInstallDate(shop: string, firstInstallDate: Date) {
   await testDb.shopFlag.upsert({
     where: { shop },
-    create: { shop, installDate },
-    update: { installDate },
+    create: { shop, firstInstallDate },
+    update: { firstInstallDate },
   });
 }
 
@@ -188,7 +188,7 @@ describe('resolveEntitlements — internal flag bypass', () => {
   it('grants pro-level entitlements when isInternal=true regardless of plan', async () => {
     const now = new Date('2026-05-08T12:00:00Z');
     await testDb.shopFlag.create({
-      data: { shop: TEST_SHOP, isInternal: true, installDate: new Date(now.getTime() - 30 * DAY_MS) },
+      data: { shop: TEST_SHOP, isInternal: true, firstInstallDate: new Date(now.getTime() - 30 * DAY_MS) },
     });
 
     const ent = await resolveEntitlements({
@@ -205,7 +205,7 @@ describe('resolveEntitlements — internal flag bypass', () => {
 });
 
 describe('resolveEntitlements — first-touch (no BillingShopFlag yet)', () => {
-  it('creates the flag with installDate=now and starts trial', async () => {
+  it('creates the flag with firstInstallDate=now and starts trial', async () => {
     const now = new Date('2026-05-08T12:00:00Z');
     // No setInstallDate call — shop has nothing yet
     const ent = await resolveEntitlements({
@@ -219,7 +219,7 @@ describe('resolveEntitlements — first-touch (no BillingShopFlag yet)', () => {
     // Verify the flag was created
     const flag = await testDb.shopFlag.findUnique({ where: { shop: TEST_SHOP } });
     expect(flag).not.toBeNull();
-    expect(flag?.installDate.toISOString()).toBe(now.toISOString());
+    expect(flag?.firstInstallDate.toISOString()).toBe(now.toISOString());
     expect(flag?.isInternal).toBe(false);
   });
 
@@ -313,7 +313,7 @@ describe('resolveEntitlements — isSyncSuspended', () => {
   it('false for internal (bypass)', async () => {
     const now = new Date('2026-05-08T12:00:00Z');
     await testDb.shopFlag.create({
-      data: { shop: TEST_SHOP, isInternal: true, installDate: new Date(now.getTime() - 30 * DAY_MS) },
+      data: { shop: TEST_SHOP, isInternal: true, firstInstallDate: new Date(now.getTime() - 30 * DAY_MS) },
     });
     const ent = await resolveEntitlements({ shop: TEST_SHOP, admin: makeAdmin([]) as any, now });
     expect(ent.isSyncSuspended).toBe(false);

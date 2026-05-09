@@ -24,9 +24,9 @@ vi.mock('../../mail/job-queue', () => ({
   enqueueJob: vi.fn().mockResolvedValue(undefined),
 }));
 
-async function seedShopWithDueSync(shop: string, installDate: Date) {
+async function seedShopWithDueSync(shop: string, firstInstallDate: Date) {
   await testDb.shopFlag.create({
-    data: { shop, installDate },
+    data: { shop, firstInstallDate },
   });
   await testDb.mailConnection.create({
     data: {
