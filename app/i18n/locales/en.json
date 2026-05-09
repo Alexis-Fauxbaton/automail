@@ -417,5 +417,26 @@
       "order_not_found": "No order found for this number.",
       "order_ambiguous": "Multiple orders match — please be more specific."
     }
+  },
+  "onboarding": {
+    "welcome": {
+      "title": "Welcome to Automail",
+      "body": "Automail helps you reply faster to support emails by drafting answers grounded in your real Shopify order and tracking data.",
+      "cta": "Get started"
+    },
+    "connect": {
+      "title": "Connect your mailbox",
+      "body": "Pick your provider. Automail only reads your support emails to draft replies.",
+      "gmail": "Connect with Gmail",
+      "outlook": "Connect with Outlook",
+      "zoho": "Connect with Zoho"
+    },
+    "checklist": {
+      "title": "Getting started",
+      "progress": "{{done}} of {{total}} done",
+      "firstDraft": "Generate your first draft",
+      "toneAndSignature": "Set your reply tone and signature",
+      "dismiss": "Dismiss"
+    }
   }
 }

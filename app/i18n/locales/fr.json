@@ -417,5 +417,26 @@
       "order_not_found": "Aucune commande trouvée pour ce numéro.",
       "order_ambiguous": "Plusieurs commandes correspondent — précisez le numéro."
     }
+  },
+  "onboarding": {
+    "welcome": {
+      "title": "Bienvenue sur Automail",
+      "body": "Automail vous aide à répondre plus vite à vos emails de support en générant des brouillons appuyés sur les vraies données de vos commandes Shopify et de leur suivi.",
+      "cta": "Commencer"
+    },
+    "connect": {
+      "title": "Connectez votre boîte mail",
+      "body": "Choisissez votre fournisseur. Automail lit uniquement vos emails de support pour générer des brouillons.",
+      "gmail": "Se connecter avec Gmail",
+      "outlook": "Se connecter avec Outlook",
+      "zoho": "Se connecter avec Zoho"
+    },
+    "checklist": {
+      "title": "Premiers pas",
+      "progress": "{{done}} sur {{total}} terminés",
+      "firstDraft": "Générer votre premier brouillon",
+      "toneAndSignature": "Définir votre ton et votre signature",
+      "dismiss": "Masquer"
+    }
   }
 }
