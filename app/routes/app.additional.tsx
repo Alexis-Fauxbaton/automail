@@ -1,3 +1,13 @@
+import type { LoaderFunctionArgs } from "react-router";
+import { authenticate } from "../shopify.server";
+import { requireOnboardingComplete } from "../lib/onboarding/guard";
+
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const { session } = await authenticate.admin(request);
+  await requireOnboardingComplete(session.shop);
+  return null;
+};
+
 export default function AdditionalPage() {
   return (
     <s-page heading="Additional page">

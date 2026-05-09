@@ -3,6 +3,7 @@ import { Form, useActionData, useNavigation } from "react-router";
 import { useTranslation } from "react-i18next";
 
 import { authenticate } from "../shopify.server";
+import { requireOnboardingComplete } from "../lib/onboarding/guard";
 import {
   analyzeSupportEmail,
   type SupportAnalysisExtended,
@@ -11,7 +12,8 @@ import { AnalysisDisplay } from "../components/SupportAnalysisDisplay";
 import { SparklesIcon } from "../components/ui";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
+  await requireOnboardingComplete(session.shop);
   return null;
 };
 

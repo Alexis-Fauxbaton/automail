@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { useMobile } from "../hooks/useMobile";
 
 import { authenticate } from "../shopify.server";
+import { requireOnboardingComplete } from "../lib/onboarding/guard";
 import { getAuthUrl as getGmailAuthUrl, getConnection } from "../lib/gmail/auth";
 import { getZohoAuthUrl } from "../lib/zoho/auth";
 import { getAuthUrl as getOutlookAuthUrl } from "../lib/outlook/auth";
@@ -60,6 +61,7 @@ const _refreshedEmailIds = new Set<string>();
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
+  await requireOnboardingComplete(session.shop);
   const shop = session.shop;
   const connection = await getConnection(shop);
 

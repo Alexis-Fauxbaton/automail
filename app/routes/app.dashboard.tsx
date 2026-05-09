@@ -3,6 +3,7 @@ import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData, useSearchParams, Link } from "react-router";
 import { useTranslation } from "react-i18next";
 import { authenticate } from "../shopify.server";
+import { requireOnboardingComplete } from "../lib/onboarding/guard";
 import { resolveEntitlements } from "../lib/billing/entitlements";
 import {
   getPeriodBounds,
@@ -43,6 +44,7 @@ import {
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session, admin } = await authenticate.admin(request);
+  await requireOnboardingComplete(session.shop);
   const shop = session.shop;
 
   const ent = await resolveEntitlements({ shop, admin });
