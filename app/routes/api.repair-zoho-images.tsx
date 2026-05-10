@@ -6,15 +6,28 @@ import { createZohoClient } from "../lib/zoho/client";
 /**
  * GET /api/repair-zoho-images
  *
- * One-shot route that finds all IncomingEmail rows for the shop whose bodyHtml
- * still contains raw Zoho /mail/ImageDisplay? URLs and re-fetches them so that
- * inline images are embedded as data: URIs.
+ * Internal-only one-shot maintenance route. Finds IncomingEmail rows for the
+ * shop whose bodyHtml still contains raw Zoho /mail/ImageDisplay? URLs and
+ * re-fetches them so inline images are embedded as data: URIs.
+ *
+ * Gated behind `ShopFlag.isInternal` so App Store reviewers (and any
+ * production merchant) cannot trigger it. Operators flip the flag in DB to
+ * use the route, then flip it back.
  *
  * Processes up to 20 emails per call to avoid timeouts.
  */
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
+
+  const flag = await prisma.shopFlag.findUnique({
+    where: { shop },
+    select: { isInternal: true },
+  });
+  if (!flag?.isInternal) {
+    // Don't reveal the route exists.
+    return new Response("Not found", { status: 404 });
+  }
 
   const emails = await prisma.incomingEmail.findMany({
     where: {

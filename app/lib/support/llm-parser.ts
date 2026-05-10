@@ -37,6 +37,8 @@ Intent definitions:
 Rules:
 - Extract only what is explicitly written. Never guess or invent data.
 - For orderNumber: extract digits only (e.g. "#1002" → "1002", "commande 1002" → "1002")
+- "email" must be the CUSTOMER's email — the person writing TO the store. NEVER extract the merchant's own address (the store's support inbox), even if it appears in quoted reply blocks (lines starting with ">", or after markers like "wrote:", "a écrit :", "On <date>, <name> <email> wrote:").
+- "customerName" must be a real person or company name (typically 1-4 words, no verbs). Never extract a phrase or a sentence fragment as a name (e.g. do not return "still no news", "always missing", or any fragment that looks like prose).
 - Return valid JSON only. No explanation, no markdown, just the JSON object.`;
 
 export interface LLMParseResult {
@@ -49,6 +51,10 @@ export interface LLMParseResult {
 export async function llmParseEmail(
   parsed: ParsedEmail,
   ctx?: Partial<TrackedCallContext>,
+  /** Optional: the merchant's own connected mailbox address. When provided,
+   * it is filtered out of the extracted "email" so the customer email is
+   * never confused with the support inbox quoted in a reply chain. */
+  merchantMailboxAddress?: string,
 ): Promise<LLMParseResult> {
   const client = getOpenAIClient();
 
@@ -100,10 +106,17 @@ export async function llmParseEmail(
     const intents = normalizeIntents(parsed_json.intents, parsedIntent);
     const intent = intents[0] ?? "unknown";
 
+    const rawEmail = strOrUndefined(parsed_json.email);
+    const filteredEmail = merchantMailboxAddress &&
+      rawEmail &&
+      rawEmail.toLowerCase() === merchantMailboxAddress.toLowerCase()
+      ? undefined
+      : rawEmail;
+
     const identifiers: ExtractedIdentifiers = {
       orderNumber: strOrUndefined(parsed_json.orderNumber),
-      email: strOrUndefined(parsed_json.email),
-      customerName: strOrUndefined(parsed_json.customerName),
+      email: filteredEmail,
+      customerName: looksLikeName(strOrUndefined(parsed_json.customerName)),
       trackingNumber: strOrUndefined(parsed_json.trackingNumber),
     };
 
@@ -130,6 +143,23 @@ function normalizeIntents(value: unknown, primary: SupportIntent): SupportIntent
 function coerceIntent(value: unknown): SupportIntent {
   if (value === "package_stuck") return "delivery_delay";
   return VALID_INTENTS.includes(value as SupportIntent) ? (value as SupportIntent) : "unknown";
+}
+
+/**
+ * Defensive heuristic: reject "names" that are clearly sentence fragments
+ * extracted from email body text rather than real person/company names.
+ * Real names are 1-4 short tokens, no verbs, no leading articles.
+ */
+function looksLikeName(candidate: string | undefined): string | undefined {
+  if (!candidate) return undefined;
+  const trimmed = candidate.trim();
+  if (trimmed.length === 0 || trimmed.length > 60) return undefined;
+  const tokens = trimmed.split(/\s+/);
+  if (tokens.length > 4) return undefined;
+  // Common French/English sentence-fragment markers that should never be a name.
+  const fragmentMarkers = /\b(toujours|jamais|encore|sans|avec|pour|dans|que|qui|comme|parce|still|never|always|without|because|since)\b/i;
+  if (fragmentMarkers.test(trimmed)) return undefined;
+  return trimmed;
 }
 
 function strOrUndefined(val: unknown): string | undefined {

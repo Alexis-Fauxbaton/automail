@@ -5,6 +5,7 @@
     "emailInbox": "Boîte mail",
     "dashboard": "Dashboard",
     "settings": "Paramètres",
+    "billing": "Abonnement",
     "help": "Aide",
     "languageLabel": "Langue",
     "errorTitle": "Une erreur s'est produite",
@@ -56,6 +57,43 @@
     "fieldCustomer": "Client",
     "fieldFulfillment": "Expédition",
     "fieldPayment": "Paiement",
+    "orderFulfillmentStatus": {
+      "FULFILLED": "Expédiée",
+      "UNFULFILLED": "Non expédiée",
+      "PARTIALLY_FULFILLED": "Partiellement expédiée",
+      "RESTOCKED": "Réapprovisionnée",
+      "ON_HOLD": "En attente",
+      "PENDING_FULFILLMENT": "En attente d'expédition",
+      "OPEN": "Ouverte",
+      "IN_PROGRESS": "En cours",
+      "SCHEDULED": "Planifiée"
+    },
+    "orderPaymentStatus": {
+      "PAID": "Payée",
+      "PENDING": "En attente",
+      "AUTHORIZED": "Autorisée",
+      "PARTIALLY_PAID": "Partiellement payée",
+      "REFUNDED": "Remboursée",
+      "PARTIALLY_REFUNDED": "Partiellement remboursée",
+      "VOIDED": "Annulée",
+      "EXPIRED": "Expirée",
+      "OVERPAID": "Trop perçu"
+    },
+    "trackingStatusValues": {
+      "InTransit": "En transit",
+      "Delivered": "Livré",
+      "Exception": "Anomalie",
+      "OutForDelivery": "En cours de livraison",
+      "AvailableForPickup": "Disponible en point relais",
+      "FailedAttempt": "Tentative échouée",
+      "PickedUp": "Pris en charge",
+      "Returned": "Retourné",
+      "Pending": "En attente",
+      "InfoReceived": "Pré-information",
+      "Expired": "Expiré",
+      "Undelivered": "Non livré",
+      "Unknown": "Inconnu"
+    },
     "badge17track": "17track",
     "badgeShopify": "Shopify",
     "badgeInferred": "Inféré",
@@ -143,7 +181,7 @@
     "kpiEmailsSent": "Mails envoyés",
     "kpiMedianResponse": "Délai 1re réponse",
     "kpiReopened": "Threads ré-ouverts",
-    "kpiDraftsSent": "Drafts utilisés",
+    "kpiDraftsSent": "Brouillons utilisés",
     "kpiVolume": "Emails support",
     "comingSoon": "Bientôt disponible",
     "chartTitle": "Tendances sur la période",
@@ -176,7 +214,7 @@
     "draftEditedLabel": "Modifié",
     "draftIgnoredLabel": "Ignoré",
     "productivityTitle": "Productivité IA",
-    "productivitySubtitle": "Utilisation des drafts générés · calculé heuristiquement jusqu'à l'envoi natif",
+    "productivitySubtitle": "Utilisation des brouillons générés · calculé heuristiquement jusqu'à l'envoi natif",
     "heatmapTitle": "Pics d'activité",
     "heatmapSubtitle": "Emails support reçus par jour × heure",
     "topIntents": "Top intentions",
@@ -233,6 +271,7 @@
     "filterFiltered": "Filtré (Tier 1)",
     "resetFilters": "Réinitialiser",
     "noEmailsMatch": "Aucun email ne correspond aux filtres actifs.",
+    "disconnected": "Messagerie déconnectée. Rafraîchissez la page pour vous reconnecter.",
     "totalMails": "Total mails",
     "totalMailsHelper": "Tous statuts confondus",
     "tier1": "Tier 1 (filtres)",
@@ -262,8 +301,8 @@
     "priorContactAddress": "Contact précédent (même adresse)",
     "retryAnalysis": "Relancer l'analyse",
     "generateDraft": "Générer le brouillon",
-    "regenerateDraft": "Regénérer le brouillon",
-    "regenerating": "Regénération…",
+    "regenerateDraft": "Régénérer le brouillon",
+    "regenerating": "Régénération…",
     "updateTracking": "Mettre à jour le tracking",
     "refreshing": "Actualisation…",
     "lastUpdated": "Mis à jour {{when}}",
@@ -271,14 +310,17 @@
     "editableDraft": "Brouillon modifiable",
     "draftVersion": "Version {{n}} (lecture seule)",
     "adjustDraft": "Personnaliser le brouillon",
+    "adjustDraftPlaceholder": "ex. : ton plus formel, mentionner la politique de remboursement, raccourcir…",
     "refineWithAi": "Affiner avec l'IA",
-    "refining": "Raffinage…",
+    "refining": "Affinage…",
     "filesKept": "Les fichiers ajoutés sont conservés 7 jours",
     "uploadFailed": "Échec de l'envoi",
     "noDraftYet": "Pas encore de brouillon. Cliquez sur « Générer le brouillon » ci-dessus.",
     "orderCustomer": "Client",
     "orderName": "Commande",
     "orderItems": "Articles",
+    "orderItemsCount_one": "{{count}} article",
+    "orderItemsCount_other": "{{count}} articles",
     "orderStatus": "Statut",
     "syncReport": "Sync : {{total}} emails traités, {{support}} support, {{uncertain}} incertains, {{filtered}} filtrés{{errors}}.",
     "syncErrors": ", {{n}} erreurs",
@@ -304,7 +346,7 @@
     "timeAgoMinutes": "il y a {{n}}m",
     "timeAgoHours": "il y a {{n}}h",
     "timeAgoDays": "il y a {{n}}j",
-    "timeAgoWeeks": "il y a {{n}}sem",
+    "timeAgoWeeks": "il y a {{n}} sem.",
     "justNow": "à l'instant",
     "sectionOrderContext": "Contexte commande",
     "sectionSuggestedDraft": "Brouillon IA suggéré",
@@ -328,11 +370,76 @@
   },
   "privacy": {
     "title": "Politique de confidentialité",
-    "lastUpdated": "Dernière mise à jour : avril 2026"
+    "lastUpdated": "Dernière mise à jour : mai 2026"
   },
   "common": {
     "cancel": "Annuler",
-    "save": "Enregistrer"
+    "save": "Enregistrer",
+    "dismiss": "Fermer"
+  },
+  "billing": {
+    "page": {
+      "title": "Facturation & abonnement",
+      "eyebrow": "Abonnement",
+      "lead": "Choisissez le plan adapté au volume d'emails support que vous traitez.",
+      "subscribedSuccess": "Abonnement confirmé — votre plan est maintenant actif.",
+      "subscriptionDeclined": "Votre abonnement n'a pas été activé. Choisissez un plan ci-dessous et réessayez.",
+      "scheduledChangeNotice": "Changement planifié : {{fromPlan}} → {{toPlan}} le {{date}}.",
+      "currentState": "Statut actuel : {{state}} (plan : {{plan}})",
+      "cancelSubscription": "Annuler l'abonnement",
+      "cancelScheduled": "Annuler ce changement"
+    },
+    "plan": {
+      "draftsPerMonth_one": "{{count}} brouillon / mois",
+      "draftsPerMonth_other": "{{count}} brouillons / mois",
+      "maxMailboxes_one": "{{count}} boîte mail connectée",
+      "maxMailboxes_other": "{{count}} boîtes mail connectées",
+      "advancedDashboard_one": "Dashboard avancé — jusqu'à {{count}} jour d'historique",
+      "advancedDashboard_other": "Dashboard avancé — jusqu'à {{count}} jours d'historique",
+      "basicDashboard_one": "Dashboard de base — jusqu'à {{count}} jour d'historique",
+      "basicDashboard_other": "Dashboard de base — jusqu'à {{count}} jours d'historique",
+      "currentPlan": "Plan actuel",
+      "subscribeBtn": "S'abonner",
+      "downgradeBtn": "Passer à ce plan",
+      "processing": "Traitement…",
+      "recommended": "Recommandé",
+      "perMonth": "mois"
+    },
+    "trialDaysLeft_one": "Essai — {{count}} jour restant",
+    "trialDaysLeft_other": "Essai — {{count}} jours restants",
+    "trialExpired": "Essai terminé",
+    "draftsCount": "{{used}} / {{limit}} brouillons",
+    "upgradeCta": "Passer à Pro",
+    "choosePlan": "Choisir un plan",
+    "dashboard": {
+      "gated": {
+        "default": "Disponible sur Pro",
+        "heatmap": "La heatmap d'activité est disponible sur Pro",
+        "alerts": "Les alertes d'anomalies sont disponibles sur Pro",
+        "reopened": "Les threads rouverts sont disponibles sur Pro"
+      }
+    },
+    "trial": {
+      "activeBanner_one": "Il vous reste {{count}} jour d'essai. Choisissez un plan pour continuer au-delà.",
+      "activeBanner_other": "Il vous reste {{count}} jours d'essai. Choisissez un plan pour continuer au-delà.",
+      "expiredBanner": "Votre essai est terminé. Choisissez un plan pour continuer à utiliser Automail."
+    },
+    "banner": {
+      "warning": "Vous avez utilisé {{used}} de vos {{limit}} brouillons ce mois-ci.",
+      "critical": "Presque à court : {{used}} brouillons utilisés sur {{limit}} ce mois-ci.",
+      "exceeded": "Quota atteint ({{used}} / {{limit}}) — sync suspendue. Passez à un plan supérieur pour continuer."
+    },
+    "modal": {
+      "exceededTitle": "Quota atteint pour ce mois ({{used}} / {{limit}} brouillons)",
+      "exceededBody": "Passez à Pro pour continuer immédiatement, ou attendez le 1er du mois prochain pour la réinitialisation.",
+      "lastUsedTitle": "Vous venez d'utiliser votre dernier brouillon du mois",
+      "lastUsedBody": "{{used}} brouillons utilisés sur {{limit}}. Génération en pause jusqu'au prochain mois ou upgrade.",
+      "later": "Plus tard",
+      "viewPlans": "Voir les plans"
+    },
+    "syncSuspended": {
+      "banner": "La synchronisation de votre boîte mail est en pause — votre quota est épuisé ou votre essai est terminé. Passez à un plan supérieur ou attendez la réinitialisation mensuelle pour reprendre."
+    }
   },
   "classification": {
     "editTitle": "Modifier les informations",
@@ -351,6 +458,27 @@
       "candidate_mismatch": "La commande sélectionnée n'existe plus.",
       "order_not_found": "Aucune commande trouvée pour ce numéro.",
       "order_ambiguous": "Plusieurs commandes correspondent — précisez le numéro."
+    }
+  },
+  "onboarding": {
+    "welcome": {
+      "title": "Bienvenue sur Automail",
+      "body": "Automail vous aide à répondre plus vite à vos emails de support en générant des brouillons appuyés sur les vraies données de vos commandes Shopify et de leur suivi.",
+      "cta": "Commencer"
+    },
+    "connect": {
+      "title": "Connectez votre boîte mail",
+      "body": "Choisissez votre fournisseur. Automail lit uniquement vos emails de support pour générer des brouillons.",
+      "gmail": "Se connecter avec Gmail",
+      "outlook": "Se connecter avec Outlook",
+      "zoho": "Se connecter avec Zoho"
+    },
+    "checklist": {
+      "title": "Premiers pas",
+      "progress": "{{done}} sur {{total}} terminés",
+      "firstDraft": "Générer votre premier brouillon",
+      "toneAndSignature": "Définir votre ton et votre signature",
+      "dismiss": "Masquer"
     }
   }
 }

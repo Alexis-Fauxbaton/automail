@@ -1,8 +1,10 @@
 import { useEffect, useState, Suspense, lazy } from "react";
 import type { LoaderFunctionArgs } from "react-router";
-import { useLoaderData, useSearchParams } from "react-router";
+import { useLoaderData, useSearchParams, Link } from "react-router";
 import { useTranslation } from "react-i18next";
 import { authenticate } from "../shopify.server";
+import { requireOnboardingComplete } from "../lib/onboarding/guard";
+import { resolveEntitlements } from "../lib/billing/entitlements";
 import {
   getPeriodBounds,
   getDashboardKpis,
@@ -41,19 +43,29 @@ import {
 // ---------------------------------------------------------------------------
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
+  await requireOnboardingComplete(session.shop, request);
   const shop = session.shop;
 
+  const ent = await resolveEntitlements({ shop, admin });
+  const maxDays = ent.dashboardMaxRangeDays;
+
   const url = new URL(request.url);
-  const range = url.searchParams.get("range") ?? "30d";
+  let range = url.searchParams.get("range") ?? "30d";
+  const requestedDays = parseRangeDays(range);
+  if (requestedDays > maxDays) {
+    range = maxDays === 7 ? "7d" : `${maxDays}d`;
+  }
   const from = url.searchParams.get("from") ?? undefined;
   const to = url.searchParams.get("to") ?? undefined;
 
   const bounds = getPeriodBounds(range, from, to);
   const { start, end, prevStart, prevEnd } = bounds;
 
-  // Fetch top intents first (limit=8): first 5 go to UI, all 8 passed to alerts.
-  const topIntentsAll = await getTopIntentsWithPerf(shop, start, end, 8).catch(() => [] as IntentPerf[]);
+  // Fetch top intents: 8 for advanced (5 shown + 8 passed to alerts), 3 for Starter.
+  const topIntentsAll = ent.canViewAdvancedDashboard
+    ? await getTopIntentsWithPerf(shop, start, end, 8).catch(() => [] as IntentPerf[])
+    : await getTopIntentsWithPerf(shop, start, end, 3).catch(() => [] as IntentPerf[]);
 
   const zeroedKpis: DashboardKpis = {
     responseTime: { medianMs: null, p90Ms: null, prevMedianMs: null },
@@ -65,16 +77,24 @@ export async function loader({ request }: LoaderFunctionArgs) {
     open: 0, waiting_customer: 0, waiting_merchant: 0, resolved: 0, no_reply_needed: 0,
   };
 
-  const [kpis, qualityChart, productivityChart, heatmap, threadStates, reopened, alerts] =
-    await Promise.all([
-      getDashboardKpis(shop, start, end, prevStart, prevEnd).catch(() => zeroedKpis),
-      getResponseTimeDailyBreakdown(shop, start, end).catch(() => [] as ResponseTimeDailyPoint[]),
-      getDraftUsageDailyBreakdown(shop, start, end).catch(() => [] as ProductivityDailyPoint[]),
-      getHeatmap(shop, start, end).catch(() => [] as HeatmapCell[]),
-      getCurrentThreadStates(shop).catch(() => zeroedStates),
-      getReopenedThreads(shop, start, end, 10).catch(() => [] as ReopenedThread[]),
-      getAlerts(shop, range, start, end, topIntentsAll).catch(() => [] as Alert[]),
-    ]);
+  const [kpis, qualityChart, productivityChart, threadStates] = await Promise.all([
+    getDashboardKpis(shop, start, end, prevStart, prevEnd).catch(() => zeroedKpis),
+    getResponseTimeDailyBreakdown(shop, start, end).catch(() => [] as ResponseTimeDailyPoint[]),
+    getDraftUsageDailyBreakdown(shop, start, end).catch(() => [] as ProductivityDailyPoint[]),
+    getCurrentThreadStates(shop).catch(() => zeroedStates),
+  ]);
+
+  const heatmap = ent.canViewAdvancedDashboard
+    ? await getHeatmap(shop, start, end).catch(() => [] as HeatmapCell[])
+    : ([] as HeatmapCell[]);
+
+  const reopened = ent.canViewAdvancedDashboard
+    ? await getReopenedThreads(shop, start, end, 10).catch(() => [] as ReopenedThread[])
+    : ([] as ReopenedThread[]);
+
+  const alerts = ent.canViewAdvancedDashboard
+    ? await getAlerts(shop, range, start, end, topIntentsAll).catch(() => [] as Alert[])
+    : ([] as Alert[]);
 
   return {
     range,
@@ -84,16 +104,24 @@ export async function loader({ request }: LoaderFunctionArgs) {
     qualityChart,
     productivityChart,
     heatmap,
-    topIntents: topIntentsAll.slice(0, 5),
+    topIntents: topIntentsAll.slice(0, ent.canViewAdvancedDashboard ? 5 : 3),
     threadStates,
     reopened,
     alerts,
+    isAdvancedDashboard: ent.canViewAdvancedDashboard,
+    rangeMaxDays: maxDays,
   };
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function parseRangeDays(range: string): number {
+  const match = /^(\d+)d$/.exec(range);
+  if (!match) return 30;
+  return parseInt(match[1], 10);
+}
 
 function formatDuration(ms: number | null): string {
   if (ms === null) return "—";
@@ -345,6 +373,32 @@ function PeriodSelector({ range }: { range: string }) {
 // Page
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Plan gate placeholder
+// ---------------------------------------------------------------------------
+
+function PlanGatePlaceholder({ feature }: { feature: string }) {
+  const { t } = useTranslation();
+  const fallback = t("billing.dashboard.gated.default", { defaultValue: "Available on Pro" });
+  return (
+    <div
+      style={{
+        border: "1px dashed #d1d5db",
+        borderRadius: 6,
+        padding: "20px",
+        textAlign: "center",
+        color: "#6b7280",
+        margin: "12px 0",
+      }}
+    >
+      <p>{t(`billing.dashboard.gated.${feature}`, { defaultValue: fallback })}</p>
+      <Link to="/app/billing" style={{ fontWeight: 600 }}>
+        {t("billing.upgradeCta", { defaultValue: "Upgrade" })}
+      </Link>
+    </div>
+  );
+}
+
 // Suppress unused-variable lint for types only used in the loader return shape
 type _Used = DashboardKpis | IntentPerf | ReopenedThread | Alert | HeatmapCell | ThreadStateCounts;
 
@@ -352,6 +406,7 @@ export default function Dashboard() {
   const {
     range, kpis, qualityChart, productivityChart,
     heatmap, topIntents, threadStates, reopened, alerts,
+    isAdvancedDashboard,
   } = useLoaderData<typeof loader>();
   const { t } = useTranslation();
   const todayLabel = new Date().toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
@@ -446,7 +501,10 @@ export default function Dashboard() {
       </div>
 
       {/* Alert banner */}
-      {alertItems.length > 0 && <AlertBanner alerts={alertItems} />}
+      {isAdvancedDashboard
+        ? alertItems.length > 0 && <AlertBanner alerts={alertItems} />
+        : <PlanGatePlaceholder feature="alerts" />
+      }
 
       {/* 4 KPIs */}
       <div
@@ -521,7 +579,11 @@ export default function Dashboard() {
           title={t("dashboard.heatmapTitle", { defaultValue: "Pics d'activité" })}
           subtitle={t("dashboard.heatmapSubtitle", { defaultValue: "Emails support reçus par jour × heure" })}
         >
-          <HeatMap cells={heatmap} />
+          {isAdvancedDashboard ? (
+            <HeatMap cells={heatmap} />
+          ) : (
+            <PlanGatePlaceholder feature="heatmap" />
+          )}
         </Card>
         <Card
           title={t("dashboard.topIntentsTitle", { defaultValue: "Top motifs" })}
@@ -551,7 +613,9 @@ export default function Dashboard() {
           title={t("dashboard.reopenedTitle", { defaultValue: "Threads ré-ouverts récents" })}
           subtitle={t("dashboard.reopenedSubtitle", { defaultValue: "Signal qualité : resolved puis ré-ouverts sur la période" })}
         >
-          {reopened.length === 0 ? (
+          {!isAdvancedDashboard ? (
+            <PlanGatePlaceholder feature="reopened" />
+          ) : reopened.length === 0 ? (
             <p style={{ fontSize: 13, color: "#94a3b8" }}>
               {t("dashboard.noData", { defaultValue: "Aucun" })}
             </p>

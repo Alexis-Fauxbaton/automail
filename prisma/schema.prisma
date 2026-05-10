@@ -47,7 +47,6 @@ model SupportSettings {
   shareTrackingNumber   Boolean  @default(true)
   customerGreetingStyle String   @default("auto")         // auto | first_name | full_name | neutral
   refundPolicy          String   @default("")
-  autoDraft             Boolean  @default(true)           // auto-generate draft on incoming support email
   updatedAt             DateTime @updatedAt
 }
 
@@ -405,4 +404,48 @@ model RateLimitBucket {
 
   @@id([key, kind])
   @@index([windowStart])
+}
+
+// Per-shop monthly usage counter for billing quotas.
+// One row per (shop, periodStart) — enforced via unique constraint.
+// periodStart is always 00:00:00 UTC of the 1st of the month.
+model BillingUsage {
+  id           String   @id @default(cuid())
+  shop         String
+  periodStart  DateTime
+  draftsCount  Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([shop, periodStart])
+  @@index([shop])
+}
+
+// Scheduled plan changes (downgrades). Applied at effectiveAt by a job.
+// Upgrades are immediate via Shopify Billing API and don't use this table.
+model BillingScheduledChange {
+  id           String    @id @default(cuid())
+  shop         String
+  fromPlan     String
+  toPlan       String
+  effectiveAt  DateTime
+  createdAt    DateTime  @default(now())
+  appliedAt    DateTime?
+  cancelledAt  DateTime?
+
+  @@index([shop])
+  @@index([effectiveAt, appliedAt])
+}
+
+// Per-shop billing flags (internal/dev shops bypass entitlement checks).
+// installDate is used to compute trial expiry when no Shopify subscription exists yet.
+model ShopFlag {
+  shop                  String    @id
+  isInternal            Boolean   @default(false)
+  // First time the shop ever installed the app. Immutable after creation.
+  // Used as trial-start anchor so uninstall/reinstall doesn't reset trial.
+  firstInstallDate      DateTime  @default(now())
+  onboardingCompletedAt DateTime?
+  checklistDismissedAt  DateTime?
+  updatedAt             DateTime  @updatedAt
 }

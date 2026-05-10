@@ -7,6 +7,10 @@ import { useEffect } from "react";
 
 import { authenticate } from "../shopify.server";
 import { getUiLanguage } from "../lib/user-preferences";
+import { EntitlementsProvider } from "../lib/billing/entitlements-context";
+import { TopBarCounter } from "../components/billing/TopBarCounter";
+import { QuotaBanner } from "../components/billing/QuotaBanner";
+import { TrialBanner } from "../components/billing/TrialBanner";
 
 // Strict shape check: we only accept canonical Shopify shop domains for
 // the synthetic-host fallback below. Anything else (typos, attempted host
@@ -36,19 +40,42 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     });
   }
 
-  const { session, sessionToken } = await authenticate.admin(effectiveRequest);
+  const { session, sessionToken, admin } = await authenticate.admin(effectiveRequest);
 
   const userId = sessionToken?.sub ?? null;
   const uiLanguage = userId ? await getUiLanguage(userId, session.shop) : null;
 
   // eslint-disable-next-line no-undef
   const isE2E = process.env.E2E_AUTH_BYPASS === "true";
+
+  const { resolveEntitlements } = await import("../lib/billing/entitlements");
+  const ent = await resolveEntitlements({ shop: session.shop, admin });
+
   // eslint-disable-next-line no-undef
-  return { apiKey: process.env.SHOPIFY_API_KEY || "", uiLanguage, isE2E };
+  return {
+    apiKey: process.env.SHOPIFY_API_KEY || "",
+    uiLanguage,
+    isE2E,
+    entitlements: {
+      shop: ent.shop,
+      state: ent.state,
+      planId: ent.planId,
+      plan: ent.plan,
+      canGenerateDraft: ent.canGenerateDraft,
+      canConnectMailbox: ent.canConnectMailbox,
+      canViewAdvancedDashboard: ent.canViewAdvancedDashboard,
+      isSyncSuspended: ent.isSyncSuspended,
+      trialDaysRemaining: ent.trialDaysRemaining,
+      trialExpiresAt: ent.trialExpiresAt?.toISOString() ?? null,
+      quotaStatus: { ...ent.quotaStatus, periodStart: ent.quotaStatus.periodStart.toISOString() },
+      mailboxStatus: ent.mailboxStatus,
+      dashboardMaxRangeDays: ent.dashboardMaxRangeDays,
+    },
+  };
 };
 
 export default function App() {
-  const { apiKey, uiLanguage, isE2E } = useLoaderData<typeof loader>();
+  const { apiKey, uiLanguage, isE2E, entitlements } = useLoaderData<typeof loader>();
   const { t, i18n } = useTranslation();
 
   useEffect(() => {
@@ -57,16 +84,62 @@ export default function App() {
     }
   }, [uiLanguage, i18n]);
 
+  const hydratedEntitlements = entitlements
+    ? {
+        ...entitlements,
+        trialExpiresAt: entitlements.trialExpiresAt
+          ? new Date(entitlements.trialExpiresAt)
+          : null,
+        quotaStatus: {
+          ...entitlements.quotaStatus,
+          periodStart: new Date(entitlements.quotaStatus.periodStart),
+        },
+      }
+    : null;
+
   return (
     <AppProvider embedded={!isE2E} apiKey={apiKey}>
-      <s-app-nav name="Automail">
-        <s-link href="/app">{t("nav.home")}</s-link>
-        <s-link href="/app/inbox">{t("nav.emailInbox")}</s-link>
-        <s-link href="/app/dashboard">{t("nav.dashboard")}</s-link>
-        <s-link href="/app/settings">{t("nav.settings")}</s-link>
-        <s-link href="/app/help">{t("nav.help")}</s-link>
-      </s-app-nav>
-      <Outlet />
+      {hydratedEntitlements ? (
+        <EntitlementsProvider value={hydratedEntitlements}>
+          <s-app-nav name="Automail">
+            <s-link href="/app">{t("nav.home")}</s-link>
+            <s-link href="/app/inbox">{t("nav.emailInbox")}</s-link>
+            <s-link href="/app/dashboard">{t("nav.dashboard")}</s-link>
+            <s-link href="/app/settings">{t("nav.settings")}</s-link>
+            <s-link href="/app/billing">{t("nav.billing")}</s-link>
+            <s-link href="/app/help">{t("nav.help")}</s-link>
+          </s-app-nav>
+          <div style={{
+            position: "sticky",
+            top: 0,
+            zIndex: 100,
+            background: "rgba(248, 250, 252, 0.92)",
+            backdropFilter: "saturate(180%) blur(8px)",
+            WebkitBackdropFilter: "saturate(180%) blur(8px)",
+            padding: "10px 16px",
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            borderBottom: "1px solid #e2e8f0",
+          }}>
+            <TrialBanner />
+            <QuotaBanner />
+            <TopBarCounter />
+          </div>
+          <Outlet />
+        </EntitlementsProvider>
+      ) : (
+        <>
+          <s-app-nav name="Automail">
+            <s-link href="/app">{t("nav.home")}</s-link>
+            <s-link href="/app/inbox">{t("nav.emailInbox")}</s-link>
+            <s-link href="/app/dashboard">{t("nav.dashboard")}</s-link>
+            <s-link href="/app/settings">{t("nav.settings")}</s-link>
+            <s-link href="/app/help">{t("nav.help")}</s-link>
+          </s-app-nav>
+          <Outlet />
+        </>
+      )}
     </AppProvider>
   );
 }

@@ -147,6 +147,7 @@ export async function refreshThreadAnalysis(
     conversationMessages: threadContext.messages,
     admin,
     shop,
+    mailboxAddress: conn?.email,
     trackedCallContext: {
       shop,
       emailId: record.id,

@@ -30,6 +30,8 @@ import { upsertReplyDraftBody } from "../support/reply-draft";
 import { generateLLMDraft } from "../support/llm-draft";
 import { evaluateThread } from "../support/draft-usage-heuristic";
 import { getSettings } from "../support/settings";
+import { createLogger } from "../log/logger";
+import { isWithin48hZone } from "../billing/catchup";
 
 export interface ProcessingReport {
   total: number;
@@ -67,6 +69,7 @@ export async function processNewEmails(
   };
 
   const syncStartedAt = new Date();
+  const log = createLogger({ shop, mod: "gmail/pipeline" });
 
   // Clear any previous top-level error and cancel flag at the start of a new sync.
   await prisma.mailConnection.update({
@@ -78,7 +81,7 @@ export async function processNewEmails(
     return await _processNewEmails(shop, admin, report, syncStartedAt);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error("[gmail/pipeline] Top-level sync error:", err);
+    log.error({ err }, "Top-level sync error");
     await prisma.mailConnection.update({
       where: { shop },
       data: { lastSyncError: msg.slice(0, 500) },
@@ -93,6 +96,7 @@ async function _processNewEmails(
   report: ProcessingReport,
   syncStartedAt: Date,
 ): Promise<ProcessingReport> {
+  const log = createLogger({ shop, mod: "gmail/pipeline" });
   const conn = await prisma.mailConnection.findUnique({ where: { shop } });
   if (!conn) throw new Error("No mail connection for this shop");
 
@@ -159,7 +163,7 @@ async function _processNewEmails(
     try {
       await backfillResolvedIntents(shop, admin);
     } catch (err) {
-      console.error("[gmail/pipeline] backfillResolvedIntents failed:", err);
+      log.error({ err }, "backfillResolvedIntents failed (no-new-messages path)");
     }
     return report;
   }
@@ -179,7 +183,7 @@ async function _processNewEmails(
   try {
     await backfillResolvedIntents(shop, admin);
   } catch (err) {
-    console.error("[gmail/pipeline] pre-pass1 backfillResolvedIntents failed:", err);
+    log.error({ err }, "pre-pass1 backfillResolvedIntents failed");
   }
 
   // ---------------------------------------------------------------------
@@ -192,7 +196,7 @@ async function _processNewEmails(
   const INGESTION_BATCH_SIZE = 10;
   for (let i = 0; i < newMessageIds.length; i += INGESTION_BATCH_SIZE) {
     if (i > 0 && (await isCancelled(shop, syncStartedAt))) {
-      console.log(`[gmail/pipeline] Sync cancelled during ingestion after ${i} emails.`);
+      log.info({ processed: i }, "Sync cancelled during ingestion");
       report.cancelled = true;
       break;
     }
@@ -203,7 +207,7 @@ async function _processNewEmails(
           await ingestAndPrefilter(shop, conn.provider, client, msgId, customerEmails, conn.email, report);
         } catch (err) {
           report.errors++;
-          console.error(`[gmail/pipeline] Ingestion error for ${msgId}:`, err);
+          log.error({ err, msgId }, "Ingestion error");
           try {
             await prisma.incomingEmail.upsert({
               where: { shop_externalMessageId: { shop, externalMessageId: msgId } },
@@ -237,7 +241,7 @@ async function _processNewEmails(
     const CLASSIFY_BATCH_SIZE = 5;
     for (let i = 0; i < threadsToClassify.length; i += CLASSIFY_BATCH_SIZE) {
       if (i > 0 && (await isCancelled(shop, syncStartedAt))) {
-        console.log(`[gmail/pipeline] Sync cancelled during classification after ${i} threads.`);
+        log.info({ processed: i }, "Sync cancelled during classification");
         report.cancelled = true;
         break;
       }
@@ -248,7 +252,7 @@ async function _processNewEmails(
             await classifyAndDraft(shop, admin, client, recordId, customerEmails, conn.email, report);
           } catch (err) {
             report.errors++;
-            console.error(`[gmail/pipeline] Classification error for ${recordId}:`, err);
+            log.error({ err, recordId }, "Classification error");
             await prisma.incomingEmail.update({
               where: { id: recordId },
               data: {
@@ -267,7 +271,7 @@ async function _processNewEmails(
   try {
     await backfillResolvedIntents(shop, admin);
   } catch (err) {
-    console.error("[gmail/pipeline] backfillResolvedIntents failed:", err);
+    log.error({ err }, "post-pass2 backfillResolvedIntents failed");
   }
 
   // Update sync cursor
@@ -344,6 +348,7 @@ export async function ingestAndPrefilter(
   mailboxAddress: string,
   report: ProcessingReport,
 ) {
+  const log = createLogger({ shop, mod: "gmail/pipeline", msgId });
   const msg: MailMessage = await client.getMessage(msgId);
   const isKnown = customerEmails.has(msg.from.toLowerCase());
   const isOutgoing =
@@ -426,12 +431,12 @@ export async function ingestAndPrefilter(
       await recomputeThreadState(canonicalThreadId, { mailboxAddress });
       await evaluateHistoryStatus(canonicalThreadId, shop);
     } catch (err) {
-      console.error("[pipeline] state recompute (outgoing) failed:", err);
+      log.error({ err }, "state recompute (outgoing) failed");
     }
     try {
       await evaluateThread(canonicalThreadId, shop);
     } catch (err) {
-      console.error("[pipeline] draft-usage heuristic failed:", err);
+      log.error({ err }, "draft-usage heuristic failed");
     }
     return;
   }
@@ -448,7 +453,7 @@ export async function ingestAndPrefilter(
     await mergeThreadIdentifiers(canonicalThreadId, shop);
   } catch (err) {
     // Extraction is best-effort: failures must not block ingestion.
-    console.error("[pipeline] thread identifier extraction failed:", err);
+    log.error({ err }, "thread identifier extraction failed");
   }
 
   // Free regex prefilter
@@ -475,7 +480,7 @@ export async function ingestAndPrefilter(
       await recomputeThreadState(canonicalThreadId, { mailboxAddress });
       await evaluateHistoryStatus(canonicalThreadId, shop);
     } catch (err) {
-      console.error("[pipeline] state recompute (skip-tier1) failed:", err);
+      log.error({ err }, "state recompute (skip-tier1) failed");
     }
     return;
   }
@@ -514,12 +519,12 @@ export async function ingestAndPrefilter(
       if (Date.now() - last > 24 * 3600_000) {
         // Fire-and-forget — must not block ingestion.
         runOpportunisticThreadBackfill(canonicalThreadId).catch((err) =>
-          console.error("[pipeline] opportunistic backfill failed:", err),
+          log.error({ err, canonicalThreadId }, "opportunistic backfill failed"),
         );
       }
     }
   } catch (err) {
-    console.error("[pipeline] state recompute failed:", err);
+    log.error({ err }, "state recompute failed");
   }
 }
 
@@ -543,6 +548,7 @@ export async function backfillResolvedIntents(
   admin: AdminGraphqlClient,
   opts: { maxThreads?: number } = {},
 ): Promise<void> {
+  const log = createLogger({ shop, mod: "gmail/pipeline:backfillResolvedIntents" });
   // Step 1: collect thread IDs for both closed states.
   // The inbox "Résolu" bucket displays operationalState "resolved" AND
   // "no_reply_needed" together, so both must be backfilled.
@@ -576,8 +582,14 @@ export async function backfillResolvedIntents(
   for (const id of outgoingOldIds) resolvedSet.add(id);
 
   const allClosedIds = [...resolvedSet, ...noReplySet];
-  console.log(
-    `[pipeline] backfillResolvedIntents: shop=${shop} resolved=${resolvedSet.size} noReply=${noReplySet.size} outgoingOld=${outgoingOldIds.length} total=${allClosedIds.length}`,
+  log.info(
+    {
+      resolved: resolvedSet.size,
+      noReply: noReplySet.size,
+      outgoingOld: outgoingOldIds.length,
+      total: allClosedIds.length,
+    },
+    "scan complete",
   );
   if (allClosedIds.length === 0) return;
 
@@ -599,15 +611,16 @@ export async function backfillResolvedIntents(
   );
 
   const needsBackfill = allClosedIds.filter((id) => !alreadyAnalyzed.has(id));
-  console.log(
-    `[pipeline] backfillResolvedIntents: alreadyAnalyzed=${alreadyAnalyzed.size} needsBackfill=${needsBackfill.length}`,
+  log.info(
+    { alreadyAnalyzed: alreadyAnalyzed.size, needsBackfill: needsBackfill.length },
+    "filter applied",
   );
   if (needsBackfill.length === 0) return;
 
   // Default cap 200 for regular syncs (fast LLM-only calls, but don't hog
   // the sync slot). Callers can pass Infinity for a full resync pass.
   const toProcess = needsBackfill.slice(0, opts.maxThreads ?? 200);
-  console.log(`[pipeline] backfillResolvedIntents: ${toProcess.length} thread(s) need intent backfill`);
+  log.info({ count: toProcess.length }, "thread(s) need intent backfill");
 
   // Fetch mailbox address once — used by buildThreadContext for direction labels.
   const connEmail = (
@@ -691,8 +704,9 @@ export async function backfillResolvedIntents(
       try {
         const fetched = await runOpportunisticThreadBackfill(canonicalThreadId);
         if (fetched.added > 0) {
-          console.log(
-            `[pipeline] backfillResolvedIntents: fetched ${fetched.added} email(s) from provider for thread=${canonicalThreadId}`,
+          log.info(
+            { added: fetched.added, canonicalThreadId },
+            "fetched emails from provider for thread",
           );
           // Retry Steps 3a → 3b → 3c after provider fetch.
           anchor = await prisma.incomingEmail.findFirst({
@@ -725,19 +739,23 @@ export async function backfillResolvedIntents(
           }
         }
       } catch (err) {
-        console.error(
-          `[pipeline] backfillResolvedIntents: provider fetch failed for thread=${canonicalThreadId}:`,
-          err,
-        );
+        log.error({ err, canonicalThreadId }, "provider fetch failed for thread");
       }
     }
 
     if (!anchor) {
-      console.log(`[pipeline] backfillResolvedIntents: no anchor for thread=${canonicalThreadId} (likely legacy orphan — no emails in DB)`);
+      log.info({ canonicalThreadId }, "no anchor for thread (likely legacy orphan)");
       return;
     }
 
-    console.log(`[pipeline] processThread: anchor=${anchor.id.substring(0,20)} thread=${canonicalThreadId.substring(0,20)} tier1=${anchor.bodyText?.length ?? 0}chars`);
+    log.info(
+      {
+        anchorId: anchor.id,
+        canonicalThreadId,
+        tier1BodyChars: anchor.bodyText?.length ?? 0,
+      },
+      "processThread: anchor selected",
+    );
 
     // Build full thread context (DB fallback, no mail client needed) so the
     // LLM has conversation history, not just the single anchor email body.
@@ -757,6 +775,7 @@ export async function backfillResolvedIntents(
       conversationMessages: threadContext.messages,
       admin,
       shop,
+      mailboxAddress: connEmail,
       skipDraft: true,
       // Run the Shopify order search even for resolved threads — the
       // matched order remains useful context. Tracking lookup + crawler
@@ -775,7 +794,14 @@ export async function backfillResolvedIntents(
           }
         : undefined,
     });
-    console.log(`[pipeline] processThread: analyze done intent=${analysis.intent} usedLLM=${analysis.warnings?.some(w => w.code === 'llm_fallback') ? 'no' : 'yes'} thread=${canonicalThreadId.substring(0,20)}`);
+    log.info(
+      {
+        intent: analysis.intent,
+        usedLLM: !analysis.warnings?.some((w) => w.code === "llm_fallback"),
+        canonicalThreadId,
+      },
+      "processThread: analyze done",
+    );
 
     // Restore overrides snapshotted by handleResync, if any.
     if (anchor.canonicalThreadId) {
@@ -803,10 +829,10 @@ export async function backfillResolvedIntents(
       try {
         await recomputeThreadState(anchor.canonicalThreadId, { mailboxAddress: connEmail });
       } catch (err) {
-        console.error(`[pipeline] processThread: recomputeThreadState failed for thread=${canonicalThreadId}:`, err);
+        log.error({ err, canonicalThreadId }, "processThread: recomputeThreadState failed");
       }
     }
-    console.log(`[pipeline] processThread: saved anchor=${anchor.id.substring(0,20)} intent=${analysis.intent}`);
+    log.info({ anchorId: anchor.id, intent: analysis.intent }, "processThread: saved");
   }
 
   let done = 0;
@@ -817,10 +843,7 @@ export async function backfillResolvedIntents(
       chunk.map((canonicalThreadId) =>
         processThread(canonicalThreadId).catch((err) => {
           failed++;
-          console.error(
-            `[pipeline] backfillResolvedIntents: failed for thread=${canonicalThreadId}:`,
-            err,
-          );
+          log.error({ err, canonicalThreadId }, "processThread failed");
         }),
       ),
     );
@@ -832,9 +855,7 @@ export async function backfillResolvedIntents(
       await new Promise((r) => setTimeout(r, 300));
     }
   }
-  console.log(
-    `[pipeline] backfillResolvedIntents: done=${done} failed=${failed} total=${toProcess.length}`,
-  );
+  log.info({ done, failed, total: toProcess.length }, "backfill complete");
 }
 
 /**
@@ -912,6 +933,7 @@ export async function classifyAndDraft(
   mailboxAddress: string,
   report: ProcessingReport,
 ) {
+  const log = createLogger({ shop, mod: "gmail/pipeline:classifyAndDraft", recordId });
   const record = await prisma.incomingEmail.findFirst({
     where: { id: recordId, shop },
   });
@@ -940,6 +962,20 @@ export async function classifyAndDraft(
     headers: {},
     attachments: [],
   };
+
+  // --- Catch-up gate: skip Tier 2 + Tier 3 for emails older than 48h ---
+  // When auto-sync resumes after a suspend, it pulls all messages since
+  // lastSyncAt. Older messages are marked "received" and surfaced in the
+  // inbox; the merchant triggers explicit analysis from the UI (1 quota unit).
+  const isFresh = isWithin48hZone(record.receivedAt);
+  if (!isFresh) {
+    console.log(`[pipeline] ${shop} email=${record.id} older than 48h, skipping Tier 2/3 (catch-up)`);
+    await prisma.incomingEmail.update({
+      where: { id: record.id },
+      data: { processingStatus: "ingested" },
+    });
+    return;
+  }
 
   // --- Tier 2: LLM classification ---
   // Spec §6, §8: inject the compact structured thread state + the true
@@ -982,7 +1018,7 @@ export async function classifyAndDraft(
         mailboxAddress,
       });
     } catch (err) {
-      console.error("[pipeline] post-Tier2 state recompute failed:", err);
+      log.error({ err }, "post-Tier2 state recompute failed");
     }
   }
 
@@ -1042,7 +1078,7 @@ export async function classifyAndDraft(
       try {
         prevAnalysis = JSON.parse(prevAnchor.analysisResult) as Awaited<ReturnType<typeof analyzeSupportEmail>>;
       } catch (err) {
-        console.error("[pipeline] classifyAndDraft: failed to parse prevAnchor analysisResult", err);
+        log.error({ err }, "failed to parse prevAnchor analysisResult");
       }
     }
     const reuseIntents = prevAnalysis?.manualOverrides?.intents
@@ -1065,6 +1101,7 @@ export async function classifyAndDraft(
       conversationMessages: threadContext.messages,
       admin,
       shop,
+      mailboxAddress,
       trackedCallContext: {
         shop,
         emailId: record.id,
@@ -1108,7 +1145,7 @@ export async function classifyAndDraft(
         where: { id: record.canonicalThreadId, shop },
         data: { resolvedOrderNumber: finalOrderNumber },
       }).catch((err) => {
-        console.error("[pipeline] classifyAndDraft: thread order sync failed:", err);
+        log.error({ err }, "thread order sync failed");
       });
     }
 
@@ -1130,7 +1167,7 @@ export async function classifyAndDraft(
           mailboxAddress,
         });
       } catch (err) {
-        console.error("[pipeline] post-Tier3 state recompute failed:", err);
+        log.error({ err }, "post-Tier3 state recompute failed");
       }
     }
   } catch (err) {
@@ -1166,6 +1203,7 @@ export async function buildThreadContext(
   mailboxAddress: string,
   client?: MailClient,
 ): Promise<{ body: string; messages: ConversationMessage[] }> {
+  const log = createLogger({ shop, mod: "gmail/pipeline:buildThreadContext" });
   // Resolve the semantic "target" of this analysis: it's the latest
   // incoming message that passed Tier 1, as computed by thread-state.
   // Falls back to the currently-processed record when no target is set
@@ -1225,7 +1263,7 @@ export async function buildThreadContext(
         return { body: parts.join("\n\n"), messages };
       }
     } catch (err) {
-      console.error("[pipeline] getThreadMessages failed, falling back to DB:", err);
+      log.error({ err, threadId }, "getThreadMessages failed, falling back to DB");
     }
   }
 
@@ -1327,6 +1365,7 @@ export async function reanalyzeEmail(
   shop: string,
   options: { skipDraft?: boolean } = {},
 ) {
+  const log = createLogger({ shop, mod: "gmail/pipeline:reanalyzeEmail", emailId });
   const record = await prisma.incomingEmail.findFirst({ where: { id: emailId, shop } });
   if (!record) {
     throw new Error("Email not found");
@@ -1342,7 +1381,7 @@ export async function reanalyzeEmail(
   try {
     if (conn) client = await getMailClient(shop, conn.provider);
   } catch (err) {
-    console.error("[pipeline] Could not create mail client for reanalyze:", err);
+    log.error({ err }, "Could not create mail client for reanalyze");
   }
 
   // Build thread context
@@ -1362,7 +1401,7 @@ export async function reanalyzeEmail(
       await extractAndCache(record.id, record.subject, record.bodyText);
       await mergeThreadIdentifiers(record.canonicalThreadId, shop);
     } catch (err) {
-      console.error("[pipeline] reanalyze: thread identifier merge failed:", err);
+      log.error({ err }, "thread identifier merge failed");
     }
   }
   const threadResolution = record.canonicalThreadId
@@ -1396,6 +1435,7 @@ export async function reanalyzeEmail(
     conversationMessages: threadContext.messages,
     admin,
     shop,
+    mailboxAddress: conn?.email,
     trackedCallContext: {
       shop,
       emailId: record.id,
@@ -1448,7 +1488,7 @@ export async function reanalyzeEmail(
       where: { id: record.canonicalThreadId },
       data: { resolvedOrderNumber: finalOrderNumber },
     }).catch((err) => {
-      console.error("[pipeline] reanalyze: thread order sync failed:", err);
+      log.error({ err }, "thread order sync failed");
     });
   }
   if (analysis.draftReply && !options.skipDraft) {
@@ -1461,7 +1501,7 @@ export async function reanalyzeEmail(
         mailboxAddress: conn?.email ?? "",
       });
     } catch (err) {
-      console.error("[pipeline] reanalyze: state recompute failed:", err);
+      log.error({ err }, "state recompute failed");
     }
   }
 

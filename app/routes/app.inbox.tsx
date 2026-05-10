@@ -5,6 +5,14 @@ import { useTranslation } from "react-i18next";
 import { useMobile } from "../hooks/useMobile";
 
 import { authenticate } from "../shopify.server";
+import { requireOnboardingComplete } from "../lib/onboarding/guard";
+import {
+  hasGeneratedAnyDraft,
+  hasCustomizedSupportSettings,
+  getShopFlag,
+} from "../lib/onboarding/repo";
+import { deriveChecklistState, isChecklistDismissed } from "../lib/onboarding/state";
+import { OnboardingChecklist } from "../components/onboarding/OnboardingChecklist";
 import { getAuthUrl as getGmailAuthUrl, getConnection } from "../lib/gmail/auth";
 import { getZohoAuthUrl } from "../lib/zoho/auth";
 import { getAuthUrl as getOutlookAuthUrl } from "../lib/outlook/auth";
@@ -18,6 +26,8 @@ import { decodeHtmlEntities } from "../lib/gmail/client";
 import { sanitizeEmailHtml, buildCidMap } from "../lib/mail/sanitize-html";
 import { buildReplySubject } from "../lib/support/draft-subject";
 import { RichDraftEditor } from "../components/RichDraftEditor";
+import { QuotaExceededModal } from "../components/billing/QuotaExceededModal";
+import { SyncSuspendedBanner } from "../components/billing/SyncSuspendedBanner";
 import prisma from "../db.server";
 import { computePriorContact } from "../lib/support/prior-contact";
 import {
@@ -58,7 +68,16 @@ const _refreshedEmailIds = new Set<string>();
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
+  await requireOnboardingComplete(session.shop, request);
   const shop = session.shop;
+  const onboardingFlag = await getShopFlag(shop);
+  const onboardingChecklist = {
+    state: deriveChecklistState({
+      hasDraft: await hasGeneratedAnyDraft(shop),
+      hasCustomizedSettings: await hasCustomizedSupportSettings(shop),
+    }),
+    dismissed: isChecklistDismissed(onboardingFlag),
+  };
   const connection = await getConnection(shop);
 
   let emails: SerializedEmail[] = [];
@@ -180,6 +199,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     threadStates,
     priorContact,
     syncInProgress,
+    onboardingChecklist,
   };
 };
 
@@ -1401,6 +1421,21 @@ const ThreadCard = memo(function ThreadCard({
   const reanalyzeFetcher = useFetcher();
   const isGenerating = reanalyzeFetcher.state !== "idle";
   const [showSignals, setShowSignals] = useState(false);
+  const [quotaModal, setQuotaModal] = useState<{
+    open: boolean;
+    used: number;
+    limit: number;
+    variant: 'exceeded' | 'just_used_last';
+  }>({ open: false, used: 0, limit: 0, variant: 'exceeded' });
+  useEffect(() => {
+    const data = reanalyzeFetcher.data as { quotaExceeded?: boolean; quotaStatus?: { used: number; limit: number } } | null | undefined;
+    if (!data) return;
+    if (data.quotaExceeded) {
+      setQuotaModal({ open: true, used: data.quotaStatus?.used ?? 0, limit: data.quotaStatus?.limit ?? 0, variant: 'exceeded' });
+    } else if (data.quotaStatus && data.quotaStatus.used === data.quotaStatus.limit && data.quotaStatus.limit > 0) {
+      setQuotaModal({ open: true, used: data.quotaStatus.used, limit: data.quotaStatus.limit, variant: 'just_used_last' });
+    }
+  }, [reanalyzeFetcher.data]);
   const hasSignals =
     (bucket === "to_process" || bucket === "waiting_merchant" || bucket === "waiting_customer") &&
     (previousContact.recentReply || previousContact.byAddress || previousContact.byOrder);
@@ -1597,6 +1632,13 @@ const ThreadCard = memo(function ThreadCard({
           <span className="ui-pill ui-pill--success" style={{ fontSize: "11px", padding: "2px 8px" }}>{t("inbox.pillDraftGenerated")}</span>
         </div>
       )}
+      <QuotaExceededModal
+        open={quotaModal.open}
+        onClose={() => setQuotaModal({ ...quotaModal, open: false })}
+        variant={quotaModal.variant}
+        used={quotaModal.used}
+        limit={quotaModal.limit}
+      />
     </div>
   );
 });
@@ -1683,6 +1725,33 @@ function DraftBlock({ email, threadSenderEmail }: {
   const redraftFetcher = useFetcher();
   const refining = refineFetcher.state !== "idle";
   const redrafting = redraftFetcher.state !== "idle";
+
+  const [quotaModal, setQuotaModal] = useState<{
+    open: boolean;
+    used: number;
+    limit: number;
+    variant: 'exceeded' | 'just_used_last';
+  }>({ open: false, used: 0, limit: 0, variant: 'exceeded' });
+
+  useEffect(() => {
+    const data = refineFetcher.data as { quotaExceeded?: boolean; quotaStatus?: { used: number; limit: number } } | null | undefined;
+    if (!data) return;
+    if (data.quotaExceeded) {
+      setQuotaModal({ open: true, used: data.quotaStatus?.used ?? 0, limit: data.quotaStatus?.limit ?? 0, variant: 'exceeded' });
+    } else if (data.quotaStatus && data.quotaStatus.used === data.quotaStatus.limit && data.quotaStatus.limit > 0) {
+      setQuotaModal({ open: true, used: data.quotaStatus.used, limit: data.quotaStatus.limit, variant: 'just_used_last' });
+    }
+  }, [refineFetcher.data]);
+
+  useEffect(() => {
+    const data = redraftFetcher.data as { quotaExceeded?: boolean; quotaStatus?: { used: number; limit: number } } | null | undefined;
+    if (!data) return;
+    if (data.quotaExceeded) {
+      setQuotaModal({ open: true, used: data.quotaStatus?.used ?? 0, limit: data.quotaStatus?.limit ?? 0, variant: 'exceeded' });
+    } else if (data.quotaStatus && data.quotaStatus.used === data.quotaStatus.limit && data.quotaStatus.limit > 0) {
+      setQuotaModal({ open: true, used: data.quotaStatus.used, limit: data.quotaStatus.limit, variant: 'just_used_last' });
+    }
+  }, [redraftFetcher.data]);
 
   async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -1801,7 +1870,7 @@ function DraftBlock({ email, threadSenderEmail }: {
 
         {/* Draft body */}
         <s-stack direction="inline" gap="small-300" blockAlign="center">
-          <s-text variant="headingSm">Draft reply</s-text>
+          <s-text variant="headingSm">{t("support.draftReplySection")}</s-text>
           {total > 1 && (
             <s-stack direction="inline" gap="small-200" blockAlign="center">
               <s-button variant="plain" size="small" disabled={versionIndex === 0}
@@ -1831,7 +1900,7 @@ function DraftBlock({ email, threadSenderEmail }: {
             <s-stack direction={isMobile ? "block" : "inline"} gap="small-300" blockAlign="end">
               <div style={{ flex: 1 }}>
                 <s-text-field label={t("inbox.adjustDraft")} name="instructions"
-                  placeholder="e.g. Be more formal, mention refund policy, shorten…" />
+                  placeholder={t("inbox.adjustDraftPlaceholder")} />
               </div>
               <s-button type="submit" variant="secondary" disabled={refining || redrafting}>
                 {refining ? t("inbox.refining") : t("inbox.refineWithAi")}
@@ -1851,6 +1920,14 @@ function DraftBlock({ email, threadSenderEmail }: {
         </div>
 
       </s-stack>
+
+      <QuotaExceededModal
+        open={quotaModal.open}
+        onClose={() => setQuotaModal({ ...quotaModal, open: false })}
+        variant={quotaModal.variant}
+        used={quotaModal.used}
+        limit={quotaModal.limit}
+      />
     </s-box>
   );
 }
@@ -1947,6 +2024,21 @@ function ThreadDetailPanel({
   const noReplyNeeded = latest.analysisResult?.conversation?.noReplyNeeded === true;
   const reanalyzeFetcher = useFetcher();
   const isGenerating = reanalyzeFetcher.state !== "idle";
+  const [quotaModal, setQuotaModal] = useState<{
+    open: boolean;
+    used: number;
+    limit: number;
+    variant: 'exceeded' | 'just_used_last';
+  }>({ open: false, used: 0, limit: 0, variant: 'exceeded' });
+  useEffect(() => {
+    const data = reanalyzeFetcher.data as { quotaExceeded?: boolean; quotaStatus?: { used: number; limit: number } } | null | undefined;
+    if (!data) return;
+    if (data.quotaExceeded) {
+      setQuotaModal({ open: true, used: data.quotaStatus?.used ?? 0, limit: data.quotaStatus?.limit ?? 0, variant: 'exceeded' });
+    } else if (data.quotaStatus && data.quotaStatus.used === data.quotaStatus.limit && data.quotaStatus.limit > 0) {
+      setQuotaModal({ open: true, used: data.quotaStatus.used, limit: data.quotaStatus.limit, variant: 'just_used_last' });
+    }
+  }, [reanalyzeFetcher.data]);
   const [showThread, setShowThread] = useState(false);
   const [showSignals, setShowSignals] = useState(false);
   const hasSignals =
@@ -2193,8 +2285,10 @@ function ThreadDetailPanel({
               {([
                 [t("inbox.orderCustomer"), order.customerName ?? "—"],
                 [t("inbox.orderName"),    order.name],
-                [t("inbox.orderItems"),    `${order.lineItems.length} item${order.lineItems.length !== 1 ? "s" : ""}`],
-                [t("inbox.orderStatus"),   order.displayFulfillmentStatus ?? "—"],
+                [t("inbox.orderItems"),    t("inbox.orderItemsCount", { count: order.lineItems.length })],
+                [t("inbox.orderStatus"),   order.displayFulfillmentStatus
+                  ? t(`analysis.orderFulfillmentStatus.${order.displayFulfillmentStatus}`, order.displayFulfillmentStatus)
+                  : "—"],
               ] as [string, string][]).map(([label, value]) => (
                 <div key={label}>
                   <div style={kvLabel}>{label}</div>
@@ -2386,6 +2480,13 @@ function ThreadDetailPanel({
           </div>
         )}
       </div>
+      <QuotaExceededModal
+        open={quotaModal.open}
+        onClose={() => setQuotaModal({ ...quotaModal, open: false })}
+        variant={quotaModal.variant}
+        used={quotaModal.used}
+        limit={quotaModal.limit}
+      />
     </div>
   );
 }
@@ -2618,10 +2719,10 @@ export default function InboxPage() {
   if (actionData?.disconnected) {
     return (
       <div className="ui-inbox-root">
-        <div className="ui-inbox-heading"><h1>Email inbox</h1></div>
+        <div className="ui-inbox-heading"><h1>{t("nav.emailInbox")}</h1></div>
         <s-section>
           <s-banner tone="success">
-            Email disconnected. Refresh the page to reconnect.
+            {t("inbox.disconnected")}
           </s-banner>
         </s-section>
       </div>
@@ -2630,7 +2731,16 @@ export default function InboxPage() {
 
   return (
     <div className="ui-inbox-root">
-      <div className="ui-inbox-heading"><h1>Email inbox</h1></div>
+      <SyncSuspendedBanner />
+      <div className="ui-inbox-heading"><h1>{t("nav.emailInbox")}</h1></div>
+
+      {/* Onboarding checklist (auto-hides when dismissed or complete) */}
+      <div className="ui-inbox-section">
+        <OnboardingChecklist
+          state={loaderData.onboardingChecklist.state}
+          dismissed={loaderData.onboardingChecklist.dismissed}
+        />
+      </div>
 
       {/* Connection */}
       <div className="ui-inbox-section">

@@ -54,6 +54,12 @@ const ORDER_FIELDS = /* GraphQL */ `
   }
 `;
 
+// NOTE on read_all_orders scope: this query intentionally has no date filter.
+// Customer support emails regularly reference orders placed more than 60 days
+// ago (delayed shipments, long-tail refund requests, repeat customers checking
+// on old purchases). The `read_orders` scope only exposes orders within the
+// last 60 days; without `read_all_orders` the Admin API silently returns an
+// empty set for those older orders, making the copilot unable to assist.
 const SEARCH_QUERY = /* GraphQL */ `
   ${ORDER_FIELDS}
   query SupportOrderSearch($query: String!) {

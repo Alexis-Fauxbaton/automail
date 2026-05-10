@@ -11,6 +11,19 @@ import prisma from "./db.server";
 // Do NOT add write_* scopes unless a feature explicitly requires them —
 // unnecessary write access triggers extra scrutiny in the App Store review
 // and erodes merchant trust.
+//
+// Scope rationale (App Store review):
+//   read_orders        — access to orders within the standard 60-day window
+//   read_all_orders    — REQUIRED: customer support emails frequently reference
+//                        orders placed more than 60 days ago (delayed shipments,
+//                        long-tail refund disputes, repeat customers). Without
+//                        this scope the Admin API silently omits those orders
+//                        from search results, making the copilot unable to find
+//                        the relevant order. No write access is requested.
+//   read_customers     — look up customer records when a support email contains
+//                        only a customer email or name (no order number)
+//   read_fulfillments  — retrieve fulfillment and tracking data to answer
+//                        shipping / delivery status inquiries
 const REQUIRED_SCOPES = [
   "read_orders",
   "read_all_orders",

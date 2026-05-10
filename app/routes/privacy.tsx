@@ -44,9 +44,9 @@ function PrivacyEn() {
             via the Shopify Admin API solely to identify the order related to a customer inquiry.
           </li>
           <li>
-            <strong>Email content</strong> — if you connect a Gmail or Zoho Mail account, we
-            read incoming emails to detect customer support inquiries. Email body, subject, sender
-            address, and thread context are processed to generate draft replies.
+            <strong>Email content</strong> — if you connect a Gmail, Zoho Mail or Microsoft 365 (Outlook)
+            account, we read incoming emails to detect customer support inquiries. Email body, subject,
+            sender address, and thread context are processed to generate draft replies.
           </li>
           <li>
             <strong>App settings</strong> — your signature name, brand name, tone preferences,
@@ -55,7 +55,37 @@ function PrivacyEn() {
         </ul>
       </Section>
 
-      <Section title="3. How we use your data">
+      <Section title="3. Subscription and usage data">
+        <p>
+          To operate the paid plans (Starter, Pro), we store the following data per shop:
+        </p>
+        <ul style={styles.ul}>
+          <li>
+            <strong>Subscription state</strong> — read on demand from Shopify's Billing API
+            (active plan name, billing period end). We do not store this; Shopify is the source
+            of truth.
+          </li>
+          <li>
+            <strong>Monthly draft counter</strong> — an integer per shop per calendar month,
+            incremented each time the AI generates a reply draft. Used to enforce plan quotas.
+            Retained for billing audit purposes.
+          </li>
+          <li>
+            <strong>Install date</strong> — to compute trial expiry. Stored once when the app
+            is first installed.
+          </li>
+          <li>
+            <strong>Scheduled plan changes</strong> — when a merchant requests a downgrade,
+            we record the target plan and effective date until the change is applied.
+          </li>
+        </ul>
+        <p>
+          No payment card details ever transit through our servers. All charges are processed
+          by Shopify's Billing API directly between the merchant and Shopify.
+        </p>
+      </Section>
+
+      <Section title="4. How we use your data">
         <p>We use the data described above exclusively to:</p>
         <ul style={styles.ul}>
           <li>Identify the Shopify order related to a customer email.</li>
@@ -66,7 +96,7 @@ function PrivacyEn() {
         <p>We do not use your data for advertising, profiling, or any purpose unrelated to the App&rsquo;s core function.</p>
       </Section>
 
-      <Section title="4. Third-party services">
+      <Section title="5. Third-party services">
         <p>To operate, Automail sends data to the following third parties:</p>
         <ul style={styles.ul}>
           <li>
@@ -100,10 +130,18 @@ function PrivacyEn() {
               Zoho&rsquo;s Privacy Policy
             </a>.
           </li>
+          <li>
+            <strong>Microsoft Graph (Outlook / Microsoft 365)</strong> — if you connect a Microsoft
+            account, we use Microsoft&rsquo;s OAuth 2.0 and the Microsoft Graph API with mailbox
+            read scopes. Tokens are encrypted at rest. See{" "}
+            <a style={styles.a} href="https://privacy.microsoft.com/en-us/privacystatement" target="_blank" rel="noopener noreferrer">
+              Microsoft&rsquo;s Privacy Statement
+            </a>.
+          </li>
         </ul>
       </Section>
 
-      <Section title="5. Data storage and security">
+      <Section title="6. Data storage and security">
         <ul style={styles.ul}>
           <li>
             App data is stored in a PostgreSQL database hosted on{" "}
@@ -124,16 +162,16 @@ function PrivacyEn() {
         </ul>
       </Section>
 
-      <Section title="6. Data retention">
+      <Section title="7. Data retention">
         <p>
           Processed emails and generated drafts are retained as long as your Automail account
           is active. When you uninstall the App, your session data is deleted immediately via
           Shopify&rsquo;s uninstall webhook. You may request deletion of all remaining data
-          by contacting us (see section 9).
+          by contacting us (see section 10).
         </p>
       </Section>
 
-      <Section title="7. Your rights">
+      <Section title="8. Your rights">
         <p>
           Depending on your jurisdiction, you may have the right to access, correct, or delete
           personal data we hold about you or your customers. To exercise these rights, please
@@ -141,7 +179,7 @@ function PrivacyEn() {
         </p>
       </Section>
 
-      <Section title="8. Shopify merchant responsibilities">
+      <Section title="9. Shopify merchant responsibilities">
         <p>
           As a Shopify merchant using Automail, you are responsible for ensuring that your
           customers are informed about how their data is processed in connection with your
@@ -149,7 +187,7 @@ function PrivacyEn() {
         </p>
       </Section>
 
-      <Section title="9. Contact">
+      <Section title="10. Contact">
         <p>
           For any questions or data requests related to this Privacy Policy, please contact
           us at:{" "}
@@ -181,10 +219,10 @@ function PrivacyFr() {
             via l'API Admin Shopify uniquement pour identifier la commande liée à une demande client.
           </li>
           <li>
-            <strong>Contenu des emails</strong> — si vous connectez un compte Gmail ou Zoho Mail, nous
-            lisons les emails entrants pour détecter les demandes de support client. Le corps de l'email,
-            l'objet, l'adresse de l'expéditeur et le contexte du fil de discussion sont traités pour
-            générer des brouillons de réponse.
+            <strong>Contenu des emails</strong> — si vous connectez un compte Gmail, Zoho Mail ou
+            Microsoft 365 (Outlook), nous lisons les emails entrants pour détecter les demandes de
+            support client. Le corps de l'email, l'objet, l'adresse de l'expéditeur et le contexte
+            du fil de discussion sont traités pour générer des brouillons de réponse.
           </li>
           <li>
             <strong>Paramètres de l'application</strong> — votre nom de signature, nom de marque,
@@ -194,7 +232,39 @@ function PrivacyFr() {
         </ul>
       </Section>
 
-      <Section title="3. Utilisation de vos données">
+      <Section title="3. Données d'abonnement et d'utilisation">
+        <p>
+          Pour faire fonctionner les plans payants (Starter, Pro), nous stockons les données
+          suivantes par boutique&nbsp;:
+        </p>
+        <ul style={styles.ul}>
+          <li>
+            <strong>État de l'abonnement</strong> — lu à la demande depuis l'API Shopify Billing
+            (nom du plan actif, fin de période de facturation). Nous ne stockons pas cette
+            information&nbsp;; Shopify est la source de vérité.
+          </li>
+          <li>
+            <strong>Compteur mensuel de brouillons</strong> — un entier par boutique et par mois
+            calendaire, incrémenté à chaque génération d'un brouillon de réponse par l'IA.
+            Utilisé pour appliquer les quotas du plan. Conservé pour audit de facturation.
+          </li>
+          <li>
+            <strong>Date d'installation</strong> — pour calculer l'expiration de l'essai.
+            Stockée une seule fois lors de la première installation.
+          </li>
+          <li>
+            <strong>Changements de plan planifiés</strong> — lorsqu'un marchand demande un
+            downgrade, nous enregistrons le plan cible et la date d'application jusqu'à
+            ce que le changement soit appliqué.
+          </li>
+        </ul>
+        <p>
+          Aucune donnée de carte de paiement ne transite par nos serveurs. Tous les paiements
+          sont traités par l'API Shopify Billing directement entre le marchand et Shopify.
+        </p>
+      </Section>
+
+      <Section title="4. Utilisation de vos données">
         <p>Nous utilisons les données décrites ci-dessus exclusivement pour&nbsp;:</p>
         <ul style={styles.ul}>
           <li>Identifier la commande Shopify liée à un email client.</li>
@@ -208,30 +278,54 @@ function PrivacyFr() {
         </p>
       </Section>
 
-      <Section title="4. Services tiers">
+      <Section title="5. Services tiers">
         <p>Automail fait appel aux services tiers suivants&nbsp;:</p>
         <ul style={styles.ul}>
           <li><strong>Shopify</strong> — pour l'authentification et l'accès aux données de commande.</li>
           <li><strong>OpenAI</strong> — pour la génération des brouillons de réponse. Les données de commande et d'email pertinentes sont transmises à OpenAI uniquement pour cette fin.</li>
           <li><strong>17track</strong> — pour la récupération du statut de suivi des colis, si applicable.</li>
-          <li><strong>Gmail / Zoho Mail</strong> — si vous connectez votre compte email, nous utilisons leur API pour lire et surveiller les emails entrants.</li>
+          <li><strong>Gmail / Zoho Mail / Microsoft 365 (Outlook)</strong> — si vous connectez votre compte email, nous utilisons leur API (avec OAuth 2.0 et scopes en lecture seule) pour lire et surveiller les emails entrants. Les jetons OAuth sont chiffrés au repos.</li>
         </ul>
       </Section>
 
-      <Section title="5. Conservation des données">
+      <Section title="6. Stockage et sécurité">
+        <ul style={styles.ul}>
+          <li>
+            Les données de l'application sont stockées dans une base PostgreSQL hébergée chez{" "}
+            <a style={styles.a} href="https://neon.tech" target="_blank" rel="noopener noreferrer">Neon</a>{" "}
+            (région UE, chiffrée au repos).
+          </li>
+          <li>
+            Les jetons OAuth Gmail, Zoho et Microsoft 365 sont chiffrés avant stockage avec AES-256-GCM.
+            Ils ne sont jamais journalisés ni exposés dans des réponses d'API.
+          </li>
+          <li>
+            Le contenu des emails entrants est stocké temporairement pour permettre la ré-analyse et le
+            raffinement des brouillons. Ces données sont rattachées à votre boutique et ne sont jamais
+            partagées avec d'autres marchands.
+          </li>
+          <li>
+            Toutes les données en transit sont protégées par TLS 1.2 ou supérieur.
+          </li>
+        </ul>
+      </Section>
+
+      <Section title="7. Conservation des données">
         <p>
-          Nous conservons les emails traités et les brouillons générés dans notre base de données tant que
-          votre boutique est connectée à Automail. Lorsque vous désinstallez l'application, vos données
-          peuvent être supprimées sur demande via notre email de support.
+          Nous conservons les emails traités et les brouillons générés tant que votre boutique est
+          connectée à Automail. Lorsque vous désinstallez l'application, votre session est immédiatement
+          supprimée via le webhook Shopify <code>app/uninstalled</code>. L'intégralité des données de
+          la boutique est ensuite purgée 48 heures plus tard via le webhook <code>shop/redact</code>
+          conformément aux exigences RGPD.
         </p>
         <p>
           Nous respectons les webhooks de suppression de données Shopify (
           <code>customers/data_request</code>, <code>customers/redact</code>, <code>shop/redact</code>)
-          pour garantir la conformité avec la politique de distribution de l'App Store.
+          pour garantir la conformité avec la politique de distribution de l'App Store et le RGPD.
         </p>
       </Section>
 
-      <Section title="6. Vos droits">
+      <Section title="8. Vos droits">
         <p>
           Selon votre lieu de résidence, vous pouvez disposer de droits sur vos données personnelles,
           notamment le droit d'accès, de rectification ou de suppression. Pour exercer ces droits,
@@ -239,7 +333,7 @@ function PrivacyFr() {
         </p>
       </Section>
 
-      <Section title="7. Contact">
+      <Section title="9. Contact">
         <p>
           Pour toute question concernant cette politique de confidentialité ou vos données&nbsp;:{" "}
           <a href="mailto:blmcontactpro1@gmail.com" style={styles.a}>

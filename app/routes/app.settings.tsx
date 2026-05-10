@@ -4,12 +4,14 @@ import { useTranslation } from "react-i18next";
 import { useRef, useEffect, useState } from "react";
 
 import { authenticate } from "../shopify.server";
+import { requireOnboardingComplete } from "../lib/onboarding/guard";
 import { getSettings, saveSettings } from "../lib/support/settings";
 import { getUiLanguage, saveUiLanguage } from "../lib/user-preferences";
 import { SettingsIcon } from "../components/ui";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session, sessionToken } = await authenticate.admin(request);
+  await requireOnboardingComplete(session.shop, request);
   const settings = await getSettings(session.shop);
   const userId = sessionToken?.sub ?? null;
   const uiLanguage = userId ? await getUiLanguage(userId, session.shop) : "en";

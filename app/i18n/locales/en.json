@@ -5,6 +5,7 @@
     "emailInbox": "Email inbox",
     "dashboard": "Dashboard",
     "settings": "Settings",
+    "billing": "Billing",
     "help": "Help",
     "languageLabel": "Language",
     "errorTitle": "Something went wrong",
@@ -56,6 +57,43 @@
     "fieldCustomer": "Customer",
     "fieldFulfillment": "Fulfillment",
     "fieldPayment": "Payment",
+    "orderFulfillmentStatus": {
+      "FULFILLED": "Fulfilled",
+      "UNFULFILLED": "Unfulfilled",
+      "PARTIALLY_FULFILLED": "Partially fulfilled",
+      "RESTOCKED": "Restocked",
+      "ON_HOLD": "On hold",
+      "PENDING_FULFILLMENT": "Pending fulfillment",
+      "OPEN": "Open",
+      "IN_PROGRESS": "In progress",
+      "SCHEDULED": "Scheduled"
+    },
+    "orderPaymentStatus": {
+      "PAID": "Paid",
+      "PENDING": "Pending",
+      "AUTHORIZED": "Authorized",
+      "PARTIALLY_PAID": "Partially paid",
+      "REFUNDED": "Refunded",
+      "PARTIALLY_REFUNDED": "Partially refunded",
+      "VOIDED": "Voided",
+      "EXPIRED": "Expired",
+      "OVERPAID": "Overpaid"
+    },
+    "trackingStatusValues": {
+      "InTransit": "In transit",
+      "Delivered": "Delivered",
+      "Exception": "Exception",
+      "OutForDelivery": "Out for delivery",
+      "AvailableForPickup": "Available for pickup",
+      "FailedAttempt": "Failed attempt",
+      "PickedUp": "Picked up",
+      "Returned": "Returned",
+      "Pending": "Pending",
+      "InfoReceived": "Info received",
+      "Expired": "Expired",
+      "Undelivered": "Undelivered",
+      "Unknown": "Unknown"
+    },
     "badge17track": "17track",
     "badgeShopify": "Shopify",
     "badgeInferred": "Inferred",
@@ -233,6 +271,7 @@
     "filterFiltered": "Filtered (Tier 1)",
     "resetFilters": "Reset",
     "noEmailsMatch": "No emails match the current filters.",
+    "disconnected": "Email disconnected. Refresh the page to reconnect.",
     "totalMails": "Total mails",
     "totalMailsHelper": "All statuses",
     "tier1": "Tier 1 (filters)",
@@ -271,6 +310,7 @@
     "editableDraft": "Editable draft",
     "draftVersion": "Version {{n}} (read-only)",
     "adjustDraft": "Adjust draft",
+    "adjustDraftPlaceholder": "e.g. Be more formal, mention refund policy, shorten…",
     "refineWithAi": "Refine with AI",
     "refining": "Refining…",
     "filesKept": "Added files are kept for 7 days",
@@ -279,6 +319,8 @@
     "orderCustomer": "Customer",
     "orderName": "Order",
     "orderItems": "Items",
+    "orderItemsCount_one": "{{count}} item",
+    "orderItemsCount_other": "{{count}} items",
     "orderStatus": "Status",
     "syncReport": "Synced {{total}} emails: {{support}} support, {{uncertain}} uncertain, {{filtered}} filtered{{errors}}.",
     "syncErrors": ", {{n}} errors",
@@ -328,11 +370,76 @@
   },
   "privacy": {
     "title": "Privacy Policy",
-    "lastUpdated": "Last updated: April 2026"
+    "lastUpdated": "Last updated: May 2026"
   },
   "common": {
     "cancel": "Cancel",
-    "save": "Save"
+    "save": "Save",
+    "dismiss": "Dismiss"
+  },
+  "billing": {
+    "page": {
+      "title": "Billing & plan",
+      "eyebrow": "Subscription",
+      "lead": "Choose the plan that fits the volume of support emails you handle.",
+      "subscribedSuccess": "Subscription confirmed — your plan is now active.",
+      "subscriptionDeclined": "Your subscription was not activated. You can choose a plan below and try again.",
+      "scheduledChangeNotice": "Scheduled change: {{fromPlan}} → {{toPlan}} on {{date}}.",
+      "currentState": "Current status: {{state}} (plan: {{plan}})",
+      "cancelSubscription": "Cancel subscription",
+      "cancelScheduled": "Cancel this change"
+    },
+    "plan": {
+      "draftsPerMonth_one": "{{count}} draft / month",
+      "draftsPerMonth_other": "{{count}} drafts / month",
+      "maxMailboxes_one": "{{count}} connected mailbox",
+      "maxMailboxes_other": "{{count}} connected mailboxes",
+      "advancedDashboard_one": "Advanced dashboard — up to {{count}} day of history",
+      "advancedDashboard_other": "Advanced dashboard — up to {{count}} days of history",
+      "basicDashboard_one": "Basic dashboard — up to {{count}} day of history",
+      "basicDashboard_other": "Basic dashboard — up to {{count}} days of history",
+      "currentPlan": "Current plan",
+      "subscribeBtn": "Subscribe",
+      "downgradeBtn": "Downgrade to this plan",
+      "processing": "Processing…",
+      "recommended": "Recommended",
+      "perMonth": "month"
+    },
+    "trialDaysLeft_one": "Trial — {{count}} day left",
+    "trialDaysLeft_other": "Trial — {{count}} days left",
+    "trialExpired": "Trial expired",
+    "draftsCount": "{{used}} / {{limit}} drafts",
+    "upgradeCta": "Upgrade",
+    "choosePlan": "Choose a plan",
+    "dashboard": {
+      "gated": {
+        "default": "Available on Pro",
+        "heatmap": "Activity heatmap is available on Pro",
+        "alerts": "Anomaly alerts are available on Pro",
+        "reopened": "Reopened threads insight is available on Pro"
+      }
+    },
+    "trial": {
+      "activeBanner_one": "You have {{count}} day left in your trial. Choose a plan to continue past it.",
+      "activeBanner_other": "You have {{count}} days left in your trial. Choose a plan to continue past it.",
+      "expiredBanner": "Your trial has ended. Choose a plan to continue using Automail."
+    },
+    "banner": {
+      "warning": "You've used {{used}} of {{limit}} drafts this month.",
+      "critical": "Almost out of quota: {{used}} of {{limit}} drafts used this month.",
+      "exceeded": "Quota reached ({{used}} / {{limit}}) — sync paused. Upgrade to continue."
+    },
+    "modal": {
+      "exceededTitle": "Quota reached for this month ({{used}} / {{limit}} drafts)",
+      "exceededBody": "Upgrade to Pro to continue immediately, or wait until next month for the reset.",
+      "lastUsedTitle": "You just used your last draft of the month",
+      "lastUsedBody": "{{used}} of {{limit}} drafts used. Generation is paused until next month or upgrade.",
+      "later": "Later",
+      "viewPlans": "View plans"
+    },
+    "syncSuspended": {
+      "banner": "Mailbox sync is paused — your quota is exhausted or your trial has ended. Upgrade or wait for the next monthly reset to resume."
+    }
   },
   "classification": {
     "editTitle": "Edit details",
@@ -351,6 +458,27 @@
       "candidate_mismatch": "The selected order no longer exists.",
       "order_not_found": "No order found for this number.",
       "order_ambiguous": "Multiple orders match — please be more specific."
+    }
+  },
+  "onboarding": {
+    "welcome": {
+      "title": "Welcome to Automail",
+      "body": "Automail helps you reply faster to support emails by drafting answers grounded in your real Shopify order and tracking data.",
+      "cta": "Get started"
+    },
+    "connect": {
+      "title": "Connect your mailbox",
+      "body": "Pick your provider. Automail only reads your support emails to draft replies.",
+      "gmail": "Connect with Gmail",
+      "outlook": "Connect with Outlook",
+      "zoho": "Connect with Zoho"
+    },
+    "checklist": {
+      "title": "Getting started",
+      "progress": "{{done}} of {{total}} done",
+      "firstDraft": "Generate your first draft",
+      "toneAndSignature": "Set your reply tone and signature",
+      "dismiss": "Dismiss"
     }
   }
 }
