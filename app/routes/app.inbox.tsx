@@ -2951,12 +2951,6 @@ export default function InboxPage() {
                     : "minmax(0, 1fr)",
                   gap: "16px",
                   alignItems: "start",
-                  // Extend the row's containing block by ~one viewport so the
-                  // sticky right panel stays glued at top:72px even after the
-                  // user has scrolled past the bottom of the thread list.
-                  // Without this, the panel detaches and its header slides
-                  // under the trial/quota top bar.
-                  paddingBottom: selectedThreadMeta ? "calc(100vh - 88px)" : undefined,
                 }}
               >
                 {/* Left: compact thread list */}
@@ -2982,17 +2976,25 @@ export default function InboxPage() {
                   ))}
                 </div>
 
-                {/* Right: thread detail panel (sticky) */}
+                {/* Right: thread detail panel (sticky).
+                    The wrapper enforces a min-height of one viewport so the
+                    grid cell (the panel's containing block) is always taller
+                    than the panel itself, giving `position: sticky` room to
+                    operate. Without it, when the cell shrinks to content
+                    height, the panel detaches at the bottom and its header
+                    slides under the top bar. */}
                 {selectedThreadMeta && (
-                  <div className="ui-detail-panel">
-                    <ThreadDetailPanel
-                      thread={selectedThreadMeta.thread}
-                      threadState={selectedThreadMeta.state}
-                      connectedEmail={loaderData.connectedEmail}
-                      bucket={selectedThreadMeta.bucket}
-                      previousContact={selectedThreadMeta.previousContact}
-                      onClose={() => setExpandedThreadId(null)}
-                    />
+                  <div style={{ minHeight: "calc(100vh - 88px)" }}>
+                    <div className="ui-detail-panel">
+                      <ThreadDetailPanel
+                        thread={selectedThreadMeta.thread}
+                        threadState={selectedThreadMeta.state}
+                        connectedEmail={loaderData.connectedEmail}
+                        bucket={selectedThreadMeta.bucket}
+                        previousContact={selectedThreadMeta.previousContact}
+                        onClose={() => setExpandedThreadId(null)}
+                      />
+                    </div>
                   </div>
                 )}
               </div>
