@@ -423,6 +423,8 @@
     "trial": {
       "activeBanner_one": "You have {{count}} day left in your trial. Choose a plan to continue past it.",
       "activeBanner_other": "You have {{count}} days left in your trial. Choose a plan to continue past it.",
+      "activeShort_one": "{{count}}d trial",
+      "activeShort_other": "{{count}}d trial",
       "expiredBanner": "Your trial has ended. Choose a plan to continue using Automail."
     },
     "banner": {

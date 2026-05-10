@@ -423,6 +423,8 @@
     "trial": {
       "activeBanner_one": "Il vous reste {{count}} jour d'essai. Choisissez un plan pour continuer au-delà.",
       "activeBanner_other": "Il vous reste {{count}} jours d'essai. Choisissez un plan pour continuer au-delà.",
+      "activeShort_one": "{{count}}j d'essai",
+      "activeShort_other": "{{count}}j d'essai",
       "expiredBanner": "Votre essai est terminé. Choisissez un plan pour continuer à utiliser Automail."
     },
     "banner": {

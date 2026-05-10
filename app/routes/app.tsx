@@ -129,6 +129,11 @@ export default function App() {
             <TopBarCounter />
           </div>
           <Outlet />
+          {/* Floating quota counter — persists at the bottom-right of the
+              viewport so the user always sees their remaining drafts /
+              trial state, even after scrolling past the (non-sticky) top
+              bar. */}
+          <TopBarCounter variant="floating" />
         </EntitlementsProvider>
       ) : (
         <>
