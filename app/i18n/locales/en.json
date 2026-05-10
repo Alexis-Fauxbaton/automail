@@ -50,6 +50,7 @@
     "ordersMatchedWarning_one": "{{count}} order matched — verify before replying.",
     "ordersMatchedWarning_other": "{{count}} orders matched — verify before replying.",
     "orderToConfirm": "Order to confirm ({{count}} candidates).",
+    "chooseOrder": "Choose the order",
     "noIdentifiers": "No identifiers extracted.",
     "noOrder": "No matching order found.",
     "fieldOrder": "Order",
