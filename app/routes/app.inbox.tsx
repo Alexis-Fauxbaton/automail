@@ -2977,14 +2977,13 @@ export default function InboxPage() {
                 </div>
 
                 {/* Right: thread detail panel (sticky).
-                    Wrap with padding-bottom so the panel's containing block
-                    is always taller than the panel itself, giving sticky
-                    actual room. The padding lives INSIDE the grid item so
-                    it counts toward the item's box (the panel's CB),
-                    unlike padding on the left column or the grid container
-                    which doesn't extend the row-track or the cell. */}
+                    A sibling spacer below the panel extends the wrapper's
+                    *content box* (sticky's containing block), giving the
+                    panel real range to slide. Padding-bottom on the
+                    wrapper would NOT work here: sticky's CB is the parent's
+                    content box, which excludes padding, so range stays 0. */}
                 {selectedThreadMeta && (
-                  <div style={{ paddingBottom: "100vh" }}>
+                  <div>
                     <div className="ui-detail-panel">
                       <ThreadDetailPanel
                         thread={selectedThreadMeta.thread}
@@ -2995,6 +2994,7 @@ export default function InboxPage() {
                         onClose={() => setExpandedThreadId(null)}
                       />
                     </div>
+                    <div aria-hidden style={{ height: "100vh" }} />
                   </div>
                 )}
               </div>
