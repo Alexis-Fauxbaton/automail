@@ -1,4 +1,5 @@
-import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import type { ActionFunctionArgs, LoaderFunctionArgs, ShouldRevalidateFunctionArgs } from "react-router";
 import { Form, useActionData, useFetcher, useLoaderData, useNavigation, useRevalidator, useSearchParams } from "react-router";
 import { useTranslation } from "react-i18next";
@@ -600,6 +601,71 @@ function getOpsBucket(
 
 function hasLinkedOrder(state: SerializedThreadState | null): boolean {
   return !!state?.resolvedOrderNumber;
+}
+
+/** Tooltip rendered via portal so card / row / overflow ancestors can't
+ *  clip it. Positioned above (or below if no room) the anchor element. */
+function PortalTooltip({
+  open,
+  anchor,
+  children,
+}: {
+  open: boolean;
+  anchor: HTMLElement | null;
+  children: ReactNode;
+}) {
+  const [pos, setPos] = useState<{ top: number; left: number; placement: 'top' | 'bottom' } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!open || !anchor) { setPos(null); return; }
+    const update = () => {
+      const r = anchor.getBoundingClientRect();
+      const TOOLTIP_H_EST = 110; // generous; tooltip will be at most a few lines
+      const TOOLTIP_W = 230;
+      const margin = 8;
+      const placement: 'top' | 'bottom' = r.top > TOOLTIP_H_EST + margin ? 'top' : 'bottom';
+      const top = placement === 'top' ? r.top - margin : r.bottom + margin;
+      // Anchor right edge to anchor right edge, but clamp to viewport.
+      let left = r.right - TOOLTIP_W;
+      if (left < margin) left = margin;
+      if (left + TOOLTIP_W > window.innerWidth - margin) left = window.innerWidth - margin - TOOLTIP_W;
+      setPos({ top, left, placement });
+    };
+    update();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
+    };
+  }, [open, anchor]);
+
+  if (!open || !pos || typeof document === 'undefined') return null;
+  return createPortal(
+    <div style={{
+      position: 'fixed',
+      top: pos.top,
+      left: pos.left,
+      transform: pos.placement === 'top' ? 'translateY(-100%)' : undefined,
+      width: 230,
+      background: '#fff',
+      border: '1px solid var(--ui-slate-200)',
+      borderRadius: 8,
+      padding: '8px 12px',
+      boxShadow: '0 4px 16px rgba(0,0,0,0.10)',
+      zIndex: 10_000,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 4,
+      fontSize: 12,
+      color: 'var(--ui-slate-700)',
+      fontWeight: 400,
+      pointerEvents: 'none',
+    }}>
+      {children}
+    </div>,
+    document.body,
+  );
 }
 
 /** Rounded pill with an alert-triangle icon — clickable trigger for the
@@ -1442,6 +1508,7 @@ const ThreadCard = memo(function ThreadCard({
   const reanalyzeFetcher = useFetcher();
   const isGenerating = reanalyzeFetcher.state !== "idle";
   const [showSignals, setShowSignals] = useState(false);
+  const signalAnchorRef = useRef<HTMLSpanElement | null>(null);
   const [quotaModal, setQuotaModal] = useState<{
     open: boolean;
     used: number;
@@ -1541,31 +1608,22 @@ const ThreadCard = memo(function ThreadCard({
 
         {hasAnySignal && (
           <span
-            style={{ position: "relative", display: "inline-flex", alignItems: "center" }}
+            ref={signalAnchorRef}
+            style={{ display: "inline-flex", alignItems: "center" }}
             onMouseEnter={(e) => { e.stopPropagation(); setShowSignals(true); }}
             onMouseLeave={() => setShowSignals(false)}
             onClick={(e) => e.stopPropagation()}
           >
             <SignalPill />
-            {showSignals && (
-              <div style={{
-                position: "absolute", bottom: "calc(100% + 6px)", right: 0,
-                background: "#fff", border: "1px solid var(--ui-slate-200)",
-                borderRadius: "8px", padding: "8px 12px",
-                boxShadow: "0 4px 16px rgba(0,0,0,0.10)",
-                zIndex: 10, minWidth: "210px",
-                display: "flex", flexDirection: "column", gap: "4px",
-                fontSize: "12px", color: "var(--ui-slate-700)", fontWeight: 400,
-              }}>
-                {hasSignals && previousContact.recentReply && <span>{t("inbox.signalRepliedElsewhere")}</span>}
-                {hasSignals && previousContact.byAddress && previousContact.byOrder && <span>{t("inbox.signalPriorContactBoth")}</span>}
-                {hasSignals && previousContact.byOrder && !previousContact.byAddress && <span>{t("inbox.signalPriorContactOrder")}</span>}
-                {hasSignals && previousContact.byAddress && !previousContact.byOrder && <span>{t("inbox.signalPriorContactAddress")}</span>}
-                {ambiguousOrderCount > 0 && (
-                  <span>{t("inbox.signalAmbiguousOrder", { count: ambiguousOrderCount })}</span>
-                )}
-              </div>
-            )}
+            <PortalTooltip open={showSignals} anchor={signalAnchorRef.current}>
+              {hasSignals && previousContact.recentReply && <span>{t("inbox.signalRepliedElsewhere")}</span>}
+              {hasSignals && previousContact.byAddress && previousContact.byOrder && <span>{t("inbox.signalPriorContactBoth")}</span>}
+              {hasSignals && previousContact.byOrder && !previousContact.byAddress && <span>{t("inbox.signalPriorContactOrder")}</span>}
+              {hasSignals && previousContact.byAddress && !previousContact.byOrder && <span>{t("inbox.signalPriorContactAddress")}</span>}
+              {ambiguousOrderCount > 0 && (
+                <span>{t("inbox.signalAmbiguousOrder", { count: ambiguousOrderCount })}</span>
+              )}
+            </PortalTooltip>
           </span>
         )}
       </div>
@@ -2093,6 +2151,7 @@ function ThreadDetailPanel({
   }, [reanalyzeFetcher.data]);
   const [showThread, setShowThread] = useState(false);
   const [showSignals, setShowSignals] = useState(false);
+  const signalAnchorRef = useRef<HTMLSpanElement | null>(null);
   const hasSignals =
     (bucket === "to_process" || bucket === "waiting_merchant" || bucket === "waiting_customer") &&
     (previousContact.recentReply || previousContact.byAddress || previousContact.byOrder);
@@ -2217,30 +2276,21 @@ function ThreadDetailPanel({
           ))}
           {hasAnySignal && (
             <span
-              style={{ position: "relative", display: "inline-flex", alignItems: "center" }}
+              ref={signalAnchorRef}
+              style={{ display: "inline-flex", alignItems: "center" }}
               onMouseEnter={() => setShowSignals(true)}
               onMouseLeave={() => setShowSignals(false)}
             >
               <SignalPill />
-              {showSignals && (
-                <div style={{
-                  position: "absolute", top: "calc(100% + 6px)", left: 0,
-                  background: "#fff", border: "1px solid var(--ui-slate-200)",
-                  borderRadius: "8px", padding: "8px 12px",
-                  boxShadow: "0 4px 16px rgba(0,0,0,0.10)",
-                  zIndex: 10, minWidth: "210px",
-                  display: "flex", flexDirection: "column", gap: "4px",
-                  fontSize: "12px", color: "var(--ui-slate-700)", fontWeight: 400,
-                }}>
-                  {hasSignals && previousContact.recentReply && <span>{t("inbox.signalRepliedElsewhere")}</span>}
-                  {hasSignals && previousContact.byAddress && previousContact.byOrder && <span>{t("inbox.signalPriorContactBoth")}</span>}
-                  {hasSignals && previousContact.byOrder && !previousContact.byAddress && <span>{t("inbox.signalPriorContactOrder")}</span>}
-                  {hasSignals && previousContact.byAddress && !previousContact.byOrder && <span>{t("inbox.signalPriorContactAddress")}</span>}
-                  {ambiguousOrderCount > 0 && (
-                    <span>{t("inbox.signalAmbiguousOrder", { count: ambiguousOrderCount })}</span>
-                  )}
-                </div>
-              )}
+              <PortalTooltip open={showSignals} anchor={signalAnchorRef.current}>
+                {hasSignals && previousContact.recentReply && <span>{t("inbox.signalRepliedElsewhere")}</span>}
+                {hasSignals && previousContact.byAddress && previousContact.byOrder && <span>{t("inbox.signalPriorContactBoth")}</span>}
+                {hasSignals && previousContact.byOrder && !previousContact.byAddress && <span>{t("inbox.signalPriorContactOrder")}</span>}
+                {hasSignals && previousContact.byAddress && !previousContact.byOrder && <span>{t("inbox.signalPriorContactAddress")}</span>}
+                {ambiguousOrderCount > 0 && (
+                  <span>{t("inbox.signalAmbiguousOrder", { count: ambiguousOrderCount })}</span>
+                )}
+              </PortalTooltip>
             </span>
           )}
           {analysisEmail?.analysisResult && (
