@@ -288,20 +288,44 @@ function PrivacyFr() {
         </ul>
       </Section>
 
-      <Section title="6. Conservation des données">
+      <Section title="6. Stockage et sécurité">
+        <ul style={styles.ul}>
+          <li>
+            Les données de l'application sont stockées dans une base PostgreSQL hébergée chez{" "}
+            <a style={styles.a} href="https://neon.tech" target="_blank" rel="noopener noreferrer">Neon</a>{" "}
+            (région UE, chiffrée au repos).
+          </li>
+          <li>
+            Les jetons OAuth Gmail, Zoho et Microsoft 365 sont chiffrés avant stockage avec AES-256-GCM.
+            Ils ne sont jamais journalisés ni exposés dans des réponses d'API.
+          </li>
+          <li>
+            Le contenu des emails entrants est stocké temporairement pour permettre la ré-analyse et le
+            raffinement des brouillons. Ces données sont rattachées à votre boutique et ne sont jamais
+            partagées avec d'autres marchands.
+          </li>
+          <li>
+            Toutes les données en transit sont protégées par TLS 1.2 ou supérieur.
+          </li>
+        </ul>
+      </Section>
+
+      <Section title="7. Conservation des données">
         <p>
-          Nous conservons les emails traités et les brouillons générés dans notre base de données tant que
-          votre boutique est connectée à Automail. Lorsque vous désinstallez l'application, vos données
-          peuvent être supprimées sur demande via notre email de support.
+          Nous conservons les emails traités et les brouillons générés tant que votre boutique est
+          connectée à Automail. Lorsque vous désinstallez l'application, votre session est immédiatement
+          supprimée via le webhook Shopify <code>app/uninstalled</code>. L'intégralité des données de
+          la boutique est ensuite purgée 48 heures plus tard via le webhook <code>shop/redact</code>
+          conformément aux exigences RGPD.
         </p>
         <p>
           Nous respectons les webhooks de suppression de données Shopify (
           <code>customers/data_request</code>, <code>customers/redact</code>, <code>shop/redact</code>)
-          pour garantir la conformité avec la politique de distribution de l'App Store.
+          pour garantir la conformité avec la politique de distribution de l'App Store et le RGPD.
         </p>
       </Section>
 
-      <Section title="7. Vos droits">
+      <Section title="8. Vos droits">
         <p>
           Selon votre lieu de résidence, vous pouvez disposer de droits sur vos données personnelles,
           notamment le droit d'accès, de rectification ou de suppression. Pour exercer ces droits,
@@ -309,7 +333,7 @@ function PrivacyFr() {
         </p>
       </Section>
 
-      <Section title="8. Contact">
+      <Section title="9. Contact">
         <p>
           Pour toute question concernant cette politique de confidentialité ou vos données&nbsp;:{" "}
           <a href="mailto:blmcontactpro1@gmail.com" style={styles.a}>

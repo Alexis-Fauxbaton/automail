@@ -2,6 +2,12 @@ import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { getZohoAccessToken } from "../lib/zoho/auth";
+import { checkRateLimit } from "../lib/rate-limit";
+
+// Bound the Zoho proxy: a single inbox view loads dozens of inline images,
+// so this is generous on purpose. Caps abusive bursts from a compromised
+// session that could otherwise spray Zoho with requests on the shop's quota.
+const RATE_LIMIT_PER_SHOP_PER_MIN = 300;
 
 const SAFE_INLINE_MIME_TYPES = new Set([
   "image/jpeg",
@@ -29,6 +35,19 @@ function safeMimeType(mime: string): { contentType: string; forceDownload: boole
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
+
+  const limit = await checkRateLimit({
+    key: shop,
+    kind: "zoho-inline",
+    limit: RATE_LIMIT_PER_SHOP_PER_MIN,
+    windowMs: 60_000,
+  });
+  if (!limit.ok) {
+    return new Response("Too many requests", {
+      status: 429,
+      headers: { "Retry-After": Math.ceil(limit.resetMs / 1000).toString() },
+    });
+  }
 
   const url = new URL(request.url);
   const na = url.searchParams.get("na");

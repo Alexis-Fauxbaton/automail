@@ -3,8 +3,13 @@ import { authenticate } from "../shopify.server";
 import { resolveActivePlan } from "../lib/billing/subscription";
 import { cancelSubscription } from "../lib/billing/shopify-billing";
 import { scheduleDowngrade, cancelScheduledChange } from "../lib/billing/scheduled-changes";
+import { checkRateLimit } from "../lib/rate-limit";
 
 const VALID_DOWNGRADE_TARGETS = ['starter'] as const;
+
+// Tight cap: cancellation/downgrade is a once-in-a-lifetime user action.
+// 10/min is enough for human retries after a network blip but bounds spam.
+const RATE_LIMIT_PER_SHOP_PER_MIN = 10;
 
 /**
  * POST /api/billing/cancel
@@ -23,6 +28,26 @@ const VALID_DOWNGRADE_TARGETS = ['starter'] as const;
  */
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session, admin } = await authenticate.admin(request);
+
+  const limit = await checkRateLimit({
+    key: session.shop,
+    kind: "billing-cancel",
+    limit: RATE_LIMIT_PER_SHOP_PER_MIN,
+    windowMs: 60_000,
+  });
+  if (!limit.ok) {
+    return new Response(
+      JSON.stringify({ error: "rate_limited" }),
+      {
+        status: 429,
+        headers: {
+          "Content-Type": "application/json",
+          "Retry-After": Math.ceil(limit.resetMs / 1000).toString(),
+        },
+      },
+    );
+  }
+
   const formData = await request.formData();
   const mode = String(formData.get("mode") ?? "immediate");
 

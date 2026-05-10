@@ -3,8 +3,13 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { storage } from "../lib/attachments/storage";
+import { checkRateLimit } from "../lib/rate-limit";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+
+// Per-shop quota: 100 attachment ops per minute is generous for normal use
+// but bounds disk fill / Zoho proxy abuse from a compromised session.
+const RATE_LIMIT_PER_SHOP_PER_MIN = 100;
 
 /**
  * CSRF model: see api.reply-draft.tsx for the full rationale. In short,
@@ -15,6 +20,22 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 export async function action({ request }: ActionFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
+
+  const limit = await checkRateLimit({
+    key: shop,
+    kind: "draft-attachment",
+    limit: RATE_LIMIT_PER_SHOP_PER_MIN,
+    windowMs: 60_000,
+  });
+  if (!limit.ok) {
+    return data(
+      { error: "Too many requests" },
+      {
+        status: 429,
+        headers: { "Retry-After": Math.ceil(limit.resetMs / 1000).toString() },
+      },
+    );
+  }
 
   if (request.method === "DELETE") {
     return handleDelete(request, shop);
