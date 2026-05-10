@@ -2977,14 +2977,18 @@ export default function InboxPage() {
                 </div>
 
                 {/* Right: thread detail panel (sticky).
-                    The wrapper enforces a min-height of one viewport so the
-                    grid cell (the panel's containing block) is always taller
-                    than the panel itself, giving `position: sticky` room to
-                    operate. Without it, when the cell shrinks to content
-                    height, the panel detaches at the bottom and its header
-                    slides under the top bar. */}
+                    The wrapper stretches to fill the grid cell (= the row
+                    track, sized to the taller column — usually the long
+                    thread list). That gives `position: sticky` actual room
+                    to move within its cell, so the panel stays glued at
+                    top:72 from the top of the row down to the bottom of the
+                    list. `min-height` covers the case where the list is
+                    shorter than the viewport. */}
                 {selectedThreadMeta && (
-                  <div style={{ minHeight: "calc(100vh - 88px)" }}>
+                  <div style={{
+                    alignSelf: "stretch",
+                    minHeight: "calc(100vh - 88px)",
+                  }}>
                     <div className="ui-detail-panel">
                       <ThreadDetailPanel
                         thread={selectedThreadMeta.thread}
