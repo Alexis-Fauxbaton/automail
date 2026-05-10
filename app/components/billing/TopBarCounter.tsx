@@ -35,8 +35,29 @@ export function TopBarCounter({ variant = 'inline' }: { variant?: 'inline' | 'fl
   // there.
   if (ent.state === 'trial_active' && variant === 'inline') return null;
 
-  // Floating dismissed → render the tiny reopener dot in the corner.
+  // Floating dismissed → render the tiny reopener pill in the corner.
+  // Use the live status colour + a compact glyph (• count or days) so the
+  // user knows what the pill represents and can tell quota state at a glance.
   if (variant === 'floating' && dismissed) {
+    let bg = '#2563eb';
+    let glyph = '•';
+    if (ent.state === 'trial_active') {
+      bg = '#2563eb';
+      glyph = `${ent.trialDaysRemaining ?? 0}j`;
+    } else if (ent.state === 'trial_expired') {
+      bg = '#dc2626';
+      glyph = '!';
+    } else if (ent.state === 'paid_active') {
+      const lvl = ent.quotaStatus.level;
+      bg = lvl === 'exceeded' ? '#dc2626'
+         : lvl === 'critical' ? '#f97316'
+         : lvl === 'warning' ? '#eab308'
+         : '#16a34a';
+      const left = Number.isFinite(ent.quotaStatus.limit)
+        ? Math.max(0, ent.quotaStatus.limit - ent.quotaStatus.used)
+        : null;
+      glyph = left !== null ? String(left) : '∞';
+    }
     return (
       <button
         type="button"
@@ -46,8 +67,10 @@ export function TopBarCounter({ variant = 'inline' }: { variant?: 'inline' | 'fl
           localStorage.removeItem(storageKey);
           setDismissed(false);
         }}
-        style={styles.reopener}
-      />
+        style={{ ...styles.reopener, background: bg }}
+      >
+        {glyph}
+      </button>
     );
   }
 
@@ -170,14 +193,21 @@ const styles: Record<string, React.CSSProperties> = {
     bottom: 20,
     right: 20,
     zIndex: 1000,
-    width: 22,
-    height: 22,
-    borderRadius: '50%',
+    minWidth: 32,
+    height: 32,
+    padding: '0 10px',
+    borderRadius: 999,
     background: '#0f172a',
-    border: '1px solid #1e293b',
+    border: 'none',
+    color: 'white',
+    fontWeight: 700,
+    fontSize: 13,
+    fontFamily: 'system-ui, sans-serif',
+    fontVariantNumeric: 'tabular-nums',
     cursor: 'pointer',
-    padding: 0,
-    boxShadow: '0 4px 12px rgba(15, 23, 42, 0.22)',
-    opacity: 0.85,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    boxShadow: '0 4px 12px rgba(15, 23, 42, 0.28)',
   },
 };
