@@ -36,30 +36,24 @@ export function TopBarCounter({ variant = 'inline' }: { variant?: 'inline' | 'fl
   if (ent.state === 'trial_active' && variant === 'inline') return null;
 
   // ─── Dismissed floating ────────────────────────────────────────────────
-  // Compact dark pill with [icon] + value. Same visual language as the full
-  // pill, so the user immediately recognises it; the icon disambiguates
-  // "what does this number mean" (clock = trial, envelope = drafts).
+  // Outlined pill with [icon] + full label. Same content as the active
+  // pill (so it's never cryptic), but presented as a quieter outlined
+  // chip to read as "minimised". Clicking it brings back the full solid
+  // pill with the dismiss button.
   if (variant === 'floating' && dismissed) {
     let icon = ICON_DRAFT;
-    let value = '—';
-    let bg = '#0f172a';
+    let label = '';
     if (ent.state === 'trial_active') {
       icon = ICON_CLOCK;
-      value = `${ent.trialDaysRemaining ?? 0}j`;
+      label = t('billing.trial.activeShort', { count: ent.trialDaysRemaining ?? 0, defaultValue: `${ent.trialDaysRemaining ?? 0}j d'essai` });
     } else if (ent.state === 'trial_expired') {
       icon = ICON_WARNING;
-      value = '!';
-      bg = '#7f1d1d';
+      label = t('billing.trialExpired');
     } else if (ent.state === 'paid_active') {
       icon = ICON_DRAFT;
-      const lvl = ent.quotaStatus.level;
-      bg = lvl === 'exceeded' ? '#7f1d1d'
-         : lvl === 'critical' ? '#7c2d12'
-         : lvl === 'warning' ? '#713f12'
-         : '#0f172a';
       const used = ent.quotaStatus.used;
       const limit = ent.quotaStatus.limit;
-      value = Number.isFinite(limit) ? `${used}/${limit}` : `${used}`;
+      label = t('billing.draftsCount', { used, limit: Number.isFinite(limit) ? limit : '∞' });
     }
     return (
       <button
@@ -70,10 +64,10 @@ export function TopBarCounter({ variant = 'inline' }: { variant?: 'inline' | 'fl
           localStorage.removeItem(storageKey);
           setDismissed(false);
         }}
-        style={{ ...styles.dismissedPill, background: bg }}
+        style={styles.dismissedPill}
       >
         <span style={styles.dismissedIcon} aria-hidden>{icon}</span>
-        <span style={styles.label}>{value}</span>
+        <span style={styles.label}>{label}</span>
       </button>
     );
   }
@@ -224,11 +218,11 @@ const styles: Record<string, React.CSSProperties> = {
     zIndex: 1000,
     display: 'inline-flex',
     alignItems: 'center',
-    gap: 7,
-    padding: '7px 12px 7px 11px',
-    background: '#0f172a',
-    border: 'none',
-    color: '#f8fafc',
+    gap: 8,
+    padding: '7px 14px 7px 12px',
+    background: 'rgba(15, 23, 42, 0.06)',
+    border: '1px solid rgba(15, 23, 42, 0.18)',
+    color: '#334155',
     fontWeight: 600,
     fontSize: 13,
     lineHeight: 1,
@@ -236,13 +230,14 @@ const styles: Record<string, React.CSSProperties> = {
     fontVariantNumeric: 'tabular-nums',
     cursor: 'pointer',
     borderRadius: 999,
-    boxShadow: '0 6px 18px rgba(15, 23, 42, 0.28)',
+    boxShadow: '0 2px 6px rgba(15, 23, 42, 0.08)',
+    backdropFilter: 'blur(6px)',
+    WebkitBackdropFilter: 'blur(6px)',
   },
   dismissedIcon: {
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    color: '#f8fafc',
-    opacity: 0.95,
+    color: '#475569',
   },
 };
