@@ -2,7 +2,7 @@
 
 client_id = "01efe84af5b21eb4f61fe827ef194448"
 name = "automail-test"
-application_url = "https://automobiles-exact-scripts-samples.trycloudflare.com/app/inbox"
+application_url = "https://automail-vc6z.onrender.com/app/inbox"
 embedded = true
 
 [webhooks]
@@ -40,9 +40,9 @@ use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [
-  "https://automobiles-exact-scripts-samples.trycloudflare.com/",
-  "https://automobiles-exact-scripts-samples.trycloudflare.com/auth/callback",
-  "https://automobiles-exact-scripts-samples.trycloudflare.com/auth/shopify/callback"
+  "https://automail-vc6z.onrender.com/",
+  "https://automail-vc6z.onrender.com/auth/callback",
+  "https://automail-vc6z.onrender.com/auth/shopify/callback"
 ]
 
 [build]
