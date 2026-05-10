@@ -91,7 +91,7 @@ export function QuotaBanner() {
         {t('billing.upgradeCta')}
       </Link>
       {level !== 'exceeded' && (
-        <button onClick={handleDismiss} aria-label="Dismiss" style={{
+        <button onClick={handleDismiss} aria-label={t('common.dismiss')} style={{
           flexShrink: 0,
           background: 'transparent',
           border: 'none',

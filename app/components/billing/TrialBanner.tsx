@@ -33,7 +33,7 @@ export function TrialBanner() {
         <Link to="/app/billing" style={ctaPrimaryBlue}>
           {t('billing.choosePlan')}
         </Link>
-        <button onClick={handleDismiss} style={dismissBtn} aria-label="Dismiss">
+        <button onClick={handleDismiss} style={dismissBtn} aria-label={t('common.dismiss')}>
           <span aria-hidden>×</span>
         </button>
       </div>

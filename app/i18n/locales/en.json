@@ -57,6 +57,43 @@
     "fieldCustomer": "Customer",
     "fieldFulfillment": "Fulfillment",
     "fieldPayment": "Payment",
+    "orderFulfillmentStatus": {
+      "FULFILLED": "Fulfilled",
+      "UNFULFILLED": "Unfulfilled",
+      "PARTIALLY_FULFILLED": "Partially fulfilled",
+      "RESTOCKED": "Restocked",
+      "ON_HOLD": "On hold",
+      "PENDING_FULFILLMENT": "Pending fulfillment",
+      "OPEN": "Open",
+      "IN_PROGRESS": "In progress",
+      "SCHEDULED": "Scheduled"
+    },
+    "orderPaymentStatus": {
+      "PAID": "Paid",
+      "PENDING": "Pending",
+      "AUTHORIZED": "Authorized",
+      "PARTIALLY_PAID": "Partially paid",
+      "REFUNDED": "Refunded",
+      "PARTIALLY_REFUNDED": "Partially refunded",
+      "VOIDED": "Voided",
+      "EXPIRED": "Expired",
+      "OVERPAID": "Overpaid"
+    },
+    "trackingStatusValues": {
+      "InTransit": "In transit",
+      "Delivered": "Delivered",
+      "Exception": "Exception",
+      "OutForDelivery": "Out for delivery",
+      "AvailableForPickup": "Available for pickup",
+      "FailedAttempt": "Failed attempt",
+      "PickedUp": "Picked up",
+      "Returned": "Returned",
+      "Pending": "Pending",
+      "InfoReceived": "Info received",
+      "Expired": "Expired",
+      "Undelivered": "Undelivered",
+      "Unknown": "Unknown"
+    },
     "badge17track": "17track",
     "badgeShopify": "Shopify",
     "badgeInferred": "Inferred",
@@ -234,6 +271,7 @@
     "filterFiltered": "Filtered (Tier 1)",
     "resetFilters": "Reset",
     "noEmailsMatch": "No emails match the current filters.",
+    "disconnected": "Email disconnected. Refresh the page to reconnect.",
     "totalMails": "Total mails",
     "totalMailsHelper": "All statuses",
     "tier1": "Tier 1 (filters)",
@@ -272,6 +310,7 @@
     "editableDraft": "Editable draft",
     "draftVersion": "Version {{n}} (read-only)",
     "adjustDraft": "Adjust draft",
+    "adjustDraftPlaceholder": "e.g. Be more formal, mention refund policy, shorten…",
     "refineWithAi": "Refine with AI",
     "refining": "Refining…",
     "filesKept": "Added files are kept for 7 days",
@@ -280,6 +319,8 @@
     "orderCustomer": "Customer",
     "orderName": "Order",
     "orderItems": "Items",
+    "orderItemsCount_one": "{{count}} item",
+    "orderItemsCount_other": "{{count}} items",
     "orderStatus": "Status",
     "syncReport": "Synced {{total}} emails: {{support}} support, {{uncertain}} uncertain, {{filtered}} filtered{{errors}}.",
     "syncErrors": ", {{n}} errors",
@@ -329,11 +370,12 @@
   },
   "privacy": {
     "title": "Privacy Policy",
-    "lastUpdated": "Last updated: April 2026"
+    "lastUpdated": "Last updated: May 2026"
   },
   "common": {
     "cancel": "Cancel",
-    "save": "Save"
+    "save": "Save",
+    "dismiss": "Dismiss"
   },
   "billing": {
     "page": {

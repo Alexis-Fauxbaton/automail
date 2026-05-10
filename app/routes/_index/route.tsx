@@ -38,36 +38,47 @@ export default function App() {
   return (
     <div className={styles.index}>
       <div className={styles.content}>
-        <h1 className={styles.heading}>A short heading about [your app]</h1>
+        <h1 className={styles.heading}>Automail</h1>
         <p className={styles.text}>
-          A tagline about [your app] that describes your value proposition.
+          Le copilote de support client pour boutiques Shopify. Automail analyse
+          chaque email entrant, retrouve la commande concernée, vérifie le suivi
+          colis et propose un brouillon de réponse vérifié, prêt à envoyer.
         </p>
         {showForm && (
           <Form className={styles.form} method="post" action="/auth/login">
             <label className={styles.label}>
-              <span>Shop domain</span>
-              <input className={styles.input} type="text" name="shop" />
-              <span>e.g: my-shop-domain.myshopify.com</span>
+              <span>Domaine de la boutique</span>
+              <input
+                className={styles.input}
+                type="text"
+                name="shop"
+                placeholder="ma-boutique.myshopify.com"
+              />
+              <span>ex. : ma-boutique.myshopify.com</span>
             </label>
             <button className={styles.button} type="submit">
-              Log in
+              Se connecter
             </button>
           </Form>
         )}
         <ul className={styles.list}>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Analyse intelligente</strong>. Détection automatique de
+            l'intention support, extraction du numéro de commande et du client.
           </li>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Données vérifiées</strong>. Récupération en direct du statut
+            de la commande, des fulfillments et du suivi de chaque colis.
           </li>
           <li>
-            <strong>Product feature</strong>. Some detail about your feature and
-            its benefit to your customer.
+            <strong>Brouillons prudents</strong>. Réponses générées à partir de
+            faits vérifiés, jamais inventées — vous gardez toujours la main pour
+            valider et envoyer.
           </li>
         </ul>
+        <p className={styles.text}>
+          <a href="/privacy">Politique de confidentialité</a>
+        </p>
       </div>
     </div>
   );

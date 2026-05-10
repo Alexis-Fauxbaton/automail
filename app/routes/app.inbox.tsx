@@ -1870,7 +1870,7 @@ function DraftBlock({ email, threadSenderEmail }: {
 
         {/* Draft body */}
         <s-stack direction="inline" gap="small-300" blockAlign="center">
-          <s-text variant="headingSm">Draft reply</s-text>
+          <s-text variant="headingSm">{t("support.draftReplySection")}</s-text>
           {total > 1 && (
             <s-stack direction="inline" gap="small-200" blockAlign="center">
               <s-button variant="plain" size="small" disabled={versionIndex === 0}
@@ -1900,7 +1900,7 @@ function DraftBlock({ email, threadSenderEmail }: {
             <s-stack direction={isMobile ? "block" : "inline"} gap="small-300" blockAlign="end">
               <div style={{ flex: 1 }}>
                 <s-text-field label={t("inbox.adjustDraft")} name="instructions"
-                  placeholder="e.g. Be more formal, mention refund policy, shorten…" />
+                  placeholder={t("inbox.adjustDraftPlaceholder")} />
               </div>
               <s-button type="submit" variant="secondary" disabled={refining || redrafting}>
                 {refining ? t("inbox.refining") : t("inbox.refineWithAi")}
@@ -2285,8 +2285,10 @@ function ThreadDetailPanel({
               {([
                 [t("inbox.orderCustomer"), order.customerName ?? "—"],
                 [t("inbox.orderName"),    order.name],
-                [t("inbox.orderItems"),    `${order.lineItems.length} item${order.lineItems.length !== 1 ? "s" : ""}`],
-                [t("inbox.orderStatus"),   order.displayFulfillmentStatus ?? "—"],
+                [t("inbox.orderItems"),    t("inbox.orderItemsCount", { count: order.lineItems.length })],
+                [t("inbox.orderStatus"),   order.displayFulfillmentStatus
+                  ? t(`analysis.orderFulfillmentStatus.${order.displayFulfillmentStatus}`, order.displayFulfillmentStatus)
+                  : "—"],
               ] as [string, string][]).map(([label, value]) => (
                 <div key={label}>
                   <div style={kvLabel}>{label}</div>
@@ -2717,10 +2719,10 @@ export default function InboxPage() {
   if (actionData?.disconnected) {
     return (
       <div className="ui-inbox-root">
-        <div className="ui-inbox-heading"><h1>Email inbox</h1></div>
+        <div className="ui-inbox-heading"><h1>{t("nav.emailInbox")}</h1></div>
         <s-section>
           <s-banner tone="success">
-            Email disconnected. Refresh the page to reconnect.
+            {t("inbox.disconnected")}
           </s-banner>
         </s-section>
       </div>
@@ -2730,7 +2732,7 @@ export default function InboxPage() {
   return (
     <div className="ui-inbox-root">
       <SyncSuspendedBanner />
-      <div className="ui-inbox-heading"><h1>Email inbox</h1></div>
+      <div className="ui-inbox-heading"><h1>{t("nav.emailInbox")}</h1></div>
 
       {/* Onboarding checklist (auto-hides when dismissed or complete) */}
       <div className="ui-inbox-section">
