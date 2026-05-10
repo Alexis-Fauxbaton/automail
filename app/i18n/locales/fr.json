@@ -50,6 +50,7 @@
     "ordersMatchedWarning_one": "{{count}} commande trouvée — vérifiez avant de répondre.",
     "ordersMatchedWarning_other": "{{count}} commandes trouvées — vérifiez avant de répondre.",
     "orderToConfirm": "Commande à confirmer ({{count}} candidates).",
+    "chooseOrder": "Choisir la commande",
     "noIdentifiers": "Aucun identifiant extrait.",
     "noOrder": "Aucune commande trouvée.",
     "fieldOrder": "Commande",

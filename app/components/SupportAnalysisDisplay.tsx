@@ -284,12 +284,15 @@ export function AnalysisDisplay({
   analysis,
   lastAnalyzedAt,
   threadOperationalState,
+  onEditOrder,
 }: {
   analysis: SupportAnalysisExtended;
   /** ISO timestamp of the last full analysis (Shopify + tracking). */
   lastAnalyzedAt?: string | null;
   /** Used to explain why tracking may not be refreshed on resolved threads. */
   threadOperationalState?: string | null;
+  /** Opens the classification modal focused on resolving order ambiguity. */
+  onEditOrder?: () => void;
 }) {
   const { t } = useTranslation();
 
@@ -351,11 +354,34 @@ export function AnalysisDisplay({
         <Card
           title={t("analysis.matchedOrderTitle")}
           footer={orderCandidates.length > 1
-            ? <span style={{ fontSize: "12px", color: "#b98900" }}>
-                ⚠ {analysis.order
-                  ? t("analysis.ordersMatchedWarning_other", { count: orderCandidates.length })
-                  : t("analysis.orderToConfirm", { count: orderCandidates.length })}
-              </span>
+            ? (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", flexWrap: "wrap" }}>
+                <span style={{ fontSize: "12px", color: "#b98900" }}>
+                  ⚠ {analysis.order
+                    ? t("analysis.ordersMatchedWarning_other", { count: orderCandidates.length })
+                    : t("analysis.orderToConfirm", { count: orderCandidates.length })}
+                </span>
+                {onEditOrder && (
+                  <button
+                    type="button"
+                    onClick={onEditOrder}
+                    style={{
+                      background: "#fff",
+                      border: "1px solid #b98900",
+                      borderRadius: "6px",
+                      padding: "3px 10px",
+                      fontSize: "12px",
+                      fontWeight: 500,
+                      color: "#7a5b00",
+                      cursor: "pointer",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {t("analysis.chooseOrder")}
+                  </button>
+                )}
+              </div>
+            )
             : undefined
           }
         >

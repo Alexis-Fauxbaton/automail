@@ -1,5 +1,5 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ActionFunctionArgs, LoaderFunctionArgs, ShouldRevalidateFunctionArgs } from "react-router";
 import { Form, useActionData, useFetcher, useLoaderData, useNavigation, useRevalidator, useSearchParams } from "react-router";
 import { useTranslation } from "react-i18next";
 import { useMobile } from "../hooks/useMobile";
@@ -202,6 +202,27 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     onboardingChecklist,
   };
 };
+
+// Skip the (heavy) inbox loader when the user only opens/closes a thread —
+// `?thread=<id>` is purely client-side state and fetching 500 emails again
+// adds ~1s of perceived latency on every preview click.
+export function shouldRevalidate({
+  currentUrl,
+  nextUrl,
+  defaultShouldRevalidate,
+  formMethod,
+  actionResult,
+}: ShouldRevalidateFunctionArgs) {
+  if (formMethod && formMethod.toUpperCase() !== "GET") return true;
+  if (actionResult) return true;
+  if (currentUrl.pathname !== nextUrl.pathname) return defaultShouldRevalidate;
+  const a = new URLSearchParams(currentUrl.search);
+  const b = new URLSearchParams(nextUrl.search);
+  a.delete("thread");
+  b.delete("thread");
+  if (a.toString() === b.toString()) return false;
+  return defaultShouldRevalidate;
+}
 
 // ---------------------------------------------------------------------------
 // Action
@@ -1404,7 +1425,7 @@ const ThreadCard = memo(function ThreadCard({
   connectedEmail: string | null;
   /** Cross-thread: have we already sent an outgoing to this address/order in another thread? */
   previousContact: { byAddress: boolean; byOrder: boolean; recentReply: boolean; matchedAddress: string | null };
-  onSelect: () => void;
+  onSelect: (threadId: string) => void;
   onOrderClick: (orderNumber: string) => void;
   onFilterClick: (patch: Partial<InboxFilters>) => void;
   onBucketClick: (bucket: OpsBucket | "to_handle") => void;
@@ -1459,7 +1480,7 @@ const ThreadCard = memo(function ThreadCard({
 
   return (
     <div
-      onClick={onSelect}
+      onClick={() => onSelect(thread.threadId)}
       className={["ui-card ui-card--compact", isSelected ? "ui-card--selected" : ""].join(" ")}
       style={{ cursor: "pointer" }}
     >
@@ -1599,8 +1620,17 @@ const ThreadCard = memo(function ThreadCard({
         </div>
       )}
 
-      {/* Row 5 : actions (stop propagation so clicks don't re-select) */}
-      <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "6px" }}>
+      {/* Row 5 : actions. Only swallow clicks coming from actual interactive
+          children (buttons, links, form controls). Empty space inside this
+          row should still bubble up so the whole card stays clickable. */}
+      <div
+        onClick={(e) => {
+          if ((e.target as HTMLElement).closest('button, a, input, textarea, select, [role="button"]')) {
+            e.stopPropagation();
+          }
+        }}
+        style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "6px" }}
+      >
         {latest.canonicalThreadId && (
           <MoveThreadControl
             canonicalThreadId={latest.canonicalThreadId}
@@ -1672,6 +1702,16 @@ function DraftBlock({ email, threadSenderEmail }: {
   // refine, reanalyze), not when navigating between existing versions.
   const [bodyText, setBodyText] = useState(email.draftReply ?? "");
   useEffect(() => { setBodyText(email.draftReply ?? ""); }, [email.draftReply]);
+
+  // Defer TipTap mount: the editor's init costs ~150-300ms and was the
+  // dominant chunk of perceived latency when opening a thread. Rendering a
+  // plain-HTML preview first lets the panel paint immediately; the real
+  // editor swaps in on the next frame so typing/formatting still works.
+  const [editorMounted, setEditorMounted] = useState(false);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setEditorMounted(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
 
   // Auto-save debounce for body text
   const bodySaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1882,14 +1922,26 @@ function DraftBlock({ email, threadSenderEmail }: {
           )}
         </s-stack>
 
-        <RichDraftEditor
-          content={isLatest ? bodyText : currentVersion}
-          onChange={isLatest ? (html) => {
-            setBodyText(html);
-            saveBody(html);
-          } : undefined}
-          readOnly={!isLatest}
-        />
+        {editorMounted ? (
+          <RichDraftEditor
+            content={isLatest ? bodyText : currentVersion}
+            onChange={isLatest ? (html) => {
+              setBodyText(html);
+              saveBody(html);
+            } : undefined}
+            readOnly={!isLatest}
+          />
+        ) : (
+          <div
+            aria-hidden
+            style={{
+              minHeight: "180px",
+              border: "1px solid var(--p-color-border)",
+              borderRadius: "6px",
+              background: "var(--p-color-bg-surface-secondary)",
+            }}
+          />
+        )}
 
 
         {isLatest && (
@@ -2340,6 +2392,7 @@ function ThreadDetailPanel({
                 analysis={analysisEmail.analysisResult}
                 lastAnalyzedAt={analysisEmail.lastAnalyzedAt}
                 threadOperationalState={threadState?.operationalState ?? null}
+                onEditOrder={() => setEditingClassification(true)}
               />
             </div>
           )}
@@ -2541,17 +2594,48 @@ export default function InboxPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const expandedThreadId = searchParams.get("thread");
 
-  const setExpandedThreadId = (threadId: string | null) => {
-    setSearchParams(
-      (prev) => {
-        const next = new URLSearchParams(prev);
-        if (threadId === null) next.delete("thread");
-        else next.set("thread", threadId);
-        return next;
-      },
-      { preventScrollReset: true },
-    );
-  };
+  const setExpandedThreadId = useCallback((threadId: string | null) => {
+    startTransition(() => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (threadId === null) next.delete("thread");
+          else next.set("thread", threadId);
+          return next;
+        },
+        { preventScrollReset: true },
+      );
+    });
+  }, [setSearchParams]);
+
+  // Toggle helper: stable identity (no `expandedThreadId` dep) so memoized
+  // ThreadCards don't re-render on every selection change. Reads the current
+  // value via `setSearchParams`'s functional updater.
+  const toggleExpandedThreadId = useCallback((threadId: string) => {
+    startTransition(() => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (next.get("thread") === threadId) next.delete("thread");
+          else next.set("thread", threadId);
+          return next;
+        },
+        { preventScrollReset: true },
+      );
+    });
+  }, [setSearchParams]);
+
+  const handleOrderClick = useCallback((orderNumber: string) => {
+    setFilters((prev) => ({ ...prev, search: orderNumber }));
+  }, []);
+
+  const handleFilterClick = useCallback((patch: Partial<InboxFilters>) => {
+    setFilters((prev) => ({ ...prev, ...patch }));
+  }, []);
+
+  const handleBucketClick = useCallback((bucket: OpsBucket | "to_handle") => {
+    setActiveBucket(bucket);
+  }, []);
 
   // Save list scroll on mobile when opening a thread, restore when closing.
   const savedScrollRef = useRef(0);
@@ -2884,18 +2968,10 @@ export default function InboxPage() {
                       isSelected={expandedThreadId === thread.threadId}
                       connectedEmail={loaderData.connectedEmail}
                       previousContact={previousContact}
-                      onSelect={() =>
-                        setExpandedThreadId(
-                          expandedThreadId === thread.threadId ? null : thread.threadId,
-                        )
-                      }
-                      onOrderClick={(orderNumber) =>
-                        setFilters((prev) => ({ ...prev, search: orderNumber }))
-                      }
-                      onFilterClick={(patch) =>
-                        setFilters((prev) => ({ ...prev, ...patch }))
-                      }
-                      onBucketClick={(bucket) => setActiveBucket(bucket)}
+                      onSelect={toggleExpandedThreadId}
+                      onOrderClick={handleOrderClick}
+                      onFilterClick={handleFilterClick}
+                      onBucketClick={handleBucketClick}
                     />
                   ))}
                 </div>
