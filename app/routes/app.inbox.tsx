@@ -2953,17 +2953,8 @@ export default function InboxPage() {
                   alignItems: "start",
                 }}
               >
-                {/* Left: compact thread list. The bottom padding extends
-                    the column (and therefore the grid row track) so the
-                    sticky right panel always has enough range to stay
-                    glued at top:16 — without it, the panel detaches at
-                    the very bottom of the page scroll. */}
-                <div style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "10px",
-                  paddingBottom: selectedThreadMeta ? "calc(100vh - 32px)" : undefined,
-                }}>
+                {/* Left: compact thread list */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
                   {filteredThreadMeta.length === 0 && (
                     <s-box padding="large-500" background="subdued" borderRadius="base">
                       <s-paragraph>{t("inbox.noEmailsMatch")}</s-paragraph>
@@ -2985,17 +2976,25 @@ export default function InboxPage() {
                   ))}
                 </div>
 
-                {/* Right: thread detail panel (sticky) */}
+                {/* Right: thread detail panel (sticky).
+                    Wrap with padding-bottom so the panel's containing block
+                    is always taller than the panel itself, giving sticky
+                    actual room. The padding lives INSIDE the grid item so
+                    it counts toward the item's box (the panel's CB),
+                    unlike padding on the left column or the grid container
+                    which doesn't extend the row-track or the cell. */}
                 {selectedThreadMeta && (
-                  <div className="ui-detail-panel">
-                    <ThreadDetailPanel
-                      thread={selectedThreadMeta.thread}
-                      threadState={selectedThreadMeta.state}
-                      connectedEmail={loaderData.connectedEmail}
-                      bucket={selectedThreadMeta.bucket}
-                      previousContact={selectedThreadMeta.previousContact}
-                      onClose={() => setExpandedThreadId(null)}
-                    />
+                  <div style={{ paddingBottom: "100vh" }}>
+                    <div className="ui-detail-panel">
+                      <ThreadDetailPanel
+                        thread={selectedThreadMeta.thread}
+                        threadState={selectedThreadMeta.state}
+                        connectedEmail={loaderData.connectedEmail}
+                        bucket={selectedThreadMeta.bucket}
+                        previousContact={selectedThreadMeta.previousContact}
+                        onClose={() => setExpandedThreadId(null)}
+                      />
+                    </div>
                   </div>
                 )}
               </div>
