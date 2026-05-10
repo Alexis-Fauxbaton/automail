@@ -775,6 +775,7 @@ export async function backfillResolvedIntents(
       conversationMessages: threadContext.messages,
       admin,
       shop,
+      mailboxAddress: connEmail,
       skipDraft: true,
       // Run the Shopify order search even for resolved threads — the
       // matched order remains useful context. Tracking lookup + crawler
@@ -1100,6 +1101,7 @@ export async function classifyAndDraft(
       conversationMessages: threadContext.messages,
       admin,
       shop,
+      mailboxAddress,
       trackedCallContext: {
         shop,
         emailId: record.id,
@@ -1433,6 +1435,7 @@ export async function reanalyzeEmail(
     conversationMessages: threadContext.messages,
     admin,
     shop,
+    mailboxAddress: conn?.email,
     trackedCallContext: {
       shop,
       emailId: record.id,

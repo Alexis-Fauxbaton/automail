@@ -13,16 +13,10 @@ export function TopBarCounter() {
 
   if (ent.state === 'internal') return null;
 
-  if (ent.state === 'trial_active') {
-    return (
-      <div style={styles.wrapper}>
-        <span style={styles.dotInfo} />
-        <span style={styles.label}>
-          {t('billing.trialDaysLeft', { count: ent.trialDaysRemaining ?? 0 })}
-        </span>
-      </div>
-    );
-  }
+  // During trial_active, the TrialBanner already shows "X days left" with a CTA.
+  // Showing the same info as a pill creates a visible duplicate. The banner is
+  // dismissible — once dismissed the user explicitly chose not to be reminded.
+  if (ent.state === 'trial_active') return null;
 
   if (ent.state === 'trial_expired') {
     return (

@@ -3,6 +3,15 @@ import { useTranslation } from "react-i18next";
 import type { SupportAnalysisExtended } from "../lib/support/orchestrator";
 import type { FulfillmentTrackingFacts, TrackingFacts } from "../lib/support/types";
 
+type TFn = ReturnType<typeof useTranslation>["t"];
+
+function localizedStatus(t: TFn, namespace: string, value: string | null | undefined): string {
+  if (!value) return "—";
+  const key = `analysis.${namespace}.${value}`;
+  const translated = t(key, { defaultValue: "" });
+  return translated || value;
+}
+
 // ─── Helper Components ───────────────────────────────────────────────────────────
 
 export function PencilButton({ onClick, hasOverrides }: { onClick: () => void; hasOverrides: boolean }) {
@@ -146,8 +155,8 @@ export function OrderBlock({ order }: { order: SupportAnalysisExtended["order"] 
     [t("analysis.fieldOrder"), <strong key="name">{order.name}</strong>],
     [t("analysis.fieldDate"), new Date(order.createdAt).toLocaleString()],
     [t("analysis.fieldCustomer"), `${order.customerName ?? "—"} (${order.customerEmail ?? "no email"})`],
-    [t("analysis.fieldFulfillment"), order.displayFulfillmentStatus ?? "—"],
-    [t("analysis.fieldPayment"), order.displayFinancialStatus ?? "—"],
+    [t("analysis.fieldFulfillment"), localizedStatus(t, "orderFulfillmentStatus", order.displayFulfillmentStatus)],
+    [t("analysis.fieldPayment"), localizedStatus(t, "orderPaymentStatus", order.displayFinancialStatus)],
   ];
 
   const items = order.lineItems.length > 0
@@ -180,7 +189,7 @@ function SingleFulfillmentTracking({ tracking, label }: { tracking: FulfillmentT
   if (tracking.lineItems.length > 0) kvRows.push([t("analysis.trackingItems"), tracking.lineItems.map((li) => `${li.quantity}× ${li.title}`).join(", ")]);
   if (tracking.carrier) kvRows.push([t("analysis.trackingCarrier"), tracking.carrier]);
   if (tracking.trackingNumber) kvRows.push([t("analysis.trackingNumber"), tracking.trackingNumber]);
-  if (tracking.status) kvRows.push([t("analysis.trackingStatus"), tracking.status]);
+  if (tracking.status) kvRows.push([t("analysis.trackingStatus"), localizedStatus(t, "trackingStatusValues", tracking.status)]);
   if (tracking.lastEvent) kvRows.push([t("analysis.trackingLastEvent"), `${tracking.lastEvent}${tracking.lastEventDate ? ` (${tracking.lastEventDate})` : ""}`]);
   if (tracking.lastLocation) kvRows.push([t("analysis.trackingLocation"), tracking.lastLocation]);
 
@@ -365,9 +374,11 @@ export function AnalysisDisplay({
         }
         footer={crawledContexts.length > 0
           ? <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-              {crawledContexts.map((ctx, i) => (
-                <s-link key={i} href={ctx.url} target="_blank">{t("analysis.source")}</s-link>
-              ))}
+              {crawledContexts.map((ctx, i) =>
+                /^https?:\/\//i.test(ctx.url)
+                  ? <s-link key={i} href={ctx.url} target="_blank">{t("analysis.source")}</s-link>
+                  : <span key={i} style={{ fontSize: "12px", color: "#6d7175" }}>{t("analysis.source")} : {ctx.url}</span>
+              )}
             </div>
           : undefined
         }
