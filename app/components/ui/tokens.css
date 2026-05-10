@@ -442,7 +442,7 @@ s-page::part(header) {
 .ui-inbox-root {
   width: 100%;
   min-height: 100vh;
-  padding: 0 20px 40px;
+  padding: 0 20px 0;
   box-sizing: border-box;
   background: var(--ui-slate-50);
   font-family: -apple-system, BlinkMacSystemFont, "San Francisco", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -461,6 +461,9 @@ s-page::part(header) {
 }
 .ui-inbox-section {
   margin-bottom: 12px;
+}
+.ui-inbox-section:last-child {
+  margin-bottom: 0;
 }
 .ui-grid-2 {
   display: grid;
@@ -540,7 +543,7 @@ s-page::part(header) {
 }
 @media (max-width: 640px) {
   .ui-inbox-root {
-    padding: 0 12px 24px;
+    padding: 0 12px 0;
   }
   .ui-card {
     padding: 14px;
