@@ -502,14 +502,12 @@ s-page::part(header) {
   }
 }
 
-/* Thread detail sticky panel → becomes static on mobile.
-   `top` clears the parent app-shell sticky bar (trial banner / quota banner /
-   counter) which is ~56px tall when present, so the panel header isn't
-   masked when the user scrolls. */
+/* Thread detail sticky panel → becomes static on mobile. The app-shell top
+   bar is no longer sticky, so we don't need to leave room for it. */
 .ui-detail-panel {
   position: sticky;
-  top: 72px;
-  max-height: calc(100vh - 88px);
+  top: 16px;
+  max-height: calc(100vh - 32px);
   overflow-y: auto;
   border-radius: var(--ui-radius-2xl);
 }

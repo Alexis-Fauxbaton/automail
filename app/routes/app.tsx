@@ -109,10 +109,12 @@ export default function App() {
             <s-link href="/app/billing">{t("nav.billing")}</s-link>
             <s-link href="/app/help">{t("nav.help")}</s-link>
           </s-app-nav>
+          {/* Top app-shell bar (trial banner + quota banner + counter).
+              Non-sticky on purpose: when sticky, it covered the top of any
+              other sticky element underneath (notably the inbox detail panel
+              header). Scrolling it out of view is a fair tradeoff — the
+              messages reappear at the next page navigation. */}
           <div style={{
-            position: "sticky",
-            top: 0,
-            zIndex: 100,
             background: "rgba(248, 250, 252, 0.92)",
             backdropFilter: "saturate(180%) blur(8px)",
             WebkitBackdropFilter: "saturate(180%) blur(8px)",
