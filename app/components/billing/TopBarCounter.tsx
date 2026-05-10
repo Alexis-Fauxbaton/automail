@@ -13,8 +13,8 @@ const DISMISS_KEY = (shop: string) => `automail_floating_counter_dismissed_${sho
  * `variant="floating"` renders the same counter as a fixed pill in the
  * bottom-right corner so quota usage stays visible while the user scrolls
  * past the (non-sticky) top app-shell bar. Floating variant is dismissible
- * (persisted in localStorage); a small reopener dot stays in the corner so
- * the user can bring it back without leaving the page.
+ * (persisted in localStorage); the dismissed state shrinks to a compact
+ * icon+value pill that stays self-explanatory and clickable to restore.
  */
 export function TopBarCounter({ variant = 'inline' }: { variant?: 'inline' | 'floating' } = {}) {
   const ent = useEntitlements();
@@ -35,28 +35,31 @@ export function TopBarCounter({ variant = 'inline' }: { variant?: 'inline' | 'fl
   // there.
   if (ent.state === 'trial_active' && variant === 'inline') return null;
 
-  // Floating dismissed → render the tiny reopener pill in the corner.
-  // Use the live status colour + a compact glyph (• count or days) so the
-  // user knows what the pill represents and can tell quota state at a glance.
+  // ─── Dismissed floating ────────────────────────────────────────────────
+  // Compact dark pill with [icon] + value. Same visual language as the full
+  // pill, so the user immediately recognises it; the icon disambiguates
+  // "what does this number mean" (clock = trial, envelope = drafts).
   if (variant === 'floating' && dismissed) {
-    let bg = '#2563eb';
-    let glyph = '•';
+    let icon = ICON_DRAFT;
+    let value = '—';
+    let bg = '#0f172a';
     if (ent.state === 'trial_active') {
-      bg = '#2563eb';
-      glyph = `${ent.trialDaysRemaining ?? 0}j`;
+      icon = ICON_CLOCK;
+      value = `${ent.trialDaysRemaining ?? 0}j`;
     } else if (ent.state === 'trial_expired') {
-      bg = '#dc2626';
-      glyph = '!';
+      icon = ICON_WARNING;
+      value = '!';
+      bg = '#7f1d1d';
     } else if (ent.state === 'paid_active') {
+      icon = ICON_DRAFT;
       const lvl = ent.quotaStatus.level;
-      bg = lvl === 'exceeded' ? '#dc2626'
-         : lvl === 'critical' ? '#f97316'
-         : lvl === 'warning' ? '#eab308'
-         : '#16a34a';
-      const left = Number.isFinite(ent.quotaStatus.limit)
-        ? Math.max(0, ent.quotaStatus.limit - ent.quotaStatus.used)
-        : null;
-      glyph = left !== null ? String(left) : '∞';
+      bg = lvl === 'exceeded' ? '#7f1d1d'
+         : lvl === 'critical' ? '#7c2d12'
+         : lvl === 'warning' ? '#713f12'
+         : '#0f172a';
+      const used = ent.quotaStatus.used;
+      const limit = ent.quotaStatus.limit;
+      value = Number.isFinite(limit) ? `${used}/${limit}` : `${used}`;
     }
     return (
       <button
@@ -67,9 +70,10 @@ export function TopBarCounter({ variant = 'inline' }: { variant?: 'inline' | 'fl
           localStorage.removeItem(storageKey);
           setDismissed(false);
         }}
-        style={{ ...styles.reopener, background: bg }}
+        style={{ ...styles.dismissedPill, background: bg }}
       >
-        {glyph}
+        <span style={styles.dismissedIcon} aria-hidden>{icon}</span>
+        <span style={styles.label}>{value}</span>
       </button>
     );
   }
@@ -80,7 +84,7 @@ export function TopBarCounter({ variant = 'inline' }: { variant?: 'inline' | 'fl
     <button
       type="button"
       aria-label={t('common.dismiss', { defaultValue: 'Fermer' })}
-      title={t('common.dismiss', { defaultValue: 'Fermer' })}
+      title={t('common.dismiss', { defaultValue: 'Réduire' })}
       onClick={() => {
         localStorage.setItem(storageKey, '1');
         setDismissed(true);
@@ -129,6 +133,31 @@ export function TopBarCounter({ variant = 'inline' }: { variant?: 'inline' | 'fl
     </div>
   );
 }
+
+// ─── Inline icons ────────────────────────────────────────────────────────
+// Tiny SVG glyphs sized for the dismissed pill.
+
+const ICON_CLOCK = (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 7v5l3 2" />
+  </svg>
+);
+
+const ICON_DRAFT = (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4 6h16v12H4z" />
+    <path d="M4 6l8 7 8-7" />
+  </svg>
+);
+
+const ICON_WARNING = (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 3l10 18H2L12 3z" />
+    <path d="M12 10v5" />
+    <path d="M12 18.5v.01" />
+  </svg>
+);
 
 const styles: Record<string, React.CSSProperties> = {
   wrapper: {
@@ -188,26 +217,32 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 0,
     opacity: 0.8,
   },
-  reopener: {
+  dismissedPill: {
     position: 'fixed',
     bottom: 20,
     right: 20,
     zIndex: 1000,
-    minWidth: 32,
-    height: 32,
-    padding: '0 10px',
-    borderRadius: 999,
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 7,
+    padding: '7px 12px 7px 11px',
     background: '#0f172a',
     border: 'none',
-    color: 'white',
-    fontWeight: 700,
+    color: '#f8fafc',
+    fontWeight: 600,
     fontSize: 13,
+    lineHeight: 1,
     fontFamily: 'system-ui, sans-serif',
     fontVariantNumeric: 'tabular-nums',
     cursor: 'pointer',
+    borderRadius: 999,
+    boxShadow: '0 6px 18px rgba(15, 23, 42, 0.28)',
+  },
+  dismissedIcon: {
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    boxShadow: '0 4px 12px rgba(15, 23, 42, 0.28)',
+    color: '#f8fafc',
+    opacity: 0.95,
   },
 };
