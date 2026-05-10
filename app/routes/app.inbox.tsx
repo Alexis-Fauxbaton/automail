@@ -2951,6 +2951,12 @@ export default function InboxPage() {
                     : "minmax(0, 1fr)",
                   gap: "16px",
                   alignItems: "start",
+                  // Extend the row's containing block by ~one viewport so the
+                  // sticky right panel stays glued at top:72px even after the
+                  // user has scrolled past the bottom of the thread list.
+                  // Without this, the panel detaches and its header slides
+                  // under the trial/quota top bar.
+                  paddingBottom: selectedThreadMeta ? "calc(100vh - 88px)" : undefined,
                 }}
               >
                 {/* Left: compact thread list */}
