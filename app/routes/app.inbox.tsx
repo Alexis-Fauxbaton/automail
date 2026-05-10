@@ -2953,8 +2953,17 @@ export default function InboxPage() {
                   alignItems: "start",
                 }}
               >
-                {/* Left: compact thread list */}
-                <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                {/* Left: compact thread list. The bottom padding extends
+                    the column (and therefore the grid row track) so the
+                    sticky right panel always has enough range to stay
+                    glued at top:16 — without it, the panel detaches at
+                    the very bottom of the page scroll. */}
+                <div style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "10px",
+                  paddingBottom: selectedThreadMeta ? "calc(100vh - 32px)" : undefined,
+                }}>
                   {filteredThreadMeta.length === 0 && (
                     <s-box padding="large-500" background="subdued" borderRadius="base">
                       <s-paragraph>{t("inbox.noEmailsMatch")}</s-paragraph>
