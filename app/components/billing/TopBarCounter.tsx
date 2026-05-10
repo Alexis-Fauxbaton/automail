@@ -1,5 +1,8 @@
 import { useEntitlements } from "../../lib/billing/entitlements-context";
 import { useTranslation } from "react-i18next";
+import { useEffect, useState } from "react";
+
+const DISMISS_KEY = (shop: string) => `automail_floating_counter_dismissed_${shop}`;
 
 /**
  * Permanent counter visible on every page of the app.
@@ -9,11 +12,20 @@ import { useTranslation } from "react-i18next";
  *
  * `variant="floating"` renders the same counter as a fixed pill in the
  * bottom-right corner so quota usage stays visible while the user scrolls
- * past the (non-sticky) top app-shell bar.
+ * past the (non-sticky) top app-shell bar. Floating variant is dismissible
+ * (persisted in localStorage); a small reopener dot stays in the corner so
+ * the user can bring it back without leaving the page.
  */
 export function TopBarCounter({ variant = 'inline' }: { variant?: 'inline' | 'floating' } = {}) {
   const ent = useEntitlements();
   const { t } = useTranslation();
+  const storageKey = DISMISS_KEY(ent.shop);
+  const [dismissed, setDismissed] = useState(false);
+
+  useEffect(() => {
+    if (variant !== 'floating') return;
+    setDismissed(localStorage.getItem(storageKey) === '1');
+  }, [variant, storageKey]);
 
   if (ent.state === 'internal') return null;
 
@@ -23,7 +35,38 @@ export function TopBarCounter({ variant = 'inline' }: { variant?: 'inline' | 'fl
   // there.
   if (ent.state === 'trial_active' && variant === 'inline') return null;
 
+  // Floating dismissed → render the tiny reopener dot in the corner.
+  if (variant === 'floating' && dismissed) {
+    return (
+      <button
+        type="button"
+        aria-label={t('billing.showCounter', { defaultValue: 'Afficher le compteur' })}
+        title={t('billing.showCounter', { defaultValue: 'Afficher le compteur' })}
+        onClick={() => {
+          localStorage.removeItem(storageKey);
+          setDismissed(false);
+        }}
+        style={styles.reopener}
+      />
+    );
+  }
+
   const wrapperStyle = variant === 'floating' ? styles.wrapperFloating : styles.wrapper;
+
+  const dismissBtn = variant === 'floating' ? (
+    <button
+      type="button"
+      aria-label={t('common.dismiss', { defaultValue: 'Fermer' })}
+      title={t('common.dismiss', { defaultValue: 'Fermer' })}
+      onClick={() => {
+        localStorage.setItem(storageKey, '1');
+        setDismissed(true);
+      }}
+      style={styles.dismissBtn}
+    >
+      ×
+    </button>
+  ) : null;
 
   if (ent.state === 'trial_active') {
     const days = ent.trialDaysRemaining ?? 0;
@@ -31,6 +74,7 @@ export function TopBarCounter({ variant = 'inline' }: { variant?: 'inline' | 'fl
       <div style={wrapperStyle}>
         <span style={styles.dotInfo} />
         <span style={styles.label}>{t('billing.trial.activeShort', { count: days, defaultValue: `${days}j d'essai` })}</span>
+        {dismissBtn}
       </div>
     );
   }
@@ -40,6 +84,7 @@ export function TopBarCounter({ variant = 'inline' }: { variant?: 'inline' | 'fl
       <div style={wrapperStyle}>
         <span style={styles.dotExceeded} />
         <span style={styles.label}>{t('billing.trialExpired')}</span>
+        {dismissBtn}
       </div>
     );
   }
@@ -57,6 +102,7 @@ export function TopBarCounter({ variant = 'inline' }: { variant?: 'inline' | 'fl
       <span style={styles.label}>
         {t('billing.draftsCount', { used, limit: Number.isFinite(limit) ? limit : '∞' })}
       </span>
+      {dismissBtn}
     </div>
   );
 }
@@ -86,7 +132,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'inline-flex',
     alignItems: 'center',
     gap: 8,
-    padding: '6px 12px',
+    padding: '6px 8px 6px 12px',
     fontSize: 13,
     fontWeight: 600,
     fontFamily: 'system-ui, sans-serif',
@@ -102,4 +148,35 @@ const styles: Record<string, React.CSSProperties> = {
   dotCritical:  { width: 8, height: 8, borderRadius: '50%', background: '#f97316' },
   dotExceeded:  { width: 8, height: 8, borderRadius: '50%', background: '#dc2626' },
   dotInfo:      { width: 8, height: 8, borderRadius: '50%', background: '#2563eb' },
+  dismissBtn: {
+    flexShrink: 0,
+    background: 'transparent',
+    border: 'none',
+    color: '#94a3b8',
+    cursor: 'pointer',
+    fontSize: 16,
+    lineHeight: 1,
+    width: 18,
+    height: 18,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 4,
+    padding: 0,
+  },
+  reopener: {
+    position: 'fixed',
+    bottom: 16,
+    right: 16,
+    zIndex: 1000,
+    width: 14,
+    height: 14,
+    borderRadius: '50%',
+    background: '#cbd5e1',
+    border: '1px solid #94a3b8',
+    cursor: 'pointer',
+    padding: 0,
+    boxShadow: '0 2px 6px rgba(15, 23, 42, 0.12)',
+    opacity: 0.6,
+  },
 };
