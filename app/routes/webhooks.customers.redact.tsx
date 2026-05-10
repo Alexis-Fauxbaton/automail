@@ -2,6 +2,7 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { piiHash } from "../lib/log/pii";
+import { storage } from "../lib/attachments/storage";
 
 /**
  * GDPR: customers/redact
@@ -16,6 +17,8 @@ import { piiHash } from "../lib/log/pii";
  *   - Thread resolved identifiers that may contain the customer's email /
  *     name (resolvedEmail, resolvedCustomerName).
  *   - LlmCallLog rows linked to those emails.
+ *   - Attachment files on disk under uploads/{shop}/{emailId}/ — deleted
+ *     here BEFORE the DB cascade removes the storagePath references.
  *
  * We scrub everything keyed off the customer's email address(es). Thread
  * rows themselves are kept (they may still contain merchant-side messages),
@@ -38,7 +41,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return new Response();
   }
 
-  // Delete emails authored by the redacted customer (case-insensitive).
+  // Find emails authored by the redacted customer (case-insensitive).
   const matchingEmails = await db.incomingEmail.findMany({
     where: {
       shop,
@@ -49,9 +52,35 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const emailIds = matchingEmails.map((e) => e.id);
 
   if (emailIds.length > 0) {
+    // Resolve attachment storage paths BEFORE the cascade removes the rows.
+    // Both incoming attachments (originals) and draft attachments (uploaded
+    // replies on those emails) live on disk and must be wiped explicitly.
+    const draftAttachments = await db.draftAttachment.findMany({
+      where: {
+        shop,
+        replyDraft: { emailId: { in: emailIds } },
+        storagePath: { not: null },
+      },
+      select: { storagePath: true },
+    });
+
+    for (const att of draftAttachments) {
+      if (!att.storagePath) continue;
+      try {
+        await storage.remove(att.storagePath);
+      } catch (err) {
+        console.error(
+          `[webhook] customers/redact: failed to remove file ${att.storagePath}:`,
+          err,
+        );
+        // Continue — operator can clean leftovers manually if needed.
+      }
+    }
+
     await db.llmCallLog.deleteMany({
       where: { shop, emailId: { in: emailIds } },
     });
+    // Cascades: IncomingEmail → IncomingEmailAttachment, ReplyDraft → DraftAttachment.
     await db.incomingEmail.deleteMany({
       where: { shop, id: { in: emailIds } },
     });

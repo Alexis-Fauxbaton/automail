@@ -5,6 +5,12 @@ import { createId } from "@paralleldrive/cuid2";
 export interface Storage {
   save(shop: string, emailId: string, file: File): Promise<{ storagePath: string }>;
   remove(storagePath: string): Promise<void>;
+  /**
+   * Recursively delete every file stored for a shop. Used by the GDPR
+   * shop/redact webhook to purge all attachment files for that tenant.
+   * Safe to call when the shop directory does not exist.
+   */
+  removeShopDir(shop: string): Promise<void>;
   getUrl(storagePath: string): string;
 }
 
@@ -50,6 +56,19 @@ export function createStorage(baseDir: string): Storage {
       }
       try {
         fs.unlinkSync(fullPath);
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      }
+    },
+
+    async removeShopDir(shop) {
+      const resolvedBase = path.resolve(baseDir);
+      const fullPath = path.resolve(baseDir, shop);
+      if (!fullPath.startsWith(resolvedBase + path.sep)) {
+        throw new Error(`[storage] refusing to remove shop dir outside baseDir: ${shop}`);
+      }
+      try {
+        fs.rmSync(fullPath, { recursive: true, force: true });
       } catch (err: unknown) {
         if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
       }

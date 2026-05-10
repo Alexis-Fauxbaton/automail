@@ -22,6 +22,12 @@ database.sqlite
 
 /extensions/*/dist
 
+# GDPR customers/data_request exports (contain customer PII)
+/data-requests/
+
+# Attachment uploads (per-shop customer data)
+/uploads/
+
 # Ignore shopify files created during app dev
 .shopify/*
 .shopify.lock
