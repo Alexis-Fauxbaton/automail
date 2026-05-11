@@ -193,9 +193,11 @@ export async function listHistoryChanges(
           labelId,
           pageToken,
         });
-        // Keep the highest historyId across both calls
+        // Keep the highest historyId across both calls.
+        // Gmail historyIds are numeric strings, so compare as BigInt — string
+        // comparison would order "99" > "100".
         const hid = res.data.historyId ?? undefined;
-        if (hid && (!latestHistoryId || hid > latestHistoryId)) {
+        if (hid && (!latestHistoryId || BigInt(hid) > BigInt(latestHistoryId))) {
           latestHistoryId = hid;
         }
         for (const h of res.data.history ?? []) {

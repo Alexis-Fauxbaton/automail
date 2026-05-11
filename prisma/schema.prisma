@@ -131,6 +131,14 @@ model Thread {
   // Captured by handleResync before wiping IncomingEmail rows; consumed
   // by the next analysis pass for this thread, then cleared.
   preservedManualOverridesJson String?
+  // --- GDPR tombstone (customers/redact) -------------------------------
+  // When a customer requests deletion under GDPR, we wipe all PII fields
+  // (resolved*, subjectKey, structuredState, summaryText, preservedManual…)
+  // and delete the related messages/drafts. The Thread row itself is kept
+  // as a tombstone so the merchant sees a placeholder in the inbox rather
+  // than a confusing gap. `redactedAt` non-null signals tombstone state.
+  redactedAt     DateTime?
+  redactedReason String?  // e.g. "gdpr_customer_request"
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

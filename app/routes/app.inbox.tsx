@@ -152,12 +152,77 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           resolvedEmail: true,
           resolvedCustomerName: true,
           resolutionConfidence: true,
+          redactedAt: true,
+          redactedReason: true,
         },
       });
       threadStates = Object.fromEntries(
         threads.map((t) => [t.id, serializeThreadState(t)]),
       );
       threadCreatedAt = new Map(threads.map((t) => [t.id, t.createdAt]));
+    }
+
+    // GDPR tombstones — threads whose content was wiped by customers/redact.
+    // The Thread row is kept so the merchant inbox shows a placeholder; we
+    // fetch the most recent tombstones (separate from the message-driven
+    // canonicalIds query above because there are no IncomingEmail rows
+    // pointing at them anymore).
+    const tombstoneThreads = await prisma.thread.findMany({
+      where: { shop, redactedAt: { not: null } },
+      orderBy: { redactedAt: "desc" },
+      take: 200,
+      select: {
+        id: true,
+        provider: true,
+        createdAt: true,
+        supportNature: true,
+        operationalState: true,
+        previousOperationalState: true,
+        historyStatus: true,
+        resolvedOrderNumber: true,
+        resolvedTrackingNumber: true,
+        resolvedEmail: true,
+        resolvedCustomerName: true,
+        resolutionConfidence: true,
+        redactedAt: true,
+        redactedReason: true,
+      },
+    });
+    for (const t of tombstoneThreads) {
+      threadStates[t.id] = serializeThreadState(t);
+      threadCreatedAt.set(t.id, t.createdAt);
+      // Synthesize one placeholder "email" per tombstone so the existing
+      // group-by-thread / filter / render pipeline works unchanged. The UI
+      // detects threadState.redactedAt and swaps in a tombstone card.
+      emails.push({
+        id: `tombstone:${t.id}`,
+        externalMessageId: "",
+        threadId: "",
+        canonicalThreadId: t.id,
+        fromAddress: "",
+        fromName: "",
+        subject: "",
+        snippet: "",
+        bodyText: "",
+        bodyHtml: "",
+        incomingAttachments: [],
+        receivedAt: (t.redactedAt ?? t.createdAt).toISOString(),
+        tier1Result: null,
+        tier2Result: null,
+        isKnownCustomer: false,
+        processingStatus: "redacted",
+        analysisResult: null,
+        lastAnalyzedAt: null,
+        draftReply: null,
+        draftHistory: [],
+        draftCC: null,
+        draftBCC: null,
+        draftSubject: null,
+        draftReplyMode: "thread",
+        draftAttachments: [],
+        replyDraftId: null,
+        errorMessage: null,
+      });
     }
 
     priorContact = await computePriorContact(shop, canonicalIds, rows, threadStates, threadCreatedAt);
@@ -365,6 +430,8 @@ interface SerializedThreadState {
   resolvedEmail: string | null;
   resolvedCustomerName: string | null;
   resolutionConfidence: string;
+  redactedAt: string | null;
+  redactedReason: string | null;
 }
 
 function serializeThreadState(t: {
@@ -377,6 +444,8 @@ function serializeThreadState(t: {
   resolvedEmail: string | null;
   resolvedCustomerName: string | null;
   resolutionConfidence: string;
+  redactedAt?: Date | null;
+  redactedReason?: string | null;
 }): SerializedThreadState {
   return {
     supportNature: t.supportNature,
@@ -388,6 +457,8 @@ function serializeThreadState(t: {
     resolvedEmail: t.resolvedEmail,
     resolvedCustomerName: t.resolvedCustomerName,
     resolutionConfidence: t.resolutionConfidence,
+    redactedAt: t.redactedAt ? t.redactedAt.toISOString() : null,
+    redactedReason: t.redactedReason ?? null,
   };
 }
 
@@ -1473,6 +1544,55 @@ const EmailMessageBlock = memo(function EmailMessageBlock({
     </s-box>
   );
 });
+
+// Placeholder rendered in place of a ThreadCard when the thread has been
+// tombstoned by customers/redact (GDPR). The Thread row is kept so the
+// merchant sees the gap and understands why — but every PII column is
+// already NULL, so no content is available to render.
+function TombstoneCard({
+  redactedAt,
+  reason,
+}: {
+  redactedAt: string;
+  reason: string | null;
+}) {
+  const { t, i18n } = useTranslation();
+  const dateLabel = (() => {
+    try {
+      return new Date(redactedAt).toLocaleDateString(i18n.language, {
+        day: "numeric", month: "long", year: "numeric",
+      });
+    } catch {
+      return redactedAt.slice(0, 10);
+    }
+  })();
+  return (
+    <div className="ui-card ui-card--compact" style={{ cursor: "default", opacity: 0.85 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+        <span aria-hidden style={{ fontSize: "1.125rem" }}>🗑️</span>
+        <div style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 }}>
+          <span style={{ fontWeight: 600, fontSize: "0.875rem", color: "var(--ui-slate-700)" }}>
+            {t("inbox.tombstoneTitle", { defaultValue: "Thread supprimé (RGPD)" })}
+          </span>
+          <span style={{ fontSize: "0.8125rem", color: "var(--ui-slate-500)" }}>
+            {reason === "gdpr_customer_request"
+              ? t("inbox.tombstoneReasonCustomer", {
+                  defaultValue: "Demande de suppression du client — {{date}}",
+                  date: dateLabel,
+                })
+              : t("inbox.tombstoneReasonGeneric", {
+                  defaultValue: "Contenu supprimé — {{date}}",
+                  date: dateLabel,
+                })}
+          </span>
+          <span style={{ fontSize: "0.75rem", color: "var(--ui-slate-400)" }}>
+            {t("inbox.tombstoneNoData", { defaultValue: "Aucune donnée conservée" })}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 const ThreadCard = memo(function ThreadCard({
   thread,
@@ -2773,9 +2893,12 @@ export default function InboxPage() {
   };
 
   // Selected thread for the right-side detail panel (searched across ALL threads,
-  // not just filtered, so the panel stays open when filters change).
+  // not just filtered, so the panel stays open when filters change). Tombstoned
+  // threads have no content to show and are never selectable.
   const selectedThreadMeta = expandedThreadId
-    ? threadMeta.find((m) => m.thread.threadId === expandedThreadId) ?? null
+    ? threadMeta.find(
+        (m) => m.thread.threadId === expandedThreadId && !m.state?.redactedAt,
+      ) ?? null
     : null;
 
   // On mobile: full-screen detail view replaces the list
@@ -3010,20 +3133,28 @@ export default function InboxPage() {
                       <s-paragraph>{t("inbox.noEmailsMatch")}</s-paragraph>
                     </s-box>
                   )}
-                  {filteredThreadMeta.map(({ thread, state, previousContact }) => (
-                    <ThreadCard
-                      key={thread.threadId}
-                      thread={thread}
-                      threadState={state}
-                      isSelected={expandedThreadId === thread.threadId}
-                      connectedEmail={loaderData.connectedEmail}
-                      previousContact={previousContact}
-                      onSelect={toggleExpandedThreadId}
-                      onOrderClick={handleOrderClick}
-                      onFilterClick={handleFilterClick}
-                      onBucketClick={handleBucketClick}
-                    />
-                  ))}
+                  {filteredThreadMeta.map(({ thread, state, previousContact }) =>
+                    state?.redactedAt ? (
+                      <TombstoneCard
+                        key={thread.threadId}
+                        redactedAt={state.redactedAt}
+                        reason={state.redactedReason}
+                      />
+                    ) : (
+                      <ThreadCard
+                        key={thread.threadId}
+                        thread={thread}
+                        threadState={state}
+                        isSelected={expandedThreadId === thread.threadId}
+                        connectedEmail={loaderData.connectedEmail}
+                        previousContact={previousContact}
+                        onSelect={toggleExpandedThreadId}
+                        onOrderClick={handleOrderClick}
+                        onFilterClick={handleFilterClick}
+                        onBucketClick={handleBucketClick}
+                      />
+                    ),
+                  )}
                 </div>
 
                 {/* Right: thread detail panel (sticky).

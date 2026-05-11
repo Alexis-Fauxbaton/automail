@@ -5,7 +5,7 @@ import { createReadableStreamFromReadable } from "@react-router/node";
 import { type EntryContext } from "react-router";
 import { isbot } from "isbot";
 import { addDocumentResponseHeaders } from "./shopify.server";
-import { startAutoSyncLoop } from "./lib/mail/auto-sync";
+import { startAutoSyncLoop, stopAutoSyncLoop } from "./lib/mail/auto-sync";
 import { runBootCleanup } from "./lib/attachments/boot-cleanup";
 import { backfillBillingShopFlags } from "./lib/billing/migration";
 
@@ -17,6 +17,25 @@ export const streamTimeout = 5000;
 startAutoSyncLoop();
 runBootCleanup().catch((err) => console.error("[entry.server] boot cleanup failed:", err));
 backfillBillingShopFlags().catch((err) => console.error("[billing-migration] backfill failed at boot:", err));
+
+// Graceful shutdown: when the platform sends SIGTERM (Render, Fly, etc. wait
+// ~30s before SIGKILL), stop claiming new jobs and let in-flight syncs drain
+// up to 25s. Anything still running past that is reclaimed as a zombie on
+// the next boot, so no data loss — just a small retry delay.
+let shutdownStarted = false;
+async function handleShutdown(signal: string) {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  console.log(`[shutdown] received ${signal}, draining auto-sync...`);
+  try {
+    await stopAutoSyncLoop(25_000);
+  } catch (err) {
+    console.error("[shutdown] drain error:", err);
+  }
+  process.exit(0);
+}
+process.on("SIGTERM", () => void handleShutdown("SIGTERM"));
+process.on("SIGINT", () => void handleShutdown("SIGINT"));
 
 export default async function handleRequest(
   request: Request,
