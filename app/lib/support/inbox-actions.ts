@@ -700,3 +700,32 @@ export async function handleUpdateClassification(params: {
     };
   }
 }
+
+/**
+ * Unified entry point for the "Generate / Refine" merged UI affordance.
+ * Branches on whether the user typed instructions:
+ *   - empty (after trim) → redraft path (no LLM rewrite, just re-emit
+ *     the draft from the existing analysisResult).
+ *   - non-empty          → refine path (LLM rewrite using the user's
+ *     instructions and the curated contextSummary).
+ *
+ * Both legacy handlers (handleRefine / handleRedraft) remain exported
+ * for any internal caller — this wrapper picks one and forwards.
+ */
+export async function handleGenerateDraft(params: {
+  shop: string;
+  admin: AdminGraphqlClient;
+  emailId: string;
+  instructions: string;
+  currentDraft: string;
+}) {
+  const wantsRefine = params.instructions.trim().length > 0;
+  if (wantsRefine) {
+    return handleRefine(params);
+  }
+  return handleRedraft({
+    shop: params.shop,
+    admin: params.admin,
+    emailId: params.emailId,
+  });
+}
