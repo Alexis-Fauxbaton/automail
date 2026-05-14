@@ -712,6 +712,48 @@ Deferred (intentional):
       per-shop (one merchant's expired token shouldn't trip the breaker
       for others). Revisit if a global Shopify outage actually happens.
 
+### Refine context auto-refresh — 2026-05-15
+
+Fixed in this pass:
+
+- [x] **Edit-time refresh** — `handleEditThreadIdentifiers` now diffs
+      incoming vs current values and, when anything other than the
+      customer name changed, synchronously calls
+      `refreshThreadAnalysis({reclassifyIntent: false, reSearchOrder, refreshTracking})`
+      so the matched Shopify order and tracking data are up-to-date
+      for the next read. Zero LLM cost.
+- [x] **Refine context-aware** — `handleRefine` reloads
+      `analysisResult` after the time-based safety refresh, builds a
+      curated English text block via the new `buildRefineContext`
+      helper (ORDER / TRACKING / WARNINGS sections with an allowlist
+      filter on warning codes), and passes it to the OpenAI prompt.
+      Refine no longer invents or contradicts the verified
+      order/tracking facts.
+- [x] **Metric** — `refine_context_refresh_total{shop,outcome}`
+      (ok / skipped_noop / no_anchor / error) exposed on `/app/metrics`
+      and `/metrics`.
+- [x] **Merged Regenerate + Refine UI** — single prompt-aware action
+      `intent="generateDraft"` routed through the new
+      `handleGenerateDraft` wrapper. Empty prompt → redraft (no LLM
+      rewrite). Non-empty → refine with curated context. Cmd/Ctrl+Enter
+      submits. Polaris `loading` state + dynamic label
+      (`Regenerate` / `Refine` / `Regenerating…` / `Refining…`).
+      Textarea height locked to 60 px and button wrapper to
+      `min-width: 120 px` so dimensions stay stable across label
+      changes (verified end-to-end via Playwright).
+- [x] **Cheaper safety net** — `maybeRefreshAnalysis` switched from
+      `reanalyzeEmail` (1–2 LLM calls) to `refreshThreadAnalysis` with
+      `reclassifyIntent: false` (0 LLM, Shopify + 17track only).
+
+Out of scope (kept for later):
+
+- `handleUpdateClassification` doesn't yet trigger the same refresh.
+  Same pattern applies; a 1-task follow-up.
+- Toast wording is reused across edit successes — could be split (no
+  toast on noop, "context updated" toast on ok) if the UX warrants.
+- Legacy `intent === "refine"` and `intent === "redraft"` route branches
+  stay alongside `generateDraft`. Prune when nothing else calls them.
+
 ### Deferred follow-ups
 
 - [ ] **H6** — Per-thread advisory lock for user actions vs auto-sync.
