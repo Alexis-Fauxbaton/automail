@@ -1968,10 +1968,11 @@ function DraftBlock({ email, threadSenderEmail }: {
     setVersionIndex(allVersions.length - 1);
   }, [allVersions.length]);
 
-  const refineFetcher = useFetcher();
-  const redraftFetcher = useFetcher();
-  const refining = refineFetcher.state !== "idle";
-  const redrafting = redraftFetcher.state !== "idle";
+  const generateFetcher = useFetcher();
+  const submitting = generateFetcher.state !== "idle";
+  const [instructions, setInstructions] = useState("");
+  const wantsRefine = instructions.trim().length > 0;
+  const generateFormRef = useRef<HTMLFormElement | null>(null);
 
   const [quotaModal, setQuotaModal] = useState<{
     open: boolean;
@@ -1981,24 +1982,26 @@ function DraftBlock({ email, threadSenderEmail }: {
   }>({ open: false, used: 0, limit: 0, variant: 'exceeded' });
 
   useEffect(() => {
-    const data = refineFetcher.data as { quotaExceeded?: boolean; quotaStatus?: { used: number; limit: number } } | null | undefined;
+    const data = generateFetcher.data as { quotaExceeded?: boolean; quotaStatus?: { used: number; limit: number } } | null | undefined;
     if (!data) return;
     if (data.quotaExceeded) {
       setQuotaModal({ open: true, used: data.quotaStatus?.used ?? 0, limit: data.quotaStatus?.limit ?? 0, variant: 'exceeded' });
     } else if (data.quotaStatus && data.quotaStatus.used === data.quotaStatus.limit && data.quotaStatus.limit > 0) {
       setQuotaModal({ open: true, used: data.quotaStatus.used, limit: data.quotaStatus.limit, variant: 'just_used_last' });
     }
-  }, [refineFetcher.data]);
+  }, [generateFetcher.data]);
 
+  // Clear the instructions textarea after a successful submit so the next
+  // click is a "regenerate", not a stale refine.
   useEffect(() => {
-    const data = redraftFetcher.data as { quotaExceeded?: boolean; quotaStatus?: { used: number; limit: number } } | null | undefined;
+    if (generateFetcher.state !== "idle") return;
+    const data = generateFetcher.data as { quotaExceeded?: boolean; quotaStatus?: unknown } | null | undefined;
     if (!data) return;
-    if (data.quotaExceeded) {
-      setQuotaModal({ open: true, used: data.quotaStatus?.used ?? 0, limit: data.quotaStatus?.limit ?? 0, variant: 'exceeded' });
-    } else if (data.quotaStatus && data.quotaStatus.used === data.quotaStatus.limit && data.quotaStatus.limit > 0) {
-      setQuotaModal({ open: true, used: data.quotaStatus.used, limit: data.quotaStatus.limit, variant: 'just_used_last' });
+    if (data.quotaExceeded) return;
+    if (data.quotaStatus) {
+      setInstructions("");
     }
-  }, [redraftFetcher.data]);
+  }, [generateFetcher.state, generateFetcher.data]);
 
   async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -2152,31 +2155,51 @@ function DraftBlock({ email, threadSenderEmail }: {
 
 
         {isLatest && (
-          <refineFetcher.Form method="post">
-            <input type="hidden" name="_action" value="refine" />
+          <generateFetcher.Form
+            method="post"
+            ref={generateFormRef}
+            style={{ borderTop: "1px solid var(--p-color-border)", paddingTop: "8px" }}
+          >
+            <input type="hidden" name="_action" value="generateDraft" />
             <input type="hidden" name="emailId" value={email.id} />
             <input type="hidden" name="currentDraft" value={bodyText} />
             <s-stack direction={isMobile ? "block" : "inline"} gap="small-300" blockAlign="end">
               <div style={{ flex: 1 }}>
-                <s-text-field label={t("inbox.adjustDraft")} name="instructions"
-                  placeholder={t("inbox.adjustDraftPlaceholder")} />
+                <textarea
+                  name="instructions"
+                  value={instructions}
+                  onChange={(e) => setInstructions(e.target.value)}
+                  onKeyDown={(e) => {
+                    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                      e.preventDefault();
+                      generateFormRef.current?.requestSubmit();
+                    }
+                  }}
+                  placeholder={t("inbox.generateInputPlaceholder")}
+                  rows={2}
+                  style={{
+                    width: "100%",
+                    minHeight: "44px",
+                    padding: "8px",
+                    border: "1px solid var(--p-color-border)",
+                    borderRadius: "6px",
+                    fontFamily: "inherit",
+                    fontSize: "13px",
+                    background: "var(--p-color-bg-surface)",
+                    color: "var(--p-color-text)",
+                    resize: "vertical",
+                    boxSizing: "border-box",
+                  }}
+                />
               </div>
-              <s-button type="submit" variant="secondary" disabled={refining || redrafting}>
-                {refining ? t("inbox.refining") : t("inbox.refineWithAi")}
+              <s-button type="submit" variant="secondary" loading={submitting} disabled={submitting}>
+                {submitting
+                  ? t(wantsRefine ? "inbox.refiningButton" : "inbox.regeneratingButton")
+                  : t(wantsRefine ? "inbox.refineButton" : "inbox.regenerateButton")}
               </s-button>
             </s-stack>
-          </refineFetcher.Form>
+          </generateFetcher.Form>
         )}
-
-        <div style={{ display: "flex", gap: "8px", alignItems: "center", borderTop: "1px solid var(--p-color-border)", paddingTop: "8px" }}>
-          <redraftFetcher.Form method="post">
-            <input type="hidden" name="_action" value="redraft" />
-            <input type="hidden" name="emailId" value={email.id} />
-            <s-button type="submit" variant="secondary" size="slim" disabled={redrafting || refining}>
-              {redrafting ? t("inbox.regenerating") : t("inbox.regenerateDraft")}
-            </s-button>
-          </redraftFetcher.Form>
-        </div>
 
       </s-stack>
 
