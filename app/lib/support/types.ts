@@ -114,6 +114,17 @@ export interface TrackingFacts {
   lastLocation?: string | null;
   lastEventDate?: string | null;
   delivered?: boolean;
+  /**
+   * Outcome of the *last* 17track attempt for this fulfillment.
+   * - "ok"      → 17track returned usable data; `source === "seventeen_track"`.
+   * - "pending" → 17track registered the number but data not ready yet.
+   * - "error"   → 17track HTTP / parse failure; we fell back to Shopify/pattern.
+   * - "skipped" → 17track disabled (no API key) or breaker open or no tracking number.
+   * Used by refreshStaleAnalysesForShop to pick a tighter cutoff for retry.
+   */
+  last17trackAttempt?: "ok" | "pending" | "error" | "skipped";
+  /** ISO-8601 timestamp of the last attempt. */
+  last17trackAttemptAt?: string | null;
 }
 
 export interface Warning {
