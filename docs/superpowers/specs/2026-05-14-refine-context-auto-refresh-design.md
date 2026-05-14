@@ -399,3 +399,94 @@ None at this time. All design decisions resolved during brainstorming.
 6. `/app/metrics` shows the `refine_context_refresh_total` counter
    incrementing with the right `outcome` label.
 7. All new tests pass; existing tests still pass.
+
+---
+
+## Addendum (2026-05-15): Merge Regenerate + Refine into a single action
+
+**Context for this addendum:** with edit-time auto-refresh shipped, the
+analysis context is now reliably fresh whenever the user has touched the
+thread. The 10-minute time-based refresh in `maybeRefreshAnalysis` becomes
+a safety net for Shopify-side drift on idle threads, not a primary
+freshness mechanism. That simplification opens the door to a UX cleanup:
+unify "Regenerate draft" and "Refine with AI" into one affordance.
+
+### What changes
+
+**Behaviour:**
+
+- A single action intent `generateDraft` handles both flows.
+- The action branches on the trimmed `instructions` field:
+  - `instructions.trim().length === 0` → redraft path (same as today's
+    Regenerate button — re-emit the draft from the existing
+    `analysisResult`, no LLM intent re-classification).
+  - `instructions.trim().length > 0` → refine path (LLM rewrite using
+    the user's instructions, with the `contextSummary` curated block
+    from Tasks 1–6).
+
+**Cost optimisation:** `maybeRefreshAnalysis` switches its engine from
+`reanalyzeEmail` (full LLM pipeline) to `refreshThreadAnalysis({reclassifyIntent: false, reSearchOrder: true, refreshTracking: true})` (Shopify + 17track only, zero LLM tokens). The 10-minute staleness cutoff stays unchanged. This makes the safety-net call cheap enough that it can keep running on every redraft / refine click without hesitation.
+
+**UI:**
+
+- Two buttons collapse into one. The button sits next to the prompt
+  input, not below it.
+- Label is dynamic:
+  - Empty / whitespace-only prompt → `Regenerate` (with a refresh icon).
+  - Non-empty prompt → `Refine` (with a sparkles icon).
+- Placeholder of the prompt input:
+  `"Optional: tell the AI what to change (e.g. 'add the tracking link', 'be more formal')"`
+- `Cmd/Ctrl + Enter` submits. `Enter` alone inserts a newline (standard
+  textarea behaviour).
+- During the action: button shows the Polaris `loading` state (built-in
+  spinner) and the label flips to `Regenerating…` or `Refining…`. Both
+  the button and the input are disabled until the action returns.
+- The existing "Regenerate" button and the standalone "Refine with AI"
+  trigger are both removed.
+
+**Wire-level:**
+
+- New handler `handleGenerateDraft` in `app/lib/support/inbox-actions.ts`
+  branches on `instructions.trim().length > 0` and delegates to
+  `handleRefine` or `handleRedraft`. Both legacy handlers stay exported
+  so any internal caller (if any) keeps working; the route action
+  registers a new intent `generateDraft` for the merged UI.
+- The two old route-action branches (`intent === "refine"` and
+  `intent === "redraft"`) stay for now (no API consumer migration
+  needed), but the UI stops emitting them.
+
+### Non-goals (addendum)
+
+- Removing the legacy `handleRefine` / `handleRedraft` exports. They
+  remain so server-side callers (e.g. tests, future scripts) can still
+  invoke either path directly. Pruning is deferred until we're sure no
+  consumer relies on them.
+- A formal A/B between the merged UI and the split UI. The split UI was
+  always confusing — we trust the unification.
+
+### Risks
+
+- **Behavioural change for keyboard users.** Today `Enter` inside the
+  Refine textarea may or may not submit depending on browser; we
+  explicitly standardise on `Cmd/Ctrl + Enter` to submit. Document this
+  in the placeholder hint.
+- **Quota impact.** Both redraft and refine consume one draft-quota
+  unit. Behaviour unchanged from today — neither was free.
+- **Accidental submits with an empty prompt.** The label flip
+  (`Regenerate` vs `Refine`) makes the user aware before they click, and
+  the dedicated regenerate path is exactly what they want anyway.
+
+### Acceptance criteria (addendum)
+
+A. Clicking the merged button with an empty prompt produces the same
+   draft `app/lib/gmail/pipeline.ts:redraftEmail` would produce today.
+B. Clicking the merged button with a non-empty prompt produces the same
+   draft `refineDraft` would produce today, including the
+   `contextSummary` block from Tasks 1–6.
+C. The Polaris `loading` state shows for the duration of the action.
+   The button is disabled while loading.
+D. `Cmd/Ctrl + Enter` in the textarea submits the form.
+E. `maybeRefreshAnalysis` no longer issues any LLM call (verify by
+   reading the call path; it should bottom out at `refreshThreadAnalysis`).
+F. Existing `handleRefine` and `handleRedraft` exports stay callable.
+G. All new tests pass; existing tests still pass.
