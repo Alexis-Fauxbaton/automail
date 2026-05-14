@@ -13,6 +13,7 @@ import { refreshThreadAnalysis } from "./refresh-thread-analysis";
 import type { AdminGraphqlClient } from "./shopify/order-search";
 import type { SupportAnalysis } from "./types";
 
+const FIVE_MIN_MS = 5 * 60_000;
 const TEN_MIN_MS = 10 * 60_000;
 const ONE_HOUR_MS = 60 * 60_000;
 
@@ -29,11 +30,32 @@ export function isAnalysisStale(
 }
 
 export const ANALYSIS_FRESHNESS_MS = {
-  // Refresh before a draft refinement if analysis is older than 10 minutes.
+  /** Refresh before a draft refinement if analysis is older than 10 minutes. */
   draftTrigger: TEN_MIN_MS,
-  // Background auto-refresh for active "to handle" threads every hour.
+  /** Background auto-refresh for active "to handle" threads every hour. */
   autoRefresh: ONE_HOUR_MS,
+  /** Fast retry when the previous 17track attempt errored. */
+  fast17trackRetry: TEN_MIN_MS,
+  /** Fast retry when the previous 17track attempt was pending. */
+  pendingRetry: FIVE_MIN_MS,
 } as const;
+
+/**
+ * Pick the staleness cutoff for a given analysis based on its previous
+ * 17track health. Pending wins over error (sooner retry). Missing or "ok" /
+ * "skipped" attempts fall back to the standard 1h auto-refresh.
+ */
+export function pickCutoffForAnalysis(
+  previous: SupportAnalysis | null,
+): number {
+  if (!previous?.trackings?.length) return ANALYSIS_FRESHNESS_MS.autoRefresh;
+  let hasError = false;
+  for (const t of previous.trackings) {
+    if (t.last17trackAttempt === "pending") return ANALYSIS_FRESHNESS_MS.pendingRetry;
+    if (t.last17trackAttempt === "error") hasError = true;
+  }
+  return hasError ? ANALYSIS_FRESHNESS_MS.fast17trackRetry : ANALYSIS_FRESHNESS_MS.autoRefresh;
+}
 
 /**
  * Reanalyze every active support email of the given shop whose last analysis
