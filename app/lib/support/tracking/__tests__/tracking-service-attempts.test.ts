@@ -68,4 +68,14 @@ describe("getTrackingFacts — last17trackAttempt stamping", () => {
     const [t] = await getTrackingFacts(order);
     expect(t.last17trackAttempt).toBe("skipped");
   });
+
+  it("stamps 'skipped' (not 'error') when the breaker is open", async () => {
+    const { recordFailure, __resetForTest } = await import("../seventeen-track-breaker");
+    __resetForTest();
+    for (let i = 0; i < 5; i++) recordFailure(); // open the breaker
+    vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue(null);
+    const [t] = await getTrackingFacts(makeOrder());
+    expect(t.last17trackAttempt).toBe("skipped");
+    __resetForTest(); // restore for subsequent tests
+  });
 });

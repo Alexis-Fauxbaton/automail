@@ -1,6 +1,7 @@
 import type { FulfillmentTrackingFacts, OrderFacts } from "../types";
 import { resolveTrackingForFulfillment } from "./provider-resolver";
 import { fetchTrackingFrom17track } from "./adapters/seventeen-track";
+import { isOpen as is17trackBreakerOpen } from "./seventeen-track-breaker";
 
 /**
  * Resolve tracking facts for a single fulfillment.
@@ -74,12 +75,17 @@ async function resolveOneFulfillment(
       };
     }
     // result === null → 17track failed (HTTP error, breaker open, no API key, or unexpected rejection).
-    // Differentiate "no API key" from "real error" so the breaker-open / fail
-    // cases drive faster retries while no-key never does.
-    const attempt: "error" | "skipped" =
-      process.env.SEVENTEEN_TRACK_API_KEY && process.env.SEVENTEEN_TRACK_API_KEY !== "your-17track-key-here"
-        ? "error"
-        : "skipped";
+    // Three buckets:
+    //   - no/placeholder API key → "skipped" (never retry faster)
+    //   - breaker open            → "skipped" (will be open for 15 min, faster retry is wasted)
+    //   - everything else         → "error"  (real transient failure, retry in 10 min)
+    const keyConfigured =
+      !!process.env.SEVENTEEN_TRACK_API_KEY &&
+      process.env.SEVENTEEN_TRACK_API_KEY !== "your-17track-key-here";
+    let attempt: "error" | "skipped";
+    if (!keyConfigured) attempt = "skipped";
+    else if (is17trackBreakerOpen()) attempt = "skipped";
+    else attempt = "error";
     const base = resolveTrackingForFulfillment(fulfillment);
     return {
       ...base,
