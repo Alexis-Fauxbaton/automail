@@ -356,8 +356,8 @@
     "sectionThread_other": "Full thread ({{count}} messages)",
     "generating": "Generating…",
     "intentLabel": "Intent",
-    "signalRepliedElsewhere": "Replied in another thread",
-    "signalPriorContactOrder": "Prior contact (same order)",
+    "signalRepliedElsewhere": "Duplicate risk: recent reply elsewhere",
+    "signalPriorContactOrder": "Worth checking: order discussed before",
     "signalAmbiguousOrder": "Order to confirm ({{count}} candidates)",
     "backToList": "Back to inbox"
   },
