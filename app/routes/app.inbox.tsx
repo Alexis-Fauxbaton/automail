@@ -379,7 +379,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const resolvedTrackingNumber = norm(formData.get("resolvedTrackingNumber"));
     const resolvedEmail = norm(formData.get("resolvedEmail"))?.toLowerCase() ?? null;
     const resolvedCustomerName = norm(formData.get("resolvedCustomerName"));
-    return handleEditThreadIdentifiers({ shop, canonicalThreadId, resolvedOrderNumber, resolvedTrackingNumber, resolvedEmail, resolvedCustomerName });
+    return handleEditThreadIdentifiers({ shop, admin, canonicalThreadId, resolvedOrderNumber, resolvedTrackingNumber, resolvedEmail, resolvedCustomerName });
   }
 
   if (intent === "updateClassification") {

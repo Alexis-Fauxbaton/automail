@@ -17,6 +17,7 @@ import type { AdminGraphqlClient } from "./shopify/order-search";
 import type { ClassificationEdit } from "./manual-classification";
 import { withDraftQuota } from "../billing/draft-guard";
 import { resolveEntitlements } from "../billing/entitlements";
+import { refineContextRefreshTotal } from "../metrics/definitions";
 
 async function maybeRefreshAnalysis(
   emailId: string,
@@ -464,23 +465,49 @@ export async function handleMoveThread(params: {
 
 export async function handleEditThreadIdentifiers(params: {
   shop: string;
+  admin: AdminGraphqlClient;
   canonicalThreadId: string;
   resolvedOrderNumber: string | null;
   resolvedTrackingNumber: string | null;
   resolvedEmail: string | null;
   resolvedCustomerName: string | null;
 }) {
-  const { shop, canonicalThreadId, resolvedOrderNumber, resolvedTrackingNumber, resolvedEmail, resolvedCustomerName } = params;
+  const {
+    shop, admin, canonicalThreadId,
+    resolvedOrderNumber, resolvedTrackingNumber, resolvedEmail, resolvedCustomerName,
+  } = params;
   if (!canonicalThreadId) {
     return { report: null, disconnected: false, reanalyzed: null, refined: null };
   }
-  const thread = await prisma.thread.findUnique({
+  const before = await prisma.thread.findUnique({
     where: { id: canonicalThreadId },
-    select: { shop: true },
+    select: {
+      shop: true,
+      resolvedOrderNumber: true,
+      resolvedTrackingNumber: true,
+      resolvedEmail: true,
+      resolvedCustomerName: true,
+    },
   });
-  if (!thread || thread.shop !== shop) {
+  if (!before || before.shop !== shop) {
     return { report: null, disconnected: false, reanalyzed: null, refined: null };
   }
+
+  const orderChanged    = (before.resolvedOrderNumber    ?? null) !== resolvedOrderNumber;
+  const trackingChanged = (before.resolvedTrackingNumber ?? null) !== resolvedTrackingNumber;
+  const emailChanged    = (before.resolvedEmail          ?? null) !== resolvedEmail;
+  const nameChanged     = (before.resolvedCustomerName   ?? null) !== resolvedCustomerName;
+  const anyChange = orderChanged || trackingChanged || emailChanged || nameChanged;
+
+  if (!anyChange) {
+    refineContextRefreshTotal.inc({ shop, outcome: "skipped_noop" });
+    return {
+      editedThread: { canonicalThreadId },
+      refreshed: "skipped_noop" as const,
+      report: null, disconnected: false, reanalyzed: null, refined: null,
+    };
+  }
+
   await prisma.thread.update({
     where: { id: canonicalThreadId },
     data: {
@@ -491,7 +518,51 @@ export async function handleEditThreadIdentifiers(params: {
       resolutionConfidence: "high",
     },
   });
-  return { editedThread: { canonicalThreadId }, report: null, disconnected: false, reanalyzed: null, refined: null };
+
+  // refreshTracking follows reSearchOrder because a different order on
+  // Shopify means different fulfillments and tracking numbers.
+  const reSearchOrder = orderChanged || trackingChanged || emailChanged;
+  const refreshTracking = reSearchOrder;
+
+  const anchor = await prisma.incomingEmail.findFirst({
+    where: { canonicalThreadId, shop, processingStatus: "analyzed" },
+    orderBy: { receivedAt: "desc" },
+    select: { id: true },
+  });
+  if (!anchor) {
+    refineContextRefreshTotal.inc({ shop, outcome: "no_anchor" });
+    return {
+      editedThread: { canonicalThreadId },
+      refreshed: "no_anchor" as const,
+      report: null, disconnected: false, reanalyzed: null, refined: null,
+    };
+  }
+
+  try {
+    const { refreshThreadAnalysis } = await import("./refresh-thread-analysis");
+    await refreshThreadAnalysis(anchor.id, admin, shop, {
+      reclassifyIntent: false,
+      reSearchOrder,
+      refreshTracking,
+    });
+    refineContextRefreshTotal.inc({ shop, outcome: "ok" });
+    return {
+      editedThread: { canonicalThreadId },
+      refreshed: "ok" as const,
+      report: null, disconnected: false, reanalyzed: null, refined: null,
+    };
+  } catch (err) {
+    console.error(
+      `[edit-identifiers] shop=${shop} canonicalThreadId=${canonicalThreadId} refresh failed:`,
+      err,
+    );
+    refineContextRefreshTotal.inc({ shop, outcome: "error" });
+    return {
+      editedThread: { canonicalThreadId },
+      refreshed: "error" as const,
+      report: null, disconnected: false, reanalyzed: null, refined: null,
+    };
+  }
 }
 
 export async function handleUpdateClassification(params: {
