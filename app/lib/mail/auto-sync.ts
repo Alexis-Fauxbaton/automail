@@ -23,7 +23,7 @@ import { unauthenticated } from "../../shopify.server";
 import { resolveEntitlements } from "../billing/entitlements";
 import { runManualBackfill, runOnboardingBackfill } from "./backfill";
 import { recomputeAllOpenThreads, recomputeAllThreadsForShop } from "../support/thread-state";
-import { ANALYSIS_FRESHNESS_MS, refreshStaleAnalysesForShop } from "../support/refresh-stale-analyses";
+import { refreshStaleAnalysesForShop } from "../support/refresh-stale-analyses";
 import { pruneOldRateLimitBuckets } from "../rate-limit";
 import {
   claimNextJob,
@@ -352,9 +352,10 @@ async function runSyncForShop(
   // updates. Failures are isolated per email and never abort sync.
   if (report.total > 0) {
     try {
-      const res = await refreshStaleAnalysesForShop(shop, admin, {
-        maxAgeMs: ANALYSIS_FRESHNESS_MS.autoRefresh,
-      });
+      // No explicit maxAgeMs → refreshStaleAnalysesForShop uses
+      // pickCutoffForAnalysis per thread: pending → 5 min, error → 10 min,
+      // ok / skipped → 1h. Adaptive retry for transient 17track failures.
+      const res = await refreshStaleAnalysesForShop(shop, admin);
       if (res.refreshed > 0 || res.errors > 0) {
         console.log(
           `[auto-sync] shop=${shop} stale-refresh: refreshed=${res.refreshed} errors=${res.errors}`,
