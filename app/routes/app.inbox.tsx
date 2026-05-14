@@ -41,6 +41,7 @@ import {
   handleToggleAutoSync,
   handleDiagnose,
   handleReanalyze,
+  handleGenerateDraft,
   handleRedraft,
   handleRefreshEmailHtml,
   handleRefine,
@@ -343,6 +344,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const emailId = String(formData.get("emailId") ?? "");
     const skipDraft = formData.get("skipDraft") === "1";
     return handleReanalyze({ shop, admin, emailId, skipDraft });
+  }
+
+  if (intent === "generateDraft") {
+    const emailId = String(formData.get("emailId") ?? "");
+    const instructions = String(formData.get("instructions") ?? "");
+    const currentDraft = String(formData.get("currentDraft") ?? "");
+    return handleGenerateDraft({ shop, admin, emailId, instructions, currentDraft });
   }
 
   if (intent === "redraft") {
