@@ -9,6 +9,12 @@
 
 const BASE = "https://api.17track.net/track/v2.2";
 
+import {
+  isOpen as breakerOpen,
+  recordSuccess as breakerSuccess,
+  recordFailure as breakerFailure,
+} from "../seventeen-track-breaker";
+
 // ---------------------------------------------------------------------------
 // API response types (v2.2 actual structure)
 // ---------------------------------------------------------------------------
@@ -230,9 +236,11 @@ export async function fetchTrackingFrom17track(
 ): Promise<SevenTrackResult | null> {
   const apiKey = getApiKey();
   if (!apiKey) return null;
+  if (breakerOpen()) {
+    console.log(`[17track] breaker open — skipping call for ${trackingNumber}`);
+    return null;
+  }
 
-  // Always let 17track auto-detect the carrier — passing a carrier code locks
-  // the lookup to that carrier's system, causing NotFound if the code is wrong.
   const payload = [{ number: trackingNumber }];
 
   try {
@@ -252,22 +260,21 @@ export async function fetchTrackingFrom17track(
       const rejected = infoRes.data?.rejected ?? [];
 
       if (accepted.length > 0) {
-          // 17track may return multiple entries for the same number (one per past carrier
-          // registration). Prefer the first entry that has real data over a stale "NotFound".
-          const best =
-            accepted.find((a) => a.track_info?.latest_status?.status !== "NotFound") ??
-            accepted[0];
-          return parseTrackInfo(best);
-        }
+        const best =
+          accepted.find((a) => a.track_info?.latest_status?.status !== "NotFound") ??
+          accepted[0];
+        breakerSuccess();
+        return parseTrackInfo(best);
+      }
 
       const rejection = rejected[0];
-
-      // -18019909 = "No tracking information at this time" (data pending)
       if (rejection?.error?.code === -18019909) {
         if (poll < MAX_POLL) {
           console.log(`[17track] pending for ${trackingNumber}, retry ${poll}/${MAX_POLL - 1}…`);
           continue;
         }
+        // "pending" is NOT a breaker failure — the API is up, data is just not ready.
+        breakerSuccess();
         return {
           state: "pending",
           carrierName: null, status: null, lastEvent: null,
@@ -276,12 +283,14 @@ export async function fetchTrackingFrom17track(
       }
 
       console.warn("[17track] Unexpected rejection:", rejection);
+      breakerFailure();
       return null;
     }
 
     return null;
   } catch (err) {
     console.error("[17track] Request failed:", err);
+    breakerFailure();
     return null;
   }
 }
