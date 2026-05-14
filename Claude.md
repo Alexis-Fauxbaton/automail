@@ -324,6 +324,11 @@ Build the simplest useful vertical slice:
 
 Only after that should tracking enrichment be expanded.
 
+## Deferred runbooks
+When relevant, follow these prepared step-by-step plans rather than re-deriving them:
+- **Structured logging migration** (start the day a real log backend is wired — Better Stack / Datadog / Axiom / etc.): [docs/logging-migration.md](docs/logging-migration.md)
+- **Reading the operational dashboard** (`/app/metrics` — what each section means, when to look, how to read breakers / pipeline health / DB pool): [docs/metrics-dashboard.md](docs/metrics-dashboard.md)
+
 ## Working style
 If asked to implement something:
 - think step by step
