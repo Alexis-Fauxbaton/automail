@@ -12,8 +12,8 @@ if (typeof window !== "undefined") {
 
 i18n.use(initReactI18next).init({
   resources: { en: { translation: en }, fr: { translation: fr } },
-  lng: "fr",
-  fallbackLng: "fr",
+  lng: "en",
+  fallbackLng: "en",
   interpolation: { escapeValue: false },
 });
 
