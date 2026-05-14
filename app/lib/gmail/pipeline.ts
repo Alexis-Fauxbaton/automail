@@ -26,6 +26,11 @@ import {
   evaluateHistoryStatus,
   runOpportunisticThreadBackfill,
 } from "../mail/backfill";
+import {
+  isOutgoingMessage,
+  loadOutgoingContext,
+  type OutgoingContext,
+} from "../mail/outgoing-detection";
 import { upsertReplyDraftBody } from "../support/reply-draft";
 import { generateLLMDraft } from "../support/llm-draft";
 import { evaluateThread } from "../support/draft-usage-heuristic";
@@ -171,6 +176,11 @@ async function _processNewEmails(
   // Fetch Shopify customer emails for cross-reference (Tier 1 boost)
   const customerEmails = await fetchCustomerEmails(admin, shop);
 
+  // Load the outgoing-detection context once per pass so each ingest can
+  // reliably tag merchant replies (aliases included) as `outgoing` even when
+  // the provider didn't expose a SENT label.
+  const outgoingCtx = await loadOutgoingContext(shop, conn.email);
+
   // PRE-PASS-1: backfill closed-thread intent badges BEFORE Pass 1 mutates
   // operationalState. During a resync (historyId=null), all emails are deleted
   // and re-ingested without analysisResult. Pass 1's recomputeThreadState then
@@ -204,7 +214,7 @@ async function _processNewEmails(
     await Promise.allSettled(
       batch.map(async (msgId) => {
         try {
-          await ingestAndPrefilter(shop, conn.provider, client, msgId, customerEmails, conn.email, report);
+          await ingestAndPrefilter(shop, conn.provider, client, msgId, customerEmails, outgoingCtx, report);
         } catch (err) {
           report.errors++;
           log.error({ err, msgId }, "Ingestion error");
@@ -345,15 +355,14 @@ export async function ingestAndPrefilter(
   client: MailClient,
   msgId: string,
   customerEmails: Set<string>,
-  mailboxAddress: string,
+  outgoingCtx: OutgoingContext,
   report: ProcessingReport,
 ) {
   const log = createLogger({ shop, mod: "gmail/pipeline", msgId });
   const msg: MailMessage = await client.getMessage(msgId);
   const isKnown = customerEmails.has(msg.from.toLowerCase());
-  const isOutgoing =
-    msg.labelIds.includes("SENT") ||
-    (mailboxAddress !== "" && msg.from.toLowerCase() === mailboxAddress.toLowerCase());
+  const isOutgoing = isOutgoingMessage(msg, outgoingCtx);
+  const mailboxAddress = outgoingCtx.mailboxAddress;
 
   // Extract RFC 5322 headers for thread reconciliation. Gmail populates
   // msg.headers with lower-cased keys; Zoho currently does not expose

@@ -201,8 +201,15 @@ export async function createZohoClient(shop: string): Promise<MailClient> {
       const token = await getZohoAccessToken(shop);
       const folders = await getFolders(token);
 
-      // Try inbox first, then sent folder to find the message's actual folder.
-      const folderCandidates = [folders.inbox, ...(folders.sent ? [folders.sent] : [])];
+      // Try the SENT folder FIRST so outgoing replies are reliably tagged
+      // with the virtual "SENT" label below — Zoho often surfaces the same
+      // message in both inbox and sent folders, and tagging it inbox-first
+      // produced merchant messages misclassified as customer mail. If sent
+      // doesn't have it, fall back to inbox.
+      const folderCandidates = [
+        ...(folders.sent ? [folders.sent] : []),
+        folders.inbox,
+      ];
       let folderId = folders.inbox;
       let detailRaw: unknown = null;
       for (const fid of folderCandidates) {

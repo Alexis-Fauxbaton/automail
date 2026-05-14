@@ -24,6 +24,11 @@ import {
 import { extractAndCache, mergeThreadIdentifiers } from "../support/thread-identifiers";
 import { recomputeThreadState } from "../support/thread-state";
 import { prefilterEmail } from "../gmail/prefilter";
+import {
+  isOutgoingMessage,
+  loadOutgoingContext,
+  type OutgoingContext,
+} from "./outgoing-detection";
 
 async function runInBatches<T>(
   items: T[],
@@ -76,10 +81,11 @@ export async function runOnboardingBackfill(
   const existingSet = new Set(existing.map((e) => e.externalMessageId));
   const fresh = messageIds.filter((id) => !existingSet.has(id));
 
+  const outgoingCtx = await loadOutgoingContext(shop, conn.email);
   let ingested = 0;
   await runInBatches(fresh, 10, 50, async (msgId) => {
     try {
-      await ingestHistoricalMessage(shop, conn.provider, client, msgId, conn.email);
+      await ingestHistoricalMessage(shop, conn.provider, client, msgId, outgoingCtx);
       ingested++;
     } catch (err) {
       console.error("[backfill/onboarding] failed for", msgId, err);
@@ -115,10 +121,11 @@ export async function runManualBackfill(
   const existingSet = new Set(existing.map((e) => e.externalMessageId));
   const fresh = messageIds.filter((id) => !existingSet.has(id));
 
+  const outgoingCtx = await loadOutgoingContext(shop, conn.email);
   let ingested = 0;
   await runInBatches(fresh, 10, 50, async (msgId) => {
     try {
-      await ingestHistoricalMessage(shop, conn.provider, client, msgId, conn.email);
+      await ingestHistoricalMessage(shop, conn.provider, client, msgId, outgoingCtx);
       ingested++;
     } catch (err) {
       console.error("[backfill/manual] failed for", msgId, err);
@@ -154,6 +161,7 @@ export async function runOpportunisticThreadBackfill(
   });
   const localSet = new Set(localIds.map((r) => r.externalMessageId));
 
+  const outgoingCtx = await loadOutgoingContext(thread.shop, conn.email);
   let added = 0;
   for (const mapping of thread.providerIds) {
     try {
@@ -166,7 +174,7 @@ export async function runOpportunisticThreadBackfill(
             conn.provider,
             client,
             m.id,
-            conn.email,
+            outgoingCtx,
           );
           added++;
         } catch (err) {
@@ -201,7 +209,7 @@ export async function runOpportunisticThreadBackfill(
             conn.provider,
             client,
             m.id,
-            conn.email,
+            outgoingCtx,
           );
           added++;
         } catch (err) {
@@ -240,7 +248,7 @@ async function ingestHistoricalMessage(
   provider: string,
   client: MailClient,
   msgId: string,
-  mailboxAddress: string,
+  outgoingCtx: OutgoingContext,
 ): Promise<void> {
   const existing = await prisma.incomingEmail.findUnique({
     where: { shop_externalMessageId: { shop, externalMessageId: msgId } },
@@ -248,9 +256,8 @@ async function ingestHistoricalMessage(
   if (existing) return;
 
   const msg = await client.getMessage(msgId);
-  const isOutgoing =
-    msg.labelIds.includes("SENT") ||
-    (mailboxAddress !== "" && msg.from.toLowerCase() === mailboxAddress.toLowerCase());
+  const isOutgoing = isOutgoingMessage(msg, outgoingCtx);
+  const mailboxAddress = outgoingCtx.mailboxAddress;
 
   const rfcMessageId = (msg.headers["message-id"] ?? "").replace(/^<|>$/g, "").trim();
   const inReplyTo = (msg.headers["in-reply-to"] ?? "").replace(/^<|>$/g, "").trim();
