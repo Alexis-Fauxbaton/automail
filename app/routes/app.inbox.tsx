@@ -1217,8 +1217,18 @@ function ThreadIdentifiersEditor({
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
-  const fetcher = useFetcher();
+  const [refreshFailed, setRefreshFailed] = useState(false);
+  const fetcher = useFetcher<{ refreshed?: string }>();
   const submitting = fetcher.state !== "idle";
+  useEffect(() => {
+    if (fetcher.state !== "idle") return;
+    const r = fetcher.data?.refreshed;
+    if (r === "error") {
+      setRefreshFailed(true);
+    } else if (r === "ok" || r === "skipped_noop" || r === "no_anchor") {
+      setRefreshFailed(false);
+    }
+  }, [fetcher.state, fetcher.data]);
   return (
     <s-box padding="base" borderWidth="base" borderRadius="base">
       <s-stack direction="block" gap="small-300">
@@ -1228,6 +1238,14 @@ function ThreadIdentifiersEditor({
             {open ? t("inbox.cancel") : t("inbox.edit")}
           </s-button>
         </s-stack>
+        {refreshFailed && (
+          <s-banner tone="warning">
+            {t(
+              "inbox.identifiersRefreshFailed",
+              "Identifiers saved. Order/tracking refresh failed — will retry on next sync.",
+            )}
+          </s-banner>
+        )}
         {!open ? (
           <s-stack direction="block" gap="small-100">
             <s-text variant="bodySm">

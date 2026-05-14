@@ -297,6 +297,7 @@
     "customerName": "Customer name",
     "saving": "Saving…",
     "save": "Save",
+    "identifiersRefreshFailed": "Identifiers saved. Order/tracking refresh failed — will retry on next sync.",
     "priorContactBoth": "Prior contact (address + order)",
     "priorContactOrder": "Prior contact (same order)",
     "priorContactAddress": "Prior contact (same address)",

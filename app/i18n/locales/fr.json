@@ -297,6 +297,7 @@
     "customerName": "Nom du client",
     "saving": "Enregistrement…",
     "save": "Enregistrer",
+    "identifiersRefreshFailed": "Identifiants enregistrés. Échec du rafraîchissement commande/tracking — nouvelle tentative à la prochaine synchronisation.",
     "priorContactBoth": "Contact précédent (adresse + commande)",
     "priorContactOrder": "Contact précédent (même commande)",
     "priorContactAddress": "Contact précédent (même adresse)",
