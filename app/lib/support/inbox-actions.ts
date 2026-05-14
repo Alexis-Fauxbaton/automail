@@ -8,6 +8,7 @@ import {
   persistEmailAttachments,
 } from "../gmail/pipeline";
 import { refineDraft } from "../gmail/refine-draft";
+import { buildRefineContext } from "./refine-context";
 import { runDiagnosis } from "../gmail/diagnose";
 import { enqueueJob } from "../mail/job-queue";
 import { recordStateTransition } from "./thread-state-history";
@@ -322,6 +323,21 @@ export async function handleRefine(params: {
 
   await maybeRefreshAnalysis(emailId, admin, shop);
 
+  // Reload AFTER the refresh so we see fresh analysisResult.
+  const fresh = await prisma.incomingEmail.findUnique({
+    where: { id: emailId },
+    select: { analysisResult: true },
+  });
+  let contextSummary: string | undefined;
+  if (fresh?.analysisResult) {
+    try {
+      const analysis = JSON.parse(fresh.analysisResult);
+      contextSummary = buildRefineContext(analysis) ?? undefined;
+    } catch (err) {
+      console.error(`[refine] malformed analysisResult for email=${emailId}:`, err);
+    }
+  }
+
   const guarded = await withDraftQuota({
     shop,
     limit: ent.quotaStatus.limit,
@@ -329,6 +345,7 @@ export async function handleRefine(params: {
       const newDraft = await refineDraft(currentDraft, instructions, {
         subject: record.subject,
         body: record.bodyText,
+        contextSummary,
       }, {
         shop,
         emailId,
