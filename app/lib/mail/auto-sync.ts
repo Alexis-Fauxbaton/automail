@@ -347,23 +347,21 @@ async function runSyncForShop(
     `[auto-sync] shop=${shop} fetched=${report.total} support=${report.supportClient} errors=${report.errors}`,
   );
 
-  // Best-effort refresh of active thread analyses during mailbox sync so
-  // tracking and Shopify data don't remain stale while the mail timestamp
-  // updates. Failures are isolated per email and never abort sync.
-  if (report.total > 0) {
-    try {
-      // No explicit maxAgeMs → refreshStaleAnalysesForShop uses
-      // pickCutoffForAnalysis per thread: pending → 5 min, error → 10 min,
-      // ok / skipped → 1h. Adaptive retry for transient 17track failures.
-      const res = await refreshStaleAnalysesForShop(shop, admin);
-      if (res.refreshed > 0 || res.errors > 0) {
-        console.log(
-          `[auto-sync] shop=${shop} stale-refresh: refreshed=${res.refreshed} errors=${res.errors}`,
-        );
-      }
-    } catch (err) {
-      console.error(`[auto-sync] shop=${shop} stale-refresh failed:`, err);
+  // Best-effort refresh of active thread analyses every sync tick — independently
+  // of whether new mail arrived. The adaptive cutoff inside refreshStaleAnalysesForShop
+  // (pickCutoffForAnalysis: pending → 5 min, error → 10 min, ok / skipped → 1h)
+  // already gates work per-thread, and the per-pass budget caps it at 10 candidates,
+  // so running it every tick is cheap. Decoupling from `report.total > 0` ensures
+  // a transient 17track failure on a calm shop still gets retried promptly.
+  try {
+    const res = await refreshStaleAnalysesForShop(shop, admin);
+    if (res.refreshed > 0 || res.errors > 0) {
+      console.log(
+        `[auto-sync] shop=${shop} stale-refresh: refreshed=${res.refreshed} errors=${res.errors}`,
+      );
     }
+  } catch (err) {
+    console.error(`[auto-sync] shop=${shop} stale-refresh failed:`, err);
   }
 }
 
