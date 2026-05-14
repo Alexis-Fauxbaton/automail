@@ -70,23 +70,22 @@ export async function refreshStaleAnalysesForShop(
   admin: AdminGraphqlClient,
   opts: { maxAgeMs?: number } = {},
 ): Promise<{ refreshed: number; skipped: number; errors: number }> {
-  const maxAgeMs = opts.maxAgeMs ?? ANALYSIS_FRESHNESS_MS.autoRefresh;
-  const cutoff = new Date(Date.now() - maxAgeMs);
+  // The widest cutoff we'd ever pick is autoRefresh. We query Prisma with the
+  // tightest cutoff (pendingRetry) so pending candidates aren't filtered out
+  // at the SQL stage, then re-filter per-row in JS using pickCutoffForAnalysis
+  // (which depends on the JSON blob `analysisResult` that Prisma can't filter
+  // on portably). Callers passing an explicit `opts.maxAgeMs` keep the old
+  // single-cutoff behaviour (used by tests with maxAgeMs: 0 and by the user-
+  // action path that always wants a full refresh).
+  const widestCutoffMs = opts.maxAgeMs ?? ANALYSIS_FRESHNESS_MS.pendingRetry;
+  const widestCutoff = new Date(Date.now() - widestCutoffMs);
 
-  // Candidate emails: latest analyzed incoming per thread whose
-  // lastAnalyzedAt is null or older than the cutoff.
-  // We include all active support threads and exclude:
-  //   - definitively closed threads (resolved / no_reply_needed)
-  //   - threads explicitly classified as non-support (non_support)
-  // Threads with supportNature = "unknown" / "needs_review" / "probable_support"
-  // / "confirmed_support" / "mixed" are all included.
-  // Emails with no canonical thread are included unconditionally.
   const candidates = await prisma.incomingEmail.findMany({
     where: {
       shop,
       processingStatus: "analyzed",
       analysisResult: { not: null },
-      OR: [{ lastAnalyzedAt: null }, { lastAnalyzedAt: { lt: cutoff } }],
+      OR: [{ lastAnalyzedAt: null }, { lastAnalyzedAt: { lt: widestCutoff } }],
       NOT: {
         thread: {
           is: {
@@ -100,20 +99,40 @@ export async function refreshStaleAnalysesForShop(
     },
     orderBy: { receivedAt: "desc" },
     distinct: ["canonicalThreadId"],
-    select: { id: true, analysisResult: true },
-    take: 10,
+    select: { id: true, analysisResult: true, lastAnalyzedAt: true },
+    take: 20, // raised from 10 — we may filter half out below
   });
 
+  // Per-candidate adaptive filtering. When the caller passed an explicit
+  // maxAgeMs we honor it as-is (no adaptive logic) — preserves existing
+  // bypass-the-cutoff semantics used by tests and the user-triggered path.
+  const now = Date.now();
+  const eligible: Array<{ id: string; analysisResult: string | null }> = [];
+  for (const c of candidates) {
+    let cutoffMs: number;
+    if (opts.maxAgeMs !== undefined) {
+      cutoffMs = opts.maxAgeMs;
+    } else {
+      const previous: SupportAnalysis | null = c.analysisResult
+        ? (JSON.parse(c.analysisResult) as SupportAnalysis)
+        : null;
+      cutoffMs = pickCutoffForAnalysis(previous);
+    }
+    const age = c.lastAnalyzedAt ? now - c.lastAnalyzedAt.getTime() : Infinity;
+    if (age > cutoffMs) eligible.push({ id: c.id, analysisResult: c.analysisResult });
+    if (eligible.length >= 10) break; // preserve original per-pass budget
+  }
+
   let refreshed = 0;
-  let skipped = 0;
+  let skipped = candidates.length - eligible.length;
   let errors = 0;
-  if (candidates.length === 0) {
-    console.log(`[refresh-stale] shop=${shop} no stale candidates found`);
+  if (eligible.length === 0) {
+    console.log(`[refresh-stale] shop=${shop} no stale candidates after adaptive filter`);
   }
 
   const BATCH_SIZE = 3;
-  for (let i = 0; i < candidates.length; i += BATCH_SIZE) {
-    const batch = candidates.slice(i, i + BATCH_SIZE);
+  for (let i = 0; i < eligible.length; i += BATCH_SIZE) {
+    const batch = eligible.slice(i, i + BATCH_SIZE);
     await Promise.all(
       batch.map(async (c) => {
         try {

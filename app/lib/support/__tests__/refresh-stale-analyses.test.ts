@@ -97,3 +97,66 @@ describe("refreshStaleAnalysesForShop flag derivation", () => {
     expect(refreshThreadAnalysisMock.mock.calls[0][3].refreshTracking).toBe(true);
   });
 });
+
+describe("refreshStaleAnalysesForShop adaptive cutoff", () => {
+  beforeEach(() => {
+    refreshThreadAnalysisMock.mockClear();
+    findManyMock.mockClear();
+  });
+
+  test("pending tracking + 6 min old is picked up (no maxAgeMs)", async () => {
+    const sixMinAgo = new Date(Date.now() - 6 * 60_000);
+    findManyMock.mockResolvedValueOnce([
+      {
+        id: "e1",
+        lastAnalyzedAt: sixMinAgo,
+        analysisResult: JSON.stringify(
+          baseAnalysis({
+            trackings: [
+              {
+                number: "TRK1",
+                carrier: null,
+                url: null,
+                last17trackAttempt: "pending",
+              },
+            ],
+          }),
+        ),
+      },
+    ]);
+    const result = await refreshStaleAnalysesForShop(
+      "shop.myshopify.com",
+      fakeAdmin,
+    );
+    expect(result.refreshed).toBe(1);
+    expect(refreshThreadAnalysisMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("ok tracking + 30 min old is NOT picked up (no maxAgeMs)", async () => {
+    const thirtyMinAgo = new Date(Date.now() - 30 * 60_000);
+    findManyMock.mockResolvedValueOnce([
+      {
+        id: "e1",
+        lastAnalyzedAt: thirtyMinAgo,
+        analysisResult: JSON.stringify(
+          baseAnalysis({
+            trackings: [
+              {
+                number: "TRK1",
+                carrier: null,
+                url: null,
+                last17trackAttempt: "ok",
+              },
+            ],
+          }),
+        ),
+      },
+    ]);
+    const result = await refreshStaleAnalysesForShop(
+      "shop.myshopify.com",
+      fakeAdmin,
+    );
+    expect(result.refreshed).toBe(0);
+    expect(refreshThreadAnalysisMock).not.toHaveBeenCalled();
+  });
+});
