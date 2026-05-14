@@ -225,7 +225,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       });
     }
 
-    priorContact = await computePriorContact(shop, canonicalIds, rows, threadStates, threadCreatedAt);
+    // Prior-contact badge temporarily hidden — the signal computation is kept
+    // available (computePriorContact + tests) so we can re-enable it once the
+    // wording / UX framing is decided. Re-enable by removing the early empty
+    // assignment below and uncommenting the call.
+    priorContact = {};
+    // priorContact = await computePriorContact(shop, canonicalIds, rows, threadStates, threadCreatedAt);
   }
 
   // Build auth URLs for both providers (only shown when not connected)
