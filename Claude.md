@@ -250,6 +250,8 @@ Requirements:
 - draft regeneration and refinement must also refresh analysis/tracking first when the last update is older than 1 hour
 - do not refresh tracking for threads classified as `non_support`, `resolved`, or `no_reply_needed`
 - the last analysis/tracking update time must remain visible next to the Tracking section title
+- 17track retries are adaptive: a fulfillment whose last 17track attempt errored is refreshed after 10 min; a "pending" one after 5 min; "ok" / "skipped" follow the 1h auto-refresh cadence (see `pickCutoffForAnalysis` in `refresh-stale-analyses.ts`)
+- a process-wide circuit breaker (`seventeen-track-breaker.ts`) suspends 17track calls for 15 min after 5 failures in any 10-min window, to protect the shared API quota across shops
 
 Do not hardcode one giant tracking logic block inside a route or component.
 

@@ -356,10 +356,8 @@
     "sectionThread_other": "Thread complet ({{count}} messages)",
     "generating": "Génération…",
     "intentLabel": "Intention",
-    "signalRepliedElsewhere": "Répondu dans un autre fil",
-    "signalPriorContactBoth": "Contact récurrent (adresse + commande)",
-    "signalPriorContactOrder": "Contact récurrent (même commande)",
-    "signalPriorContactAddress": "Contact récurrent (même adresse)",
+    "signalRepliedElsewhere": "Risque de doublon : réponse récente ailleurs",
+    "signalPriorContactOrder": "À vérifier : commande déjà discutée",
     "signalAmbiguousOrder": "Commande à confirmer ({{count}} candidates)",
     "backToList": "Retour à la liste"
   },

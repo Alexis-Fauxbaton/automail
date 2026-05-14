@@ -23,6 +23,11 @@ import {
   parseTrackInfoForTest as parseTrackInfo,
   fetchTrackingFrom17track,
 } from "../seventeen-track";
+import {
+  isOpen,
+  recordFailure,
+  __resetForTest as resetBreaker,
+} from "../../seventeen-track-breaker";
 
 // ---------------------------------------------------------------------------
 // guessCarrierCode — carrier code lookup from tracking number pattern
@@ -432,5 +437,40 @@ describe("fetchTrackingFrom17track — retry logic", () => {
 
     const result = await fetchTrackingFrom17track("LV109807596FR");
     expect(result).toBeNull();
+  });
+});
+
+describe("fetchTrackingFrom17track — circuit breaker", () => {
+  const ORIGINAL_KEY = process.env.SEVENTEEN_TRACK_API_KEY;
+  beforeEach(() => {
+    process.env.SEVENTEEN_TRACK_API_KEY = "test-key";
+    resetBreaker();
+    vi.restoreAllMocks();
+  });
+  afterEach(() => {
+    process.env.SEVENTEEN_TRACK_API_KEY = ORIGINAL_KEY;
+    resetBreaker();
+  });
+
+  it("returns null without calling fetch when breaker is open", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    for (let i = 0; i < 5; i++) recordFailure();
+    expect(isOpen()).toBe(true);
+
+    const result = await fetchTrackingFrom17track("LV109807596FR");
+
+    expect(result).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("records a failure on HTTP error", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("err", { status: 500 }),
+    );
+    await fetchTrackingFrom17track("LV109807596FR");
+    // 1 failure recorded — not enough to open, but breaker module saw it.
+    // Indirect check: 4 more should open it.
+    for (let i = 0; i < 4; i++) recordFailure();
+    expect(isOpen()).toBe(true);
   });
 });

@@ -18,9 +18,12 @@ export interface Storage {
 // agent's machine. Executables / scripts are rejected — even if the file
 // is only ever served back via api.draft-attachment with forced download,
 // preventing storage in the first place is the cleanest defence.
+// SVG is excluded — it can contain inline <script> and is an XSS vector if
+// ever rendered inline in the admin UI. Customers asking about a product
+// rarely send SVGs anyway.
 const SAFE_EXTENSIONS = new Set([
   ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".csv", ".txt", ".md",
-  ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".svg",
+  ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic",
   ".zip", ".rar", ".7z",
   ".mp3", ".wav", ".mp4", ".mov", ".webm",
   ".eml", ".msg",

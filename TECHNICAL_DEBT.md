@@ -169,11 +169,20 @@ Reviewed by: 6-agent automated audit (security, code-quality, architecture, data
   - **Fix**: Materialise `priorContactByAddress` / `priorContactByOrder` as boolean columns on `Thread`, updated by the thread-state recompute job. The loader reads pre-computed values with zero extra queries.
   - **Effort**: large
 
-- [ ] **[PERF-H6] No rate limiting on 17track API or carrier `fetchPage` calls**
-  - **File**: [app/lib/support/crawl/context-crawler.ts:311](app/lib/support/crawl/context-crawler.ts#L311)
+- [x] **[PERF-H6] No rate limiting on 17track API or carrier `fetchPage` calls** (partially mitigated 2026-05-14)
+  - **File**: [app/lib/support/crawl/context-crawler.ts:311](app/lib/support/crawl/context-crawler.ts#L311), [app/lib/support/tracking/seventeen-track-breaker.ts](app/lib/support/tracking/seventeen-track-breaker.ts)
   - **Description**: Dozens of threads refreshed simultaneously during auto-sync can fire hundreds of requests to 17track within a single sync window, violating fair-use policy and generating IP bans.
-  - **Fix**: Implement a module-level token-bucket rate limiter per external service. Cache tracking results in the DB (keyed by tracking number + 15 min TTL) to avoid re-fetching across threads.
+  - **Mitigated 2026-05-14**: process-wide circuit breaker opens after 5 failures in any 10-min window and suspends 17track calls for 15 min across all shops. Adaptive retry cadence (`pickCutoffForAnalysis`) backs off naturally: pending → 5 min, error → 10 min, ok → 1h.
+  - **Remaining**: no proactive token-bucket on the success path, and no DB-side caching of tracking responses across threads. Add when 17track quota becomes the binding constraint.
   - **Effort**: medium
+
+## 17track resilience (resolved 2026-05-14)
+- `last17trackAttempt` (`ok` / `pending` / `error` / `skipped`) + `last17trackAttemptAt` stamped on every `FulfillmentTrackingFacts` ([app/lib/support/tracking/tracking-service.ts](app/lib/support/tracking/tracking-service.ts)).
+- `pickCutoffForAnalysis` drives adaptive retries inside `refreshStaleAnalysesForShop`: pending → 5 min, error → 10 min, ok / skipped → 1h ([app/lib/support/refresh-stale-analyses.ts](app/lib/support/refresh-stale-analyses.ts)).
+- In-memory circuit breaker in [app/lib/support/tracking/seventeen-track-breaker.ts](app/lib/support/tracking/seventeen-track-breaker.ts) opens after 5 failures / 10 min and stays open for 15 min, shared across all shops (one API key, one quota).
+- Known limits:
+  - Breaker is per-process. A horizontally scaled deploy will have independent breakers per instance — acceptable until multi-instance is the norm.
+  - Adaptive freshness reads the JSON blob in JS (not SQL). Cost: a few extra rows fetched per pass; bounded by `take: 20` in the Prisma query.
 
 ### Tests
 

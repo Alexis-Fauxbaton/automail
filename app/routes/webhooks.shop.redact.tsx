@@ -1,4 +1,6 @@
 import type { ActionFunctionArgs } from "react-router";
+import path from "node:path";
+import fs from "node:fs/promises";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { storage } from "../lib/attachments/storage";
@@ -37,7 +39,31 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     // disk failure. Operator must clean up uploads/{shop}/ manually.
   }
 
-  // 2. DB tables. Order matters only where cascades exist.
+  // 2. GDPR exports written by customers/data_request live under
+  //    data-requests/{shop}/... — these contain personal data and must be
+  //    wiped along with the rest. Guard against path traversal via a
+  //    base-directory check, identical to what storage.removeShopDir does.
+  try {
+    const dataRequestsBase = path.resolve(process.cwd(), "data-requests");
+    const shopDir = path.resolve(dataRequestsBase, shop);
+    if (
+      shopDir.startsWith(dataRequestsBase + path.sep) ||
+      shopDir === dataRequestsBase
+    ) {
+      // Refuse if the resolved path somehow equals the base (e.g. empty shop).
+      if (shopDir !== dataRequestsBase) {
+        await fs.rm(shopDir, { recursive: true, force: true });
+      }
+    } else {
+      console.warn(
+        `[webhook] shop/redact: refused to remove data-requests path outside base for shop=${shop}`,
+      );
+    }
+  } catch (err) {
+    console.error(`[webhook] shop/redact: failed to remove data-requests dir for ${shop}:`, err);
+  }
+
+  // 3. DB tables. Order matters only where cascades exist.
   await db.llmCallLog.deleteMany({ where: { shop } });
   // Deleting IncomingEmail cascades → IncomingEmailAttachment + ReplyDraft → DraftAttachment.
   await db.incomingEmail.deleteMany({ where: { shop } });

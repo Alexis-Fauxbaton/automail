@@ -83,7 +83,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   let emails: SerializedEmail[] = [];
   let threadStates: Record<string, SerializedThreadState> = {};
-  let priorContact: Record<string, { byAddress: boolean; byOrder: boolean }> = {};
+  let priorContact: Record<string, { byOrder: boolean; recentReply: boolean }> = {};
   if (connection) {
     const rows = await prisma.incomingEmail.findMany({
       where: { shop },
@@ -152,6 +152,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           resolvedEmail: true,
           resolvedCustomerName: true,
           resolutionConfidence: true,
+          redactedAt: true,
+          redactedReason: true,
         },
       });
       threadStates = Object.fromEntries(
@@ -160,7 +162,75 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       threadCreatedAt = new Map(threads.map((t) => [t.id, t.createdAt]));
     }
 
-    priorContact = await computePriorContact(shop, canonicalIds, rows, threadStates, threadCreatedAt);
+    // GDPR tombstones — threads whose content was wiped by customers/redact.
+    // The Thread row is kept so the merchant inbox shows a placeholder; we
+    // fetch the most recent tombstones (separate from the message-driven
+    // canonicalIds query above because there are no IncomingEmail rows
+    // pointing at them anymore).
+    const tombstoneThreads = await prisma.thread.findMany({
+      where: { shop, redactedAt: { not: null } },
+      orderBy: { redactedAt: "desc" },
+      take: 200,
+      select: {
+        id: true,
+        provider: true,
+        createdAt: true,
+        supportNature: true,
+        operationalState: true,
+        previousOperationalState: true,
+        historyStatus: true,
+        resolvedOrderNumber: true,
+        resolvedTrackingNumber: true,
+        resolvedEmail: true,
+        resolvedCustomerName: true,
+        resolutionConfidence: true,
+        redactedAt: true,
+        redactedReason: true,
+      },
+    });
+    for (const t of tombstoneThreads) {
+      threadStates[t.id] = serializeThreadState(t);
+      threadCreatedAt.set(t.id, t.createdAt);
+      // Synthesize one placeholder "email" per tombstone so the existing
+      // group-by-thread / filter / render pipeline works unchanged. The UI
+      // detects threadState.redactedAt and swaps in a tombstone card.
+      emails.push({
+        id: `tombstone:${t.id}`,
+        externalMessageId: "",
+        threadId: "",
+        canonicalThreadId: t.id,
+        fromAddress: "",
+        fromName: "",
+        subject: "",
+        snippet: "",
+        bodyText: "",
+        bodyHtml: "",
+        incomingAttachments: [],
+        receivedAt: (t.redactedAt ?? t.createdAt).toISOString(),
+        tier1Result: null,
+        tier2Result: null,
+        isKnownCustomer: false,
+        processingStatus: "redacted",
+        analysisResult: null,
+        lastAnalyzedAt: null,
+        draftReply: null,
+        draftHistory: [],
+        draftCC: null,
+        draftBCC: null,
+        draftSubject: null,
+        draftReplyMode: "thread",
+        draftAttachments: [],
+        replyDraftId: null,
+        errorMessage: null,
+      });
+    }
+
+    // Prior-contact badge temporarily hidden — the signal computation is kept
+    // available (computePriorContact + tests) so we can re-enable it once the
+    // wording / UX framing is decided. Re-enable by removing the early empty
+    // assignment below and uncommenting the call.
+    priorContact = {};
+    // priorContact = await computePriorContact(shop, canonicalIds, rows, threadStates, threadCreatedAt);
   }
 
   // Build auth URLs for both providers (only shown when not connected)
@@ -365,6 +435,8 @@ interface SerializedThreadState {
   resolvedEmail: string | null;
   resolvedCustomerName: string | null;
   resolutionConfidence: string;
+  redactedAt: string | null;
+  redactedReason: string | null;
 }
 
 function serializeThreadState(t: {
@@ -377,6 +449,8 @@ function serializeThreadState(t: {
   resolvedEmail: string | null;
   resolvedCustomerName: string | null;
   resolutionConfidence: string;
+  redactedAt?: Date | null;
+  redactedReason?: string | null;
 }): SerializedThreadState {
   return {
     supportNature: t.supportNature,
@@ -388,6 +462,8 @@ function serializeThreadState(t: {
     resolvedEmail: t.resolvedEmail,
     resolvedCustomerName: t.resolvedCustomerName,
     resolutionConfidence: t.resolutionConfidence,
+    redactedAt: t.redactedAt ? t.redactedAt.toISOString() : null,
+    redactedReason: t.redactedReason ?? null,
   };
 }
 
@@ -1474,6 +1550,55 @@ const EmailMessageBlock = memo(function EmailMessageBlock({
   );
 });
 
+// Placeholder rendered in place of a ThreadCard when the thread has been
+// tombstoned by customers/redact (GDPR). The Thread row is kept so the
+// merchant sees the gap and understands why — but every PII column is
+// already NULL, so no content is available to render.
+function TombstoneCard({
+  redactedAt,
+  reason,
+}: {
+  redactedAt: string;
+  reason: string | null;
+}) {
+  const { t, i18n } = useTranslation();
+  const dateLabel = (() => {
+    try {
+      return new Date(redactedAt).toLocaleDateString(i18n.language, {
+        day: "numeric", month: "long", year: "numeric",
+      });
+    } catch {
+      return redactedAt.slice(0, 10);
+    }
+  })();
+  return (
+    <div className="ui-card ui-card--compact" style={{ cursor: "default", opacity: 0.85 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+        <span aria-hidden style={{ fontSize: "1.125rem" }}>🗑️</span>
+        <div style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 }}>
+          <span style={{ fontWeight: 600, fontSize: "0.875rem", color: "var(--ui-slate-700)" }}>
+            {t("inbox.tombstoneTitle", { defaultValue: "Thread supprimé (RGPD)" })}
+          </span>
+          <span style={{ fontSize: "0.8125rem", color: "var(--ui-slate-500)" }}>
+            {reason === "gdpr_customer_request"
+              ? t("inbox.tombstoneReasonCustomer", {
+                  defaultValue: "Demande de suppression du client — {{date}}",
+                  date: dateLabel,
+                })
+              : t("inbox.tombstoneReasonGeneric", {
+                  defaultValue: "Contenu supprimé — {{date}}",
+                  date: dateLabel,
+                })}
+          </span>
+          <span style={{ fontSize: "0.75rem", color: "var(--ui-slate-400)" }}>
+            {t("inbox.tombstoneNoData", { defaultValue: "Aucune donnée conservée" })}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const ThreadCard = memo(function ThreadCard({
   thread,
   threadState,
@@ -1490,7 +1615,7 @@ const ThreadCard = memo(function ThreadCard({
   isSelected: boolean;
   connectedEmail: string | null;
   /** Cross-thread: have we already sent an outgoing to this address/order in another thread? */
-  previousContact: { byAddress: boolean; byOrder: boolean; recentReply: boolean; matchedAddress: string | null };
+  previousContact: { byOrder: boolean; recentReply: boolean };
   onSelect: (threadId: string) => void;
   onOrderClick: (orderNumber: string) => void;
   onFilterClick: (patch: Partial<InboxFilters>) => void;
@@ -1526,7 +1651,7 @@ const ThreadCard = memo(function ThreadCard({
   }, [reanalyzeFetcher.data]);
   const hasSignals =
     (bucket === "to_process" || bucket === "waiting_merchant" || bucket === "waiting_customer") &&
-    (previousContact.recentReply || previousContact.byAddress || previousContact.byOrder);
+    (previousContact.recentReply || previousContact.byOrder);
 
   // The "latest" email may be a new unanalyzed follow-up (e.g. waiting_merchant
   // after a customer reply). Find the most recent email that actually has
@@ -1616,10 +1741,8 @@ const ThreadCard = memo(function ThreadCard({
           >
             <SignalPill />
             <PortalTooltip open={showSignals} anchor={signalAnchorRef.current}>
+              {hasSignals && previousContact.byOrder && <span>{t("inbox.signalPriorContactOrder")}</span>}
               {hasSignals && previousContact.recentReply && <span>{t("inbox.signalRepliedElsewhere")}</span>}
-              {hasSignals && previousContact.byAddress && previousContact.byOrder && <span>{t("inbox.signalPriorContactBoth")}</span>}
-              {hasSignals && previousContact.byOrder && !previousContact.byAddress && <span>{t("inbox.signalPriorContactOrder")}</span>}
-              {hasSignals && previousContact.byAddress && !previousContact.byOrder && <span>{t("inbox.signalPriorContactAddress")}</span>}
               {ambiguousOrderCount > 0 && (
                 <span>{t("inbox.signalAmbiguousOrder", { count: ambiguousOrderCount })}</span>
               )}
@@ -2126,7 +2249,7 @@ function ThreadDetailPanel({
   threadState: SerializedThreadState | null;
   connectedEmail: string | null;
   bucket: OpsBucket | "all";
-  previousContact: { byAddress: boolean; byOrder: boolean; recentReply: boolean };
+  previousContact: { byOrder: boolean; recentReply: boolean };
   onClose: () => void;
 }) {
   const { t } = useTranslation();
@@ -2154,7 +2277,7 @@ function ThreadDetailPanel({
   const signalAnchorRef = useRef<HTMLSpanElement | null>(null);
   const hasSignals =
     (bucket === "to_process" || bucket === "waiting_merchant" || bucket === "waiting_customer") &&
-    (previousContact.recentReply || previousContact.byAddress || previousContact.byOrder);
+    (previousContact.recentReply || previousContact.byOrder);
 
   const [editingClassification, setEditingClassification] = useState(false);
   const [showRegenToast, setShowRegenToast] = useState(false);
@@ -2283,10 +2406,8 @@ function ThreadDetailPanel({
             >
               <SignalPill />
               <PortalTooltip open={showSignals} anchor={signalAnchorRef.current}>
+                {hasSignals && previousContact.byOrder && <span>{t("inbox.signalPriorContactOrder")}</span>}
                 {hasSignals && previousContact.recentReply && <span>{t("inbox.signalRepliedElsewhere")}</span>}
-                {hasSignals && previousContact.byAddress && previousContact.byOrder && <span>{t("inbox.signalPriorContactBoth")}</span>}
-                {hasSignals && previousContact.byOrder && !previousContact.byAddress && <span>{t("inbox.signalPriorContactOrder")}</span>}
-                {hasSignals && previousContact.byAddress && !previousContact.byOrder && <span>{t("inbox.signalPriorContactAddress")}</span>}
                 {ambiguousOrderCount > 0 && (
                   <span>{t("inbox.signalAmbiguousOrder", { count: ambiguousOrderCount })}</span>
                 )}
@@ -2752,10 +2873,8 @@ export default function InboxPage() {
           nature: getThreadClassification(t),
           linkedOrder: hasLinkedOrder(state),
           previousContact: {
-            byAddress: pc?.byAddress ?? false,
             byOrder: pc?.byOrder ?? false,
-            recentReply: (pc as { recentReply?: boolean } | null)?.recentReply ?? false,
-            matchedAddress: (pc as { matchedAddress?: string | null } | null)?.matchedAddress ?? null,
+            recentReply: pc?.recentReply ?? false,
           },
         };
       }),
@@ -2773,9 +2892,12 @@ export default function InboxPage() {
   };
 
   // Selected thread for the right-side detail panel (searched across ALL threads,
-  // not just filtered, so the panel stays open when filters change).
+  // not just filtered, so the panel stays open when filters change). Tombstoned
+  // threads have no content to show and are never selectable.
   const selectedThreadMeta = expandedThreadId
-    ? threadMeta.find((m) => m.thread.threadId === expandedThreadId) ?? null
+    ? threadMeta.find(
+        (m) => m.thread.threadId === expandedThreadId && !m.state?.redactedAt,
+      ) ?? null
     : null;
 
   // On mobile: full-screen detail view replaces the list
@@ -3010,20 +3132,28 @@ export default function InboxPage() {
                       <s-paragraph>{t("inbox.noEmailsMatch")}</s-paragraph>
                     </s-box>
                   )}
-                  {filteredThreadMeta.map(({ thread, state, previousContact }) => (
-                    <ThreadCard
-                      key={thread.threadId}
-                      thread={thread}
-                      threadState={state}
-                      isSelected={expandedThreadId === thread.threadId}
-                      connectedEmail={loaderData.connectedEmail}
-                      previousContact={previousContact}
-                      onSelect={toggleExpandedThreadId}
-                      onOrderClick={handleOrderClick}
-                      onFilterClick={handleFilterClick}
-                      onBucketClick={handleBucketClick}
-                    />
-                  ))}
+                  {filteredThreadMeta.map(({ thread, state, previousContact }) =>
+                    state?.redactedAt ? (
+                      <TombstoneCard
+                        key={thread.threadId}
+                        redactedAt={state.redactedAt}
+                        reason={state.redactedReason}
+                      />
+                    ) : (
+                      <ThreadCard
+                        key={thread.threadId}
+                        thread={thread}
+                        threadState={state}
+                        isSelected={expandedThreadId === thread.threadId}
+                        connectedEmail={loaderData.connectedEmail}
+                        previousContact={previousContact}
+                        onSelect={toggleExpandedThreadId}
+                        onOrderClick={handleOrderClick}
+                        onFilterClick={handleFilterClick}
+                        onBucketClick={handleBucketClick}
+                      />
+                    ),
+                  )}
                 </div>
 
                 {/* Right: thread detail panel (sticky).

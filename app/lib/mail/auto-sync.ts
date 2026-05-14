@@ -23,7 +23,7 @@ import { unauthenticated } from "../../shopify.server";
 import { resolveEntitlements } from "../billing/entitlements";
 import { runManualBackfill, runOnboardingBackfill } from "./backfill";
 import { recomputeAllOpenThreads, recomputeAllThreadsForShop } from "../support/thread-state";
-import { ANALYSIS_FRESHNESS_MS, refreshStaleAnalysesForShop } from "../support/refresh-stale-analyses";
+import { refreshStaleAnalysesForShop } from "../support/refresh-stale-analyses";
 import { pruneOldRateLimitBuckets } from "../rate-limit";
 import {
   claimNextJob,
@@ -44,11 +44,15 @@ const MAX_CONCURRENT = Math.max(
   1,
   Number(process.env.AUTOSYNC_CONCURRENCY ?? "4"),
 );
-const ZOMBIE_TIMEOUT_MS = 30 * 60_000; // reclaim jobs stuck > 30 min in "running"
+// Reclaim jobs stuck > 10 min in "running". Lowered from 30 min so a
+// deploy that interrupts a long backfill is recovered quickly. Legitimate
+// syncs must complete in under 10 min — anything longer is treated as dead.
+const ZOMBIE_TIMEOUT_MS = 10 * 60_000;
 
 let started = false;
 let _intervalHandle: ReturnType<typeof setInterval> | null = null;
 let inFlight = 0;
+let shuttingDown = false;
 const runningShops = new Set<string>();
 
 /**
@@ -58,6 +62,7 @@ const runningShops = new Set<string>();
 export function startAutoSyncLoop(): void {
   if (started) return;
   started = true;
+  shuttingDown = false;
   setTimeout(() => {
     tick().catch((err) =>
       console.error("[auto-sync] initial tick failed:", err),
@@ -74,6 +79,9 @@ export function startAutoSyncLoop(): void {
 }
 
 async function tick(): Promise<void> {
+  // Stop scheduling new work once shutdown has been requested. Jobs already
+  // in flight keep running until they finish or the process exits.
+  if (shuttingDown) return;
   // 1. Reset jobs whose workers died without completing (OOM, restart, timeout).
   await reclaimZombieJobs(ZOMBIE_TIMEOUT_MS).catch((err) =>
     console.error("[auto-sync] zombie reclaim failed:", err),
@@ -179,6 +187,7 @@ export async function enqueueDuePeriodicSyncs(): Promise<void> {
  */
 async function drainJobQueue(): Promise<void> {
   while (inFlight < MAX_CONCURRENT) {
+    if (shuttingDown) return;
     const job = await claimNextJob([...runningShops]);
     if (!job) break;
     // Increment synchronously before firing — prevents the while loop from
@@ -338,22 +347,21 @@ async function runSyncForShop(
     `[auto-sync] shop=${shop} fetched=${report.total} support=${report.supportClient} errors=${report.errors}`,
   );
 
-  // Best-effort refresh of active thread analyses during mailbox sync so
-  // tracking and Shopify data don't remain stale while the mail timestamp
-  // updates. Failures are isolated per email and never abort sync.
-  if (report.total > 0) {
-    try {
-      const res = await refreshStaleAnalysesForShop(shop, admin, {
-        maxAgeMs: ANALYSIS_FRESHNESS_MS.autoRefresh,
-      });
-      if (res.refreshed > 0 || res.errors > 0) {
-        console.log(
-          `[auto-sync] shop=${shop} stale-refresh: refreshed=${res.refreshed} errors=${res.errors}`,
-        );
-      }
-    } catch (err) {
-      console.error(`[auto-sync] shop=${shop} stale-refresh failed:`, err);
+  // Best-effort refresh of active thread analyses every sync tick — independently
+  // of whether new mail arrived. The adaptive cutoff inside refreshStaleAnalysesForShop
+  // (pickCutoffForAnalysis: pending → 5 min, error → 10 min, ok / skipped → 1h)
+  // already gates work per-thread, and the per-pass budget caps it at 10 candidates,
+  // so running it every tick is cheap. Decoupling from `report.total > 0` ensures
+  // a transient 17track failure on a calm shop still gets retried promptly.
+  try {
+    const res = await refreshStaleAnalysesForShop(shop, admin);
+    if (res.refreshed > 0 || res.errors > 0) {
+      console.log(
+        `[auto-sync] shop=${shop} stale-refresh: refreshed=${res.refreshed} errors=${res.errors}`,
+      );
     }
+  } catch (err) {
+    console.error(`[auto-sync] shop=${shop} stale-refresh failed:`, err);
   }
 }
 
@@ -365,6 +373,36 @@ if (import.meta.hot) {
       _intervalHandle = null;
     }
     started = false;
+    shuttingDown = false;
   });
+}
+
+/**
+ * Stop scheduling new work and wait for in-flight jobs to drain. Call this
+ * from a SIGTERM/SIGINT handler before `process.exit`. After `timeoutMs`,
+ * we return regardless — any still-running jobs will be picked up by the
+ * zombie reclaim on the next deploy (max ZOMBIE_TIMEOUT_MS of retry delay).
+ *
+ * Returns the number of jobs still in flight when the wait ended.
+ */
+export async function stopAutoSyncLoop(timeoutMs = 25_000): Promise<number> {
+  if (!started) return 0;
+  shuttingDown = true;
+  if (_intervalHandle) {
+    clearInterval(_intervalHandle);
+    _intervalHandle = null;
+  }
+  const deadline = Date.now() + timeoutMs;
+  while (inFlight > 0 && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  if (inFlight > 0) {
+    console.warn(
+      `[auto-sync] shutdown drain timed out after ${timeoutMs}ms with ${inFlight} job(s) still running — they will be reclaimed as zombies`,
+    );
+  } else {
+    console.log("[auto-sync] graceful shutdown complete");
+  }
+  return inFlight;
 }
 

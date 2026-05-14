@@ -4,7 +4,7 @@ const VALID_LANGS = ["fr", "en"] as const;
 type UiLanguage = (typeof VALID_LANGS)[number];
 
 function sanitize(lang: string): UiLanguage {
-  return (VALID_LANGS as readonly string[]).includes(lang) ? (lang as UiLanguage) : "fr";
+  return (VALID_LANGS as readonly string[]).includes(lang) ? (lang as UiLanguage) : "en";
 }
 
 export async function getUiLanguage(userId: string, shop: string): Promise<UiLanguage> {
@@ -12,7 +12,7 @@ export async function getUiLanguage(userId: string, shop: string): Promise<UiLan
     where: { userId_shop: { userId, shop } },
     select: { uiLanguage: true },
   });
-  return sanitize(pref?.uiLanguage ?? "fr");
+  return sanitize(pref?.uiLanguage ?? "en");
 }
 
 export async function saveUiLanguage(userId: string, shop: string, uiLanguage: string): Promise<void> {

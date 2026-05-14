@@ -76,12 +76,15 @@ describe('GDPR webhooks — integration DB', () => {
   });
 
   it('customers/redact deletes emails from the redacted customer (REQ-GDPR-02)', async () => {
-    // 1. Seed: create a thread and two emails — one from the victim, one from someone else.
-    const thread = await createTestThread();
+    // The GDPR rewrite (78f86e2) deletes every email in any thread the
+    // customer touched, then tombstones the thread itself. Seed two
+    // SEPARATE threads — one belonging to the victim, one to a different
+    // customer — so we can verify the "other" thread is untouched.
+    const victimThread = await createTestThread();
+    const otherThread = await createTestThread();
 
     const baseEmail = {
       shop: TEST_SHOP,
-      threadId: thread.id,
       externalMessageId: '',
       fromName: '',
       subject: 'Test',
@@ -94,12 +97,23 @@ describe('GDPR webhooks — integration DB', () => {
 
     await testDb.incomingEmail.createMany({
       data: [
-        { ...baseEmail, externalMessageId: 'msg-victim-1', fromAddress: 'victim@example.com' },
-        { ...baseEmail, externalMessageId: 'msg-other-1', fromAddress: 'other@example.com' },
+        {
+          ...baseEmail,
+          threadId: victimThread.id,
+          canonicalThreadId: victimThread.id,
+          externalMessageId: 'msg-victim-1',
+          fromAddress: 'victim@example.com',
+        },
+        {
+          ...baseEmail,
+          threadId: otherThread.id,
+          canonicalThreadId: otherThread.id,
+          externalMessageId: 'msg-other-1',
+          fromAddress: 'other@example.com',
+        },
       ],
     });
 
-    // 2. Mock authenticate.webhook for this call.
     vi.mocked(authenticate.webhook).mockResolvedValueOnce({
       topic: 'customers/redact',
       shop: TEST_SHOP,
@@ -109,7 +123,6 @@ describe('GDPR webhooks — integration DB', () => {
       },
     } as any);
 
-    // 3. Call the action.
     const response = await customersRedactAction({
       request: makeRequest(),
       params: {},
@@ -117,15 +130,30 @@ describe('GDPR webhooks — integration DB', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
 
-    // 4. Assert HTTP 200.
     expect(response.status).toBe(200);
 
-    // 5. Only the "other" email should remain.
+    // Victim's email + thread emails wiped; other-thread email survives.
     const remaining = await testDb.incomingEmail.findMany({
       where: { shop: TEST_SHOP },
     });
     expect(remaining).toHaveLength(1);
     expect(remaining[0].fromAddress).toBe('other@example.com');
+
+    // The victim thread is tombstoned, not deleted: row stays, PII cleared,
+    // redactedAt set so the inbox can render a placeholder.
+    const victimThreadAfter = await testDb.thread.findUnique({
+      where: { id: victimThread.id },
+    });
+    expect(victimThreadAfter).not.toBeNull();
+    expect(victimThreadAfter?.redactedAt).not.toBeNull();
+    expect(victimThreadAfter?.redactedReason).toBe('gdpr_customer_request');
+    expect(victimThreadAfter?.resolvedEmail).toBeNull();
+
+    // The other thread is untouched.
+    const otherThreadAfter = await testDb.thread.findUnique({
+      where: { id: otherThread.id },
+    });
+    expect(otherThreadAfter?.redactedAt).toBeNull();
   });
 
   it('shop/redact deletes all shop data (REQ-GDPR-03)', async () => {

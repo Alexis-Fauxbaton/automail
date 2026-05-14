@@ -1,6 +1,7 @@
-import type { FulfillmentTrackingFacts, OrderFacts, TrackingFacts } from "../types";
+import type { FulfillmentTrackingFacts, OrderFacts } from "../types";
 import { resolveTrackingForFulfillment } from "./provider-resolver";
 import { fetchTrackingFrom17track } from "./adapters/seventeen-track";
+import { isOpen as is17trackBreakerOpen } from "./seventeen-track-breaker";
 
 /**
  * Resolve tracking facts for a single fulfillment.
@@ -17,58 +18,93 @@ async function resolveOneFulfillment(
   const trackingNumber = fulfillment.trackingNumbers[0] ?? null;
   const trackingUrl = fulfillment.trackingUrls[0] ?? null;
   const lineItems = fulfillment.lineItems;
+  const attemptAt = new Date().toISOString();
 
-  // --- 1. Try 17track first ---
-  if (trackingNumber) {
-    try {
-      const result = await fetchTrackingFrom17track(trackingNumber, fulfillment.carrier ?? null);
-      if (result && result.state === "ok") {
-        return {
-          source: "seventeen_track",
-          carrier: result.carrierName ?? fulfillment.carrier ?? null,
-          trackingNumber,
-          // Keep Shopify URL for the customer-facing link when available.
-          trackingUrl: trackingUrl ?? null,
-          status: result.status,
-          inferred: false,
-          events: result.events,
-          lastEvent: result.lastEvent,
-          lastLocation: result.lastLocation,
-          lastEventDate: result.lastEventDate,
-          delivered: result.delivered,
-          fulfillmentIndex,
-          lineItems,
-        };
-      }
-      if (result && result.state === "pending") {
-        // 17track registered the number but data isn't ready yet.
-        // Return a "pending" entry so the draft can say tracking is initializing
-        // instead of falling back to an unreliable scraping source.
-        console.log(`[tracking] 17track pending after retries for ${trackingNumber} (fulfillment ${fulfillmentIndex})`);
-        return {
-          source: "seventeen_track",
-          carrier: fulfillment.carrier ?? null,
-          trackingNumber,
-          trackingUrl: trackingUrl ?? null,
-          status: "Pending (tracking initializing)",
-          inferred: false,
-          events: [],
-          lastEvent: null,
-          lastLocation: null,
-          lastEventDate: null,
-          delivered: false,
-          fulfillmentIndex,
-          lineItems,
-        };
-      }
-    } catch (err) {
-      console.error(`[tracking] 17track failed for fulfillment ${fulfillmentIndex}, using Shopify:`, err);
-    }
+  // No tracking number → nothing to ask 17track about.
+  if (!trackingNumber) {
+    const base = resolveTrackingForFulfillment(fulfillment);
+    return {
+      ...base,
+      fulfillmentIndex,
+      lineItems,
+      last17trackAttempt: "skipped",
+      last17trackAttemptAt: attemptAt,
+    };
   }
 
-  // --- 2. Fallback: Shopify data + pattern inference ---
-  const base: TrackingFacts = resolveTrackingForFulfillment(fulfillment);
-  return { ...base, fulfillmentIndex, lineItems };
+  // --- 1. Try 17track first ---
+  try {
+    const result = await fetchTrackingFrom17track(trackingNumber, fulfillment.carrier ?? null);
+    if (result && result.state === "ok") {
+      return {
+        source: "seventeen_track",
+        carrier: result.carrierName ?? fulfillment.carrier ?? null,
+        trackingNumber,
+        trackingUrl: trackingUrl ?? null,
+        status: result.status,
+        inferred: false,
+        events: result.events,
+        lastEvent: result.lastEvent,
+        lastLocation: result.lastLocation,
+        lastEventDate: result.lastEventDate,
+        delivered: result.delivered,
+        fulfillmentIndex,
+        lineItems,
+        last17trackAttempt: "ok",
+        last17trackAttemptAt: attemptAt,
+      };
+    }
+    if (result && result.state === "pending") {
+      console.log(`[tracking] 17track pending after retries for ${trackingNumber} (fulfillment ${fulfillmentIndex})`);
+      return {
+        source: "seventeen_track",
+        carrier: fulfillment.carrier ?? null,
+        trackingNumber,
+        trackingUrl: trackingUrl ?? null,
+        status: "Pending (tracking initializing)",
+        inferred: false,
+        events: [],
+        lastEvent: null,
+        lastLocation: null,
+        lastEventDate: null,
+        delivered: false,
+        fulfillmentIndex,
+        lineItems,
+        last17trackAttempt: "pending",
+        last17trackAttemptAt: attemptAt,
+      };
+    }
+    // result === null → 17track failed (HTTP error, breaker open, no API key, or unexpected rejection).
+    // Three buckets:
+    //   - no/placeholder API key → "skipped" (never retry faster)
+    //   - breaker open            → "skipped" (will be open for 15 min, faster retry is wasted)
+    //   - everything else         → "error"  (real transient failure, retry in 10 min)
+    const keyConfigured =
+      !!process.env.SEVENTEEN_TRACK_API_KEY &&
+      process.env.SEVENTEEN_TRACK_API_KEY !== "your-17track-key-here";
+    let attempt: "error" | "skipped";
+    if (!keyConfigured) attempt = "skipped";
+    else if (is17trackBreakerOpen()) attempt = "skipped";
+    else attempt = "error";
+    const base = resolveTrackingForFulfillment(fulfillment);
+    return {
+      ...base,
+      fulfillmentIndex,
+      lineItems,
+      last17trackAttempt: attempt,
+      last17trackAttemptAt: attemptAt,
+    };
+  } catch (err) {
+    console.error(`[tracking] 17track failed for fulfillment ${fulfillmentIndex}, using Shopify:`, err);
+    const base = resolveTrackingForFulfillment(fulfillment);
+    return {
+      ...base,
+      fulfillmentIndex,
+      lineItems,
+      last17trackAttempt: "error",
+      last17trackAttemptAt: attemptAt,
+    };
+  }
 }
 
 /**
