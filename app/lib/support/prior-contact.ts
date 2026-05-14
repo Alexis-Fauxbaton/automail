@@ -27,6 +27,26 @@ export async function computePriorContact(
 ): Promise<Record<string, PriorContactResult>> {
   if (canonicalIds.length === 0) return {};
 
+  // The merchant's own mailbox address must never count as a "prior contact"
+  // signal — it appears on virtually every thread by definition (every reply
+  // sent through the connected mailbox), so treating it like a customer
+  // address produces systematic false positives. Same for any past outgoing
+  // address used by this shop (covers aliases like support@, contact@).
+  const conn = await prisma.mailConnection.findUnique({
+    where: { shop },
+    select: { email: true },
+  });
+  const outgoingAddrs = await prisma.incomingEmail.findMany({
+    where: { shop, processingStatus: "outgoing" },
+    select: { fromAddress: true },
+    distinct: ["fromAddress"],
+  });
+  const merchantAddresses = new Set<string>();
+  if (conn?.email) merchantAddresses.add(conn.email.toLowerCase());
+  for (const r of outgoingAddrs) merchantAddresses.add(r.fromAddress.toLowerCase());
+  const isMerchantOrSystem = (addr: string): boolean =>
+    SHARED_SYSTEM_ADDRESSES.has(addr) || merchantAddresses.has(addr);
+
   const outgoingRows = await prisma.incomingEmail.findMany({
     where: { shop, processingStatus: "outgoing" },
     select: { canonicalThreadId: true, receivedAt: true },
@@ -59,7 +79,7 @@ export async function computePriorContact(
   for (const r of repliedAddressRows) {
     if (!r.canonicalThreadId) continue;
     const addr = r.fromAddress.toLowerCase();
-    if (SHARED_SYSTEM_ADDRESSES.has(addr)) continue;
+    if (isMerchantOrSystem(addr)) continue;
     if (!addressRepliedIn.has(addr)) addressRepliedIn.set(addr, new Set());
     addressRepliedIn.get(addr)!.add(r.canonicalThreadId);
   }
@@ -105,7 +125,7 @@ export async function computePriorContact(
     const threadStartedAt = earliestIncomingAt < Infinity ? earliestIncomingAt : currentCreatedAt.getTime();
     const addrs = incomingMsgs
       .map((r) => r.fromAddress.toLowerCase())
-      .filter((a) => !SHARED_SYSTEM_ADDRESSES.has(a));
+      .filter((a) => !isMerchantOrSystem(a));
     const hadEarlierReply = (tid: string) =>
       tid !== id && (earliestOutgoingByThread.get(tid) ?? Infinity) < threadStartedAt;
     const hasRecentReply = (tid: string) =>
