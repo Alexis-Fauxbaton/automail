@@ -12,6 +12,14 @@ function baseAnalysis(): SupportAnalysis {
     trackings: [],
     warnings: [],
     confidence: "low",
+    draftReply: "",
+    conversation: {
+      messageCount: 0,
+      incomingCount: 0,
+      outgoingCount: 0,
+      lastMessageDirection: "incoming",
+      noReplyNeeded: false,
+    },
   };
 }
 
