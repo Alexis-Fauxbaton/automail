@@ -8,8 +8,8 @@ import {
 } from "./helpers/db";
 
 const { refreshSpy, refineDraftSpy } = vi.hoisted(() => ({
-  refreshSpy: vi.fn(async () => undefined),
-  refineDraftSpy: vi.fn(async () => "<p>refined</p>"),
+  refreshSpy: vi.fn<(...args: unknown[]) => Promise<void>>(async () => undefined),
+  refineDraftSpy: vi.fn<(...args: unknown[]) => Promise<string>>(async () => "<p>refined</p>"),
 }));
 vi.mock("../../support/refresh-thread-analysis", () => ({
   refreshThreadAnalysis: refreshSpy,
