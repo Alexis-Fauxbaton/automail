@@ -33,9 +33,18 @@ async function maybeRefreshAnalysis(
   if (record.processingStatus !== "analyzed") return;
   if (!isAnalysisStale(record.lastAnalyzedAt, ANALYSIS_FRESHNESS_MS.draftTrigger)) return;
   try {
-    await reanalyzeEmail(emailId, admin, shop);
+    // Lightweight refresh: Shopify + 17track, no LLM. The intent stays
+    // intact (the customer's message hasn't changed), only the order /
+    // tracking facts are re-fetched in case Shopify-side state drifted
+    // (e.g. order shipped between two refines).
+    const { refreshThreadAnalysis } = await import("./refresh-thread-analysis");
+    await refreshThreadAnalysis(emailId, admin, shop, {
+      reclassifyIntent: false,
+      reSearchOrder: true,
+      refreshTracking: true,
+    });
   } catch (err) {
-    console.error(`[inbox] auto-reanalyze before draft failed for email=${emailId}:`, err);
+    console.error(`[inbox] auto-refresh before draft failed for email=${emailId}:`, err);
   }
 }
 
