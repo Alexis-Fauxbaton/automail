@@ -357,9 +357,7 @@
     "generating": "Generating…",
     "intentLabel": "Intent",
     "signalRepliedElsewhere": "Replied in another thread",
-    "signalPriorContactBoth": "Prior contact (address + order)",
     "signalPriorContactOrder": "Prior contact (same order)",
-    "signalPriorContactAddress": "Prior contact (same address)",
     "signalAmbiguousOrder": "Order to confirm ({{count}} candidates)",
     "backToList": "Back to inbox"
   },

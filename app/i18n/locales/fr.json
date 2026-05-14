@@ -357,9 +357,7 @@
     "generating": "Génération…",
     "intentLabel": "Intention",
     "signalRepliedElsewhere": "Répondu dans un autre fil",
-    "signalPriorContactBoth": "Contact récurrent (adresse + commande)",
     "signalPriorContactOrder": "Contact récurrent (même commande)",
-    "signalPriorContactAddress": "Contact récurrent (même adresse)",
     "signalAmbiguousOrder": "Commande à confirmer ({{count}} candidates)",
     "backToList": "Retour à la liste"
   },

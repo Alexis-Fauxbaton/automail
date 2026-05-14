@@ -83,7 +83,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   let emails: SerializedEmail[] = [];
   let threadStates: Record<string, SerializedThreadState> = {};
-  let priorContact: Record<string, { byAddress: boolean; byOrder: boolean }> = {};
+  let priorContact: Record<string, { byOrder: boolean; recentReply: boolean }> = {};
   if (connection) {
     const rows = await prisma.incomingEmail.findMany({
       where: { shop },
@@ -741,68 +741,36 @@ function PortalTooltip({
 
 /** Rounded pill with an alert-triangle icon — clickable trigger for the
  *  thread-level signals tooltip (replied elsewhere, ambiguous order, etc). */
-/**
- * Visual prior-contact / ambiguity badge.
- *
- * `tone="high"` is the strong signal (e.g. same order discussed in another
- * thread — low false-positive rate) and uses a blue info pill.
- * `tone="low"` is the weaker signal (same address, recent reply elsewhere,
- * ambiguous order match) and keeps the amber warning treatment.
- */
-function SignalPill({ tone = "low" }: { tone?: "high" | "low" }) {
-  const colors =
-    tone === "high"
-      ? { bg: "#dbeafe", fg: "#1d4ed8" } // blue-100 / blue-700 — high-confidence info
-      : { bg: "#fef3c7", fg: "#a86600" }; // amber-100 / amber-700 — caution
+function SignalPill() {
   return (
     <span
       style={{
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
-        background: colors.bg,
-        color: colors.fg,
+        background: "#fef3c7",
+        color: "#a86600",
         borderRadius: "999px",
         padding: "4px",
         cursor: "help",
         lineHeight: 0,
       }}
     >
-      {tone === "high" ? (
-        // info circle — same-order signal
-        <svg
-          aria-hidden
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <circle cx="12" cy="12" r="10" />
-          <line x1="12" y1="16" x2="12" y2="12" />
-          <line x1="12" y1="8" x2="12.01" y2="8" />
-        </svg>
-      ) : (
-        // alert triangle — weaker / ambiguity signal
-        <svg
-          aria-hidden
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
-          <line x1="12" y1="9" x2="12" y2="13" />
-          <line x1="12" y1="17" x2="12.01" y2="17" />
-        </svg>
-      )}
+      <svg
+        aria-hidden
+        width="14"
+        height="14"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+        <line x1="12" y1="9" x2="12" y2="13" />
+        <line x1="12" y1="17" x2="12.01" y2="17" />
+      </svg>
     </span>
   );
 }
@@ -1642,7 +1610,7 @@ const ThreadCard = memo(function ThreadCard({
   isSelected: boolean;
   connectedEmail: string | null;
   /** Cross-thread: have we already sent an outgoing to this address/order in another thread? */
-  previousContact: { byAddress: boolean; byOrder: boolean; recentReply: boolean; matchedAddress: string | null };
+  previousContact: { byOrder: boolean; recentReply: boolean };
   onSelect: (threadId: string) => void;
   onOrderClick: (orderNumber: string) => void;
   onFilterClick: (patch: Partial<InboxFilters>) => void;
@@ -1678,7 +1646,7 @@ const ThreadCard = memo(function ThreadCard({
   }, [reanalyzeFetcher.data]);
   const hasSignals =
     (bucket === "to_process" || bucket === "waiting_merchant" || bucket === "waiting_customer") &&
-    (previousContact.recentReply || previousContact.byAddress || previousContact.byOrder);
+    (previousContact.recentReply || previousContact.byOrder);
 
   // The "latest" email may be a new unanalyzed follow-up (e.g. waiting_merchant
   // after a customer reply). Find the most recent email that actually has
@@ -1766,10 +1734,9 @@ const ThreadCard = memo(function ThreadCard({
             onMouseLeave={() => setShowSignals(false)}
             onClick={(e) => e.stopPropagation()}
           >
-            <SignalPill tone={previousContact.byOrder ? "high" : "low"} />
+            <SignalPill />
             <PortalTooltip open={showSignals} anchor={signalAnchorRef.current}>
               {hasSignals && previousContact.byOrder && <span>{t("inbox.signalPriorContactOrder")}</span>}
-              {hasSignals && previousContact.byAddress && !previousContact.byOrder && <span>{t("inbox.signalPriorContactAddress")}</span>}
               {hasSignals && previousContact.recentReply && <span>{t("inbox.signalRepliedElsewhere")}</span>}
               {ambiguousOrderCount > 0 && (
                 <span>{t("inbox.signalAmbiguousOrder", { count: ambiguousOrderCount })}</span>
@@ -2277,7 +2244,7 @@ function ThreadDetailPanel({
   threadState: SerializedThreadState | null;
   connectedEmail: string | null;
   bucket: OpsBucket | "all";
-  previousContact: { byAddress: boolean; byOrder: boolean; recentReply: boolean };
+  previousContact: { byOrder: boolean; recentReply: boolean };
   onClose: () => void;
 }) {
   const { t } = useTranslation();
@@ -2305,7 +2272,7 @@ function ThreadDetailPanel({
   const signalAnchorRef = useRef<HTMLSpanElement | null>(null);
   const hasSignals =
     (bucket === "to_process" || bucket === "waiting_merchant" || bucket === "waiting_customer") &&
-    (previousContact.recentReply || previousContact.byAddress || previousContact.byOrder);
+    (previousContact.recentReply || previousContact.byOrder);
 
   const [editingClassification, setEditingClassification] = useState(false);
   const [showRegenToast, setShowRegenToast] = useState(false);
@@ -2432,10 +2399,9 @@ function ThreadDetailPanel({
               onMouseEnter={() => setShowSignals(true)}
               onMouseLeave={() => setShowSignals(false)}
             >
-              <SignalPill tone={previousContact.byOrder ? "high" : "low"} />
+              <SignalPill />
               <PortalTooltip open={showSignals} anchor={signalAnchorRef.current}>
                 {hasSignals && previousContact.byOrder && <span>{t("inbox.signalPriorContactOrder")}</span>}
-                {hasSignals && previousContact.byAddress && !previousContact.byOrder && <span>{t("inbox.signalPriorContactAddress")}</span>}
                 {hasSignals && previousContact.recentReply && <span>{t("inbox.signalRepliedElsewhere")}</span>}
                 {ambiguousOrderCount > 0 && (
                   <span>{t("inbox.signalAmbiguousOrder", { count: ambiguousOrderCount })}</span>
@@ -2902,10 +2868,8 @@ export default function InboxPage() {
           nature: getThreadClassification(t),
           linkedOrder: hasLinkedOrder(state),
           previousContact: {
-            byAddress: pc?.byAddress ?? false,
             byOrder: pc?.byOrder ?? false,
-            recentReply: (pc as { recentReply?: boolean } | null)?.recentReply ?? false,
-            matchedAddress: (pc as { matchedAddress?: string | null } | null)?.matchedAddress ?? null,
+            recentReply: pc?.recentReply ?? false,
           },
         };
       }),
