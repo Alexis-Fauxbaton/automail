@@ -71,6 +71,12 @@ export const httpRequestsTotal = metrics.counter(
   "Total HTTP requests handled, labelled by route and status_code.",
 );
 
+// --- Refine context refresh (edit-time) ---
+export const refineContextRefreshTotal = metrics.counter(
+  "refine_context_refresh_total",
+  "Outcomes of the edit-time analysis refresh triggered by handleEditThreadIdentifiers.",
+);
+
 // --- Helper to time a histogram observation. Returns a stop() function
 //     that records duration in seconds. ---
 export function startTimer(): () => number {
