@@ -108,6 +108,7 @@ export async function refreshStaleAnalysesForShop(
   // bypass-the-cutoff semantics used by tests and the user-triggered path.
   const now = Date.now();
   const eligible: Array<{ id: string; analysisResult: string | null }> = [];
+  let skipped = 0;
   for (const c of candidates) {
     let cutoffMs: number;
     if (opts.maxAgeMs !== undefined) {
@@ -119,12 +120,15 @@ export async function refreshStaleAnalysesForShop(
       cutoffMs = pickCutoffForAnalysis(previous);
     }
     const age = c.lastAnalyzedAt ? now - c.lastAnalyzedAt.getTime() : Infinity;
-    if (age > cutoffMs) eligible.push({ id: c.id, analysisResult: c.analysisResult });
-    if (eligible.length >= 10) break; // preserve original per-pass budget
+    if (age > cutoffMs) {
+      eligible.push({ id: c.id, analysisResult: c.analysisResult });
+      if (eligible.length >= 10) break; // preserve original per-pass budget
+    } else {
+      skipped++;
+    }
   }
 
   let refreshed = 0;
-  let skipped = candidates.length - eligible.length;
   let errors = 0;
   if (eligible.length === 0) {
     console.log(`[refresh-stale] shop=${shop} no stale candidates after adaptive filter`);
