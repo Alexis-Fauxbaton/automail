@@ -741,36 +741,68 @@ function PortalTooltip({
 
 /** Rounded pill with an alert-triangle icon — clickable trigger for the
  *  thread-level signals tooltip (replied elsewhere, ambiguous order, etc). */
-function SignalPill() {
+/**
+ * Visual prior-contact / ambiguity badge.
+ *
+ * `tone="high"` is the strong signal (e.g. same order discussed in another
+ * thread — low false-positive rate) and uses a blue info pill.
+ * `tone="low"` is the weaker signal (same address, recent reply elsewhere,
+ * ambiguous order match) and keeps the amber warning treatment.
+ */
+function SignalPill({ tone = "low" }: { tone?: "high" | "low" }) {
+  const colors =
+    tone === "high"
+      ? { bg: "#dbeafe", fg: "#1d4ed8" } // blue-100 / blue-700 — high-confidence info
+      : { bg: "#fef3c7", fg: "#a86600" }; // amber-100 / amber-700 — caution
   return (
     <span
       style={{
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
-        background: "#fef3c7",
-        color: "#a86600",
+        background: colors.bg,
+        color: colors.fg,
         borderRadius: "999px",
         padding: "4px",
         cursor: "help",
         lineHeight: 0,
       }}
     >
-      <svg
-        aria-hidden
-        width="14"
-        height="14"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2.2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
-        <line x1="12" y1="9" x2="12" y2="13" />
-        <line x1="12" y1="17" x2="12.01" y2="17" />
-      </svg>
+      {tone === "high" ? (
+        // info circle — same-order signal
+        <svg
+          aria-hidden
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <circle cx="12" cy="12" r="10" />
+          <line x1="12" y1="16" x2="12" y2="12" />
+          <line x1="12" y1="8" x2="12.01" y2="8" />
+        </svg>
+      ) : (
+        // alert triangle — weaker / ambiguity signal
+        <svg
+          aria-hidden
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+          <line x1="12" y1="9" x2="12" y2="13" />
+          <line x1="12" y1="17" x2="12.01" y2="17" />
+        </svg>
+      )}
     </span>
   );
 }
@@ -1734,12 +1766,11 @@ const ThreadCard = memo(function ThreadCard({
             onMouseLeave={() => setShowSignals(false)}
             onClick={(e) => e.stopPropagation()}
           >
-            <SignalPill />
+            <SignalPill tone={previousContact.byOrder ? "high" : "low"} />
             <PortalTooltip open={showSignals} anchor={signalAnchorRef.current}>
-              {hasSignals && previousContact.recentReply && <span>{t("inbox.signalRepliedElsewhere")}</span>}
-              {hasSignals && previousContact.byAddress && previousContact.byOrder && <span>{t("inbox.signalPriorContactBoth")}</span>}
-              {hasSignals && previousContact.byOrder && !previousContact.byAddress && <span>{t("inbox.signalPriorContactOrder")}</span>}
+              {hasSignals && previousContact.byOrder && <span>{t("inbox.signalPriorContactOrder")}</span>}
               {hasSignals && previousContact.byAddress && !previousContact.byOrder && <span>{t("inbox.signalPriorContactAddress")}</span>}
+              {hasSignals && previousContact.recentReply && <span>{t("inbox.signalRepliedElsewhere")}</span>}
               {ambiguousOrderCount > 0 && (
                 <span>{t("inbox.signalAmbiguousOrder", { count: ambiguousOrderCount })}</span>
               )}
@@ -2401,12 +2432,11 @@ function ThreadDetailPanel({
               onMouseEnter={() => setShowSignals(true)}
               onMouseLeave={() => setShowSignals(false)}
             >
-              <SignalPill />
+              <SignalPill tone={previousContact.byOrder ? "high" : "low"} />
               <PortalTooltip open={showSignals} anchor={signalAnchorRef.current}>
-                {hasSignals && previousContact.recentReply && <span>{t("inbox.signalRepliedElsewhere")}</span>}
-                {hasSignals && previousContact.byAddress && previousContact.byOrder && <span>{t("inbox.signalPriorContactBoth")}</span>}
-                {hasSignals && previousContact.byOrder && !previousContact.byAddress && <span>{t("inbox.signalPriorContactOrder")}</span>}
+                {hasSignals && previousContact.byOrder && <span>{t("inbox.signalPriorContactOrder")}</span>}
                 {hasSignals && previousContact.byAddress && !previousContact.byOrder && <span>{t("inbox.signalPriorContactAddress")}</span>}
+                {hasSignals && previousContact.recentReply && <span>{t("inbox.signalRepliedElsewhere")}</span>}
                 {ambiguousOrderCount > 0 && (
                   <span>{t("inbox.signalAmbiguousOrder", { count: ambiguousOrderCount })}</span>
                 )}

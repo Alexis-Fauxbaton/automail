@@ -13,6 +13,53 @@ const SHARED_SYSTEM_ADDRESSES = new Set([
   "no-reply@shopify.com",
 ]);
 
+/**
+ * When an address has been seen on this many *other* threads with a prior
+ * outgoing reply, the `byAddress` signal loses informational value — the
+ * merchant already knows this customer well, and surfacing the badge on
+ * every new thread becomes visual noise. We keep `byOrder` (it's per-order,
+ * not per-relationship) and let consumers see the history elsewhere.
+ *
+ * Threshold tuned for public-domain senders (gmail/outlook/yahoo/…) where a
+ * single recurring customer naturally racks up many threads. Private-domain
+ * addresses don't get this treatment because each one is meaningful.
+ */
+const NOISY_BY_ADDRESS_THRESHOLD = 5;
+
+const PUBLIC_EMAIL_DOMAINS = new Set([
+  "gmail.com",
+  "googlemail.com",
+  "hotmail.com",
+  "hotmail.fr",
+  "outlook.com",
+  "outlook.fr",
+  "live.com",
+  "live.fr",
+  "yahoo.com",
+  "yahoo.fr",
+  "icloud.com",
+  "me.com",
+  "mac.com",
+  "aol.com",
+  "proton.me",
+  "protonmail.com",
+  "gmx.com",
+  "gmx.fr",
+  "mail.ru",
+  "yandex.com",
+  "yandex.ru",
+  "free.fr",
+  "orange.fr",
+  "laposte.net",
+  "sfr.fr",
+  "wanadoo.fr",
+]);
+
+function isPublicDomain(addr: string): boolean {
+  const domain = addr.split("@")[1]?.toLowerCase();
+  return !!domain && PUBLIC_EMAIL_DOMAINS.has(domain);
+}
+
 export async function computePriorContact(
   shop: string,
   canonicalIds: string[],
@@ -134,9 +181,22 @@ export async function computePriorContact(
     let matchedAddress: string | null = null;
     const byAddress = addrs.some((addr) => {
       const ids = addressRepliedIn.get(addr);
-      const hit = ids ? [...ids].some(hadEarlierReply) : false;
-      if (hit && !matchedAddress) matchedAddress = addr;
-      return hit;
+      if (!ids) return false;
+      const earlierMatches = [...ids].filter(hadEarlierReply);
+      if (earlierMatches.length === 0) return false;
+      // Noise gate: if this address is a public-domain mailbox and we've
+      // already replied on too many prior threads, the badge is no longer
+      // actionable info — suppress it. Private-domain addresses keep the
+      // signal because each one is more likely to represent a single
+      // relationship worth flagging.
+      if (
+        isPublicDomain(addr) &&
+        earlierMatches.length >= NOISY_BY_ADDRESS_THRESHOLD
+      ) {
+        return false;
+      }
+      if (!matchedAddress) matchedAddress = addr;
+      return true;
     });
     const byOrder = !!state?.resolvedOrderNumber && (() => {
       const ids = orderRepliedIn.get(state.resolvedOrderNumber!);
