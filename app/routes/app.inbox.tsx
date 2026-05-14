@@ -2176,10 +2176,10 @@ function DraftBlock({ email, threadSenderEmail }: {
                     }
                   }}
                   placeholder={t("inbox.generateInputPlaceholder")}
-                  rows={2}
+                  rows={3}
                   style={{
                     width: "100%",
-                    minHeight: "44px",
+                    height: "60px",
                     padding: "8px",
                     border: "1px solid var(--p-color-border)",
                     borderRadius: "6px",
@@ -2187,16 +2187,18 @@ function DraftBlock({ email, threadSenderEmail }: {
                     fontSize: "13px",
                     background: "var(--p-color-bg-surface)",
                     color: "var(--p-color-text)",
-                    resize: "vertical",
+                    resize: "none",
                     boxSizing: "border-box",
                   }}
                 />
               </div>
-              <s-button type="submit" variant="secondary" loading={submitting} disabled={submitting}>
-                {submitting
-                  ? t(wantsRefine ? "inbox.refiningButton" : "inbox.regeneratingButton")
-                  : t(wantsRefine ? "inbox.refineButton" : "inbox.regenerateButton")}
-              </s-button>
+              <div style={{ minWidth: 120, display: "flex", justifyContent: "flex-end" }}>
+                <s-button type="submit" variant="secondary" loading={submitting} disabled={submitting}>
+                  {submitting
+                    ? t(wantsRefine ? "inbox.refiningButton" : "inbox.regeneratingButton")
+                    : t(wantsRefine ? "inbox.refineButton" : "inbox.regenerateButton")}
+                </s-button>
+              </div>
             </s-stack>
           </generateFetcher.Form>
         )}
