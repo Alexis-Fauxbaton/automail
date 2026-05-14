@@ -52,6 +52,32 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   try {
+    // Idempotence: Shopify retries webhooks until it gets a 2xx. Writing a
+    // fresh export file on every retry would accumulate duplicates and
+    // pollute the operator's fulfilment workflow. Skip if we already wrote
+    // one for this customer in the last 5 minutes.
+    const baseDirCheck = path.join(process.cwd(), "data-requests", shop, customerEmailHash);
+    try {
+      const entries = fs.readdirSync(baseDirCheck);
+      const fiveMinAgo = Date.now() - 5 * 60_000;
+      const hasRecent = entries.some((name) => {
+        try {
+          const stat = fs.statSync(path.join(baseDirCheck, name));
+          return stat.mtimeMs >= fiveMinAgo;
+        } catch {
+          return false;
+        }
+      });
+      if (hasRecent) {
+        console.log(
+          `[webhook] customers/data_request: recent export already exists, skipping (shop=${shop} customerHash=${customerEmailHash})`,
+        );
+        return new Response();
+      }
+    } catch {
+      // Directory doesn't exist yet — first export for this customer, proceed.
+    }
+
     const incomingEmails = await db.incomingEmail.findMany({
       where: {
         shop,

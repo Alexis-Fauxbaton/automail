@@ -25,9 +25,18 @@ import { runManualBackfill, runOnboardingBackfill } from "./backfill";
 import { recomputeAllOpenThreads, recomputeAllThreadsForShop } from "../support/thread-state";
 import { refreshStaleAnalysesForShop } from "../support/refresh-stale-analyses";
 import { pruneOldRateLimitBuckets } from "../rate-limit";
+import { withTimeout } from "../util/with-timeout";
+import {
+  autoSyncJobsTotal,
+  autoSyncJobDurationSeconds,
+  autoSyncInFlight,
+  autoSyncLeader,
+  startTimer,
+} from "../metrics/definitions";
 import {
   claimNextJob,
   enqueueJob,
+  heartbeatJob,
   markJobDone,
   markJobFailed,
   reclaimZombieJobs,
@@ -54,6 +63,33 @@ let _intervalHandle: ReturnType<typeof setInterval> | null = null;
 let inFlight = 0;
 let shuttingDown = false;
 const runningShops = new Set<string>();
+let isLeader = false;
+
+// Postgres advisory-lock key used for cross-process leader election. Any
+// stable 64-bit integer is fine; we pick a fixed constant so every replica
+// races for the same lock. Only the worker that holds the lock schedules
+// new work; followers idle until promoted (e.g. when the leader exits).
+const AUTOSYNC_LOCK_KEY = 7423901835n; // arbitrary, project-specific
+
+async function tryAcquireLeaderLock(): Promise<boolean> {
+  try {
+    const rows = await prisma.$queryRaw<Array<{ ok: boolean }>>`
+      SELECT pg_try_advisory_lock(${AUTOSYNC_LOCK_KEY}) AS ok
+    `;
+    return rows[0]?.ok === true;
+  } catch (err) {
+    console.error("[auto-sync] advisory lock acquire failed:", err);
+    return false;
+  }
+}
+
+async function releaseLeaderLock(): Promise<void> {
+  try {
+    await prisma.$queryRaw`SELECT pg_advisory_unlock(${AUTOSYNC_LOCK_KEY})`;
+  } catch (err) {
+    console.error("[auto-sync] advisory unlock failed:", err);
+  }
+}
 
 /**
  * Start the background auto-sync loop. Idempotent — safe to call
@@ -82,6 +118,28 @@ async function tick(): Promise<void> {
   // Stop scheduling new work once shutdown has been requested. Jobs already
   // in flight keep running until they finish or the process exits.
   if (shuttingDown) return;
+  // Leader election via Postgres advisory lock. With multiple workers
+  // (cluster mode, Render with N instances) only one schedules work; the
+  // others sit idle until they win the lock on the next tick (e.g. after
+  // the leader shuts down or restarts). This keeps the 17track breaker,
+  // boot-cleanup, and entitlement-check storms single-instance even when
+  // we scale horizontally.
+  // Honoured-by-env: set AUTOSYNC_LEADER_LOCK=off to skip and have every
+  // worker schedule (only sensible if the deployment is guaranteed single
+  // process and the dev wants to bypass the round-trip).
+  if (process.env.AUTOSYNC_LEADER_LOCK !== "off") {
+    if (!isLeader) {
+      isLeader = await tryAcquireLeaderLock();
+      if (!isLeader) {
+        autoSyncLeader.set(0);
+        return; // follower: try again next tick
+      }
+      autoSyncLeader.set(1);
+      console.log("[auto-sync] elected leader for this instance");
+    }
+  } else {
+    autoSyncLeader.set(1);
+  }
   // 1. Reset jobs whose workers died without completing (OOM, restart, timeout).
   await reclaimZombieJobs(ZOMBIE_TIMEOUT_MS).catch((err) =>
     console.error("[auto-sync] zombie reclaim failed:", err),
@@ -154,20 +212,8 @@ export async function enqueueDuePeriodicSyncs(): Promise<void> {
     const due =
       !c.lastSyncAt || now.getTime() - c.lastSyncAt.getTime() >= intervalMs;
     if (!due) continue;
-    // Entitlement gate: skip shops whose billing state suspends sync.
-    try {
-      const { admin } = await unauthenticated.admin(c.shop);
-      const ent = await resolveEntitlements({ shop: c.shop, admin });
-      if (ent.isSyncSuspended) {
-        console.log(`[auto-sync] skipping ${c.shop} — sync suspended (state=${ent.state})`);
-        continue;
-      }
-    } catch (err) {
-      console.error(`[auto-sync] entitlement lookup failed for ${c.shop}:`, err);
-      // Fail-open: if entitlements are unreachable, don't block sync.
-    }
-    // First-run onboarding is still done inline inside `runSyncForShop`
-    // when it sees the connection flag — no separate job type needed.
+    // Entitlement check is deferred to runJob so a slow Shopify response
+    // on one shop never serialises the scheduling loop for other shops.
     await enqueueJob(c.shop, "sync").catch((err) =>
       console.error(`[auto-sync] enqueue periodic for ${c.shop} failed:`, err),
     );
@@ -194,6 +240,7 @@ async function drainJobQueue(): Promise<void> {
     // over-claiming slots or the same shop within the same tick.
     inFlight++;
     runningShops.add(job.shop);
+    autoSyncInFlight.set(inFlight);
     // Fire-and-forget: each slot runs in parallel. Bookkeeping happens
     // inside runJob's finally block.
     void runJob(job);
@@ -234,7 +281,42 @@ async function runJob(job: {
 }): Promise<void> {
   // bookkeeping moved to drainJobQueue
   const startedAt = Date.now();
+  const stopTimer = startTimer();
+  let finalStatus: "ok" | "error" | "suspended" = "ok";
+
+  // Heartbeat the row every 2 min so a legitimate long-running job (heavy
+  // backfill on a big shop) isn't reclaimed as a zombie by a peer worker.
+  // Cleared in the finally below.
+  const heartbeat = setInterval(() => {
+    heartbeatJob(job.id).catch(() => { /* best-effort */ });
+  }, 2 * 60_000);
+
   try {
+    // Entitlement gate: moved here from the scheduler so one shop's slow
+    // Shopify response can't serialise the scheduling loop.
+    // Fail-open on errors (e.g. transient Shopify outage) so paying shops
+    // aren't blocked from syncing by a billing-API blip.
+    try {
+      const { admin } = await withTimeout(
+        unauthenticated.admin(job.shop),
+        10_000,
+        `unauthenticated.admin(${job.shop})`,
+      );
+      const ent = await withTimeout(
+        resolveEntitlements({ shop: job.shop, admin }),
+        10_000,
+        `resolveEntitlements(${job.shop})`,
+      );
+      if (ent.isSyncSuspended) {
+        console.log(`[auto-sync] skipping ${job.shop} — sync suspended (state=${ent.state})`);
+        finalStatus = "suspended";
+        await markJobDone(job.id);
+        return;
+      }
+    } catch (err) {
+      console.error(`[auto-sync] entitlement lookup failed for ${job.shop} (fail-open):`, err);
+    }
+
     switch (job.kind) {
       case "sync":
       case "resync": {
@@ -302,10 +384,18 @@ async function runJob(job: {
       `[auto-sync] shop=${job.shop} job=${job.id} kind=${job.kind} failed after ${Date.now() - startedAt}ms:`,
       err,
     );
+    finalStatus = "error";
     await markJobFailed(job.id, err, job.attempts).catch(() => {});
   } finally {
+    clearInterval(heartbeat);
     inFlight = Math.max(0, inFlight - 1);
     runningShops.delete(job.shop);
+    autoSyncInFlight.set(inFlight);
+    autoSyncJobsTotal.inc({ shop: job.shop, kind: job.kind, status: finalStatus });
+    autoSyncJobDurationSeconds.observe(
+      { kind: job.kind, status: finalStatus },
+      stopTimer(),
+    );
   }
 }
 
@@ -323,7 +413,11 @@ async function runSyncForShop(
   // Error so markJobFailed captures a readable message.
   let admin: Awaited<ReturnType<typeof unauthenticated.admin>>["admin"];
   try {
-    ({ admin } = await unauthenticated.admin(shop));
+    ({ admin } = await withTimeout(
+      unauthenticated.admin(shop),
+      10_000,
+      `unauthenticated.admin(${shop})`,
+    ));
   } catch (err) {
     if (err instanceof Response) {
       throw new Error(`Shopify auth failed for shop ${shop}: HTTP ${err.status} ${err.statusText || err.url}`);
@@ -372,6 +466,10 @@ if (import.meta.hot) {
       clearInterval(_intervalHandle);
       _intervalHandle = null;
     }
+    if (isLeader) {
+      releaseLeaderLock().catch(() => { /* best-effort */ });
+      isLeader = false;
+    }
     started = false;
     shuttingDown = false;
   });
@@ -402,6 +500,10 @@ export async function stopAutoSyncLoop(timeoutMs = 25_000): Promise<number> {
     );
   } else {
     console.log("[auto-sync] graceful shutdown complete");
+  }
+  if (isLeader) {
+    await releaseLeaderLock();
+    isLeader = false;
   }
   return inFlight;
 }

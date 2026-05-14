@@ -4,6 +4,8 @@ import fs from "node:fs/promises";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { storage } from "../lib/attachments/storage";
+import { invalidateCache as invalidateSubscriptionCache } from "../lib/billing/subscription";
+import { invalidateCustomerEmailsCache } from "../lib/gmail/customers";
 
 /**
  * GDPR: shop/redact
@@ -80,6 +82,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   // GDPR: full teardown. ShopFlag holds firstInstallDate, onboarding state,
   // and the isInternal bypass — none of which we may keep after redact.
   await db.shopFlag.deleteMany({ where: { shop } });
+
+  invalidateSubscriptionCache(shop);
+  invalidateCustomerEmailsCache(shop);
 
   return new Response();
 };

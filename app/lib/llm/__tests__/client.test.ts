@@ -1,5 +1,16 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { computeCostUsd, getOpenAIClient } from "../client";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+
+// Mock prisma at the top level so the hoisting transformer doesn't warn.
+// trackedChatCompletion fires `logCall` writes through prisma — those must
+// be no-ops in unit tests.
+vi.mock("../../../db.server", () => ({
+  default: {
+    llmCallLog: { create: vi.fn(async () => undefined) },
+    incomingEmail: { update: vi.fn(async () => undefined) },
+  },
+}));
+
+import { computeCostUsd, getOpenAIClient, trackedChatCompletion } from "../client";
 
 describe("computeCostUsd", () => {
   it("uses exact pricing for known models", () => {
@@ -60,5 +71,133 @@ describe("getOpenAIClient", () => {
     process.env.OPENAI_API_KEY = "sk-test-1234567890";
     const client = getOpenAIClient();
     expect(client).not.toBeNull();
+  });
+});
+
+describe("trackedChatCompletion 429 handling", () => {
+  function makeFakeClient(impl: () => Promise<unknown>) {
+    return {
+      chat: {
+        completions: {
+          create: vi.fn(impl),
+        },
+      },
+    } as unknown as Parameters<typeof trackedChatCompletion>[0];
+  }
+
+  it("retries once on 429 and succeeds on the second attempt", async () => {
+    let calls = 0;
+    const ok = {
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      choices: [{ message: { role: "assistant", content: "ok" } }],
+    };
+    const client = makeFakeClient(async () => {
+      calls++;
+      if (calls === 1) {
+        const err = Object.assign(new Error("rate_limited"), {
+          status: 429,
+          headers: { "retry-after": "0" },
+        });
+        throw err;
+      }
+      return ok;
+    });
+
+    const res = await trackedChatCompletion(
+      client,
+      // Cast — we don't need the full param shape for this test path.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { model: "gpt-4o", messages: [] } as any,
+      { callSite: "classifier" },
+    );
+
+    expect(calls).toBe(2);
+    expect(res).toBe(ok);
+  });
+
+  it("does not retry on non-429 errors", async () => {
+    let calls = 0;
+    const client = makeFakeClient(async () => {
+      calls++;
+      throw Object.assign(new Error("server_error"), { status: 500 });
+    });
+
+    await expect(
+      trackedChatCompletion(
+        client,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { model: "gpt-4o", messages: [] } as any,
+        { callSite: "classifier" },
+      ),
+    ).rejects.toThrow(/server_error/);
+    expect(calls).toBe(1);
+  });
+
+  it("gives up after MAX_ATTEMPTS even on persistent 429", async () => {
+    let calls = 0;
+    const client = makeFakeClient(async () => {
+      calls++;
+      throw Object.assign(new Error("rate_limited"), {
+        status: 429,
+        headers: { "retry-after": "0" },
+      });
+    });
+
+    await expect(
+      trackedChatCompletion(
+        client,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { model: "gpt-4o", messages: [] } as any,
+        { callSite: "classifier" },
+      ),
+    ).rejects.toThrow(/rate_limited/);
+    // MAX_ATTEMPTS in client.ts is 2 — one initial + one retry.
+    expect(calls).toBe(2);
+  });
+});
+
+describe("trackedChatCompletion under concurrency", () => {
+  function makeFakeClient(impl: () => Promise<unknown>) {
+    return {
+      chat: { completions: { create: vi.fn(impl) } },
+    } as unknown as Parameters<typeof trackedChatCompletion>[0];
+  }
+
+  it("does not exceed OPENAI_MAX_CONCURRENT in flight", async () => {
+    // With OPENAI_MAX_CONCURRENT default = 20, firing 50 concurrent calls
+    // should peak at exactly 20 in flight. Each call takes 10ms so the
+    // semaphore queue genuinely backs up.
+    let inFlight = 0;
+    let peak = 0;
+    const client = makeFakeClient(async () => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 10));
+      inFlight--;
+      return {
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        choices: [{ message: { role: "assistant", content: "ok" } }],
+      };
+    });
+
+    await Promise.all(
+      Array.from({ length: 50 }, () =>
+        trackedChatCompletion(
+          client,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          { model: "gpt-4o", messages: [] } as any,
+          { callSite: "classifier", shop: "concurrency-test" },
+        ),
+      ),
+    );
+
+    // Default semaphore limit is 20 unless OPENAI_MAX_CONCURRENT is set
+    // in the test env. Be tolerant either way and just assert "no leak".
+    const cap = Math.max(
+      1,
+      Number(process.env.OPENAI_MAX_CONCURRENT ?? "20"),
+    );
+    expect(peak).toBeLessThanOrEqual(cap);
+    expect(inFlight).toBe(0);
   });
 });

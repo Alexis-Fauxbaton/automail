@@ -17,11 +17,25 @@ type CacheEntry = { emails: Set<string>; fetchedAt: number };
 const cache = new Map<string, CacheEntry>();
 
 function setCacheEntry(shop: string, value: CacheEntry) {
+  // Best-effort sweep of expired entries before deciding to evict; this
+  // protects an idle-but-cached shop from being kicked out by a churn of
+  // ephemeral lookups when the cache is near MAX_CACHE_SIZE.
+  if (cache.size >= MAX_CACHE_SIZE) {
+    const now = Date.now();
+    for (const [k, v] of cache) {
+      if (now - v.fetchedAt >= CACHE_TTL_MS) cache.delete(k);
+    }
+  }
   if (cache.size >= MAX_CACHE_SIZE) {
     const firstKey = cache.keys().next().value;
     if (firstKey) cache.delete(firstKey);
   }
   cache.set(shop, value);
+}
+
+/** Drop the cache entry for one shop. Call from uninstall / shop-redact. */
+export function invalidateCustomerEmailsCache(shop: string): void {
+  cache.delete(shop);
 }
 
 export async function fetchCustomerEmails(

@@ -1,52 +1,48 @@
 /**
  * Process-wide circuit breaker for the 17track API.
  *
- * Why module-global, not per-shop: the API key + free-tier quota are global,
- * so a burst of failures from one shop affects the *next* shop too. Opening
- * the breaker once for the whole process stops the bleed for everyone.
+ * Implemented on top of the generic `lib/util/circuit-breaker` helper so
+ * we share the open/close mechanics with the OpenAI breaker and benefit
+ * from a single set of tests. The wrapper preserves the historical
+ * function-style API (`isOpen` / `recordFailure` / `recordSuccess`) used
+ * throughout the tracking code path.
  *
- * In-memory only — acceptable because the failure window (10 min) is short,
- * and the worst case after a restart is one extra batch of failed calls.
+ * Why a separate file rather than inline `createBreaker(...)`: keeps the
+ * tunables (threshold, window, cooldown) and the breaker name in one
+ * place, and gives metrics a stable name to label by.
  */
+import { createBreaker } from "../../util/circuit-breaker";
+import { breakerState, breakerTransitionsTotal } from "../../metrics/definitions";
 
-const FAILURE_THRESHOLD = 5;
-const FAILURE_WINDOW_MS = 10 * 60_000;
-const COOLDOWN_MS = 15 * 60_000;
-
-let failureTimestamps: number[] = [];
-let openedAt: number | null = null;
+const breaker = createBreaker({
+  name: "17track",
+  failureThreshold: 5,
+  failureWindowMs: 10 * 60_000,
+  cooldownMs: 15 * 60_000,
+});
+breakerState.set({ name: "17track" }, 0);
+(breaker as unknown as { __setListener: (fn: (next: "open" | "closed") => void) => void })
+  .__setListener((next) => {
+    breakerState.set({ name: "17track" }, next === "open" ? 1 : 0);
+    breakerTransitionsTotal.inc({ name: "17track", state: next });
+  });
 
 export function recordSuccess(): void {
-  failureTimestamps = [];
-  openedAt = null;
+  breaker.recordSuccess();
 }
 
 export function recordFailure(): void {
-  const now = Date.now();
-  failureTimestamps = failureTimestamps.filter(
-    (t) => now - t < FAILURE_WINDOW_MS,
-  );
-  failureTimestamps.push(now);
-  if (failureTimestamps.length >= FAILURE_THRESHOLD && openedAt === null) {
-    openedAt = now;
-    console.warn(
-      `[17track-breaker] OPEN — ${FAILURE_THRESHOLD} failures in ${FAILURE_WINDOW_MS / 60_000}min, suspending calls for ${COOLDOWN_MS / 60_000}min`,
-    );
-  }
+  breaker.recordFailure();
 }
 
 export function isOpen(): boolean {
-  if (openedAt === null) return false;
-  if (Date.now() - openedAt > COOLDOWN_MS) {
-    openedAt = null;
-    failureTimestamps = [];
-    return false;
-  }
-  return true;
+  return breaker.isOpen();
 }
 
 /** @internal — tests only */
 export function __resetForTest(): void {
-  failureTimestamps = [];
-  openedAt = null;
+  breaker.__resetForTest();
 }
+
+/** @internal — for the metrics module to subscribe to transitions. */
+export const __breaker = breaker;

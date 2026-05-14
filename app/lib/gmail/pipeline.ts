@@ -895,35 +895,45 @@ async function pickThreadsForClassification(
   );
   if (canonicalIds.length === 0) return [];
 
-  const results = await Promise.all(
-    canonicalIds.map(async (canonicalThreadId) => {
-      const latest = await prisma.incomingEmail.findFirst({
-        where: {
-          shop,
-          canonicalThreadId,
-          processingStatus: { notIn: ["outgoing"] },
-          tier1Result: "passed",
-        },
-        orderBy: { receivedAt: "desc" },
-      });
-      if (!latest) return null;
+  // Bound concurrency so a sync that touches hundreds of threads doesn't
+  // open hundreds of parallel Prisma queries and saturate the DB pool.
+  // With AUTOSYNC_CONCURRENCY=4 and 4 shops draining, an unbounded
+  // Promise.all here would peak at ~4 × canonicalIds.length connections.
+  const CONCURRENCY = 10;
+  const results: Array<string | null> = [];
+  for (let i = 0; i < canonicalIds.length; i += CONCURRENCY) {
+    const batch = canonicalIds.slice(i, i + CONCURRENCY);
+    const batchResults = await Promise.all(
+      batch.map(async (canonicalThreadId) => {
+        const latest = await prisma.incomingEmail.findFirst({
+          where: {
+            shop,
+            canonicalThreadId,
+            processingStatus: { notIn: ["outgoing"] },
+            tier1Result: "passed",
+          },
+          orderBy: { receivedAt: "desc" },
+        });
+        if (!latest) return null;
 
-      if (latest.processingStatus === "analyzed") return null;
+        if (latest.processingStatus === "analyzed") return null;
 
-      await prisma.incomingEmail.updateMany({
-        where: {
-          shop,
-          canonicalThreadId,
-          id: { not: latest.id },
-          processingStatus: { notIn: ["outgoing", "classified"] },
-          receivedAt: { lt: latest.receivedAt },
-        },
-        data: { processingStatus: "classified" },
-      });
+        await prisma.incomingEmail.updateMany({
+          where: {
+            shop,
+            canonicalThreadId,
+            id: { not: latest.id },
+            processingStatus: { notIn: ["outgoing", "classified"] },
+            receivedAt: { lt: latest.receivedAt },
+          },
+          data: { processingStatus: "classified" },
+        });
 
-      return latest.id;
-    }),
-  );
+        return latest.id;
+      }),
+    );
+    results.push(...batchResults);
+  }
 
   return results.filter((id): id is string => id !== null);
 }

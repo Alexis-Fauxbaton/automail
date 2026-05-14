@@ -2,6 +2,7 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { invalidateCache as invalidateSubscriptionCache } from "../lib/billing/subscription";
+import { invalidateCustomerEmailsCache } from "../lib/gmail/customers";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { shop, topic } = await authenticate.webhook(request);
@@ -32,9 +33,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }),
   ]);
 
-  // Drop the in-process subscription cache for this shop so a reinstall
-  // within the cache TTL doesn't see stale entitlements.
+  // Drop in-process caches for this shop so a reinstall within the cache
+  // TTL doesn't see stale entitlements or customer-emails state.
   invalidateSubscriptionCache(shop);
+  invalidateCustomerEmailsCache(shop);
 
   return new Response();
 };

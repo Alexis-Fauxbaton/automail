@@ -136,6 +136,24 @@ export async function claimNextJob(
   };
 }
 
+/**
+ * Bump a running job's `startedAt` so the zombie reclaimer treats it as
+ * still alive. Called periodically by the worker for legitimate long-running
+ * jobs (e.g. heavy onboarding backfills). If two workers race a heartbeat
+ * write, the later one wins — that's fine, both writes prove the job is alive.
+ *
+ * Uses Postgres NOW() rather than the application clock so the heartbeat
+ * is on the same time-base as claimNextJob's startedAt write — avoids
+ * spurious "went backwards" comparisons when app and DB clocks differ.
+ */
+export async function heartbeatJob(id: string): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "SyncJob"
+    SET "startedAt" = NOW()
+    WHERE id = ${id} AND status = 'running'
+  `;
+}
+
 export async function markJobDone(id: string): Promise<void> {
   await prisma.syncJob.update({
     where: { id },

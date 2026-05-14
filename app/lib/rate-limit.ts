@@ -79,12 +79,33 @@ export async function checkRateLimit({
   return { ok, remaining: Math.max(0, limit - count), resetMs };
 }
 
-/** Best-effort cleanup of buckets that haven't been touched in 24h. */
-export async function pruneOldRateLimitBuckets(): Promise<void> {
+/**
+ * Best-effort cleanup of buckets that haven't been touched in 24h.
+ *
+ * Bounded by `maxBatches × batchSize` rows per call so a backlog of stale
+ * rows can never hold a long delete lock and block live rate-limit writes
+ * (the table is queried on every authenticated action). Anything remaining
+ * is picked up on the next tick.
+ */
+export async function pruneOldRateLimitBuckets(opts: {
+  batchSize?: number;
+  maxBatches?: number;
+} = {}): Promise<void> {
+  const batchSize = opts.batchSize ?? 1000;
+  const maxBatches = opts.maxBatches ?? 5;
   const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  await prisma.rateLimitBucket.deleteMany({
-    where: { windowStart: { lt: cutoff } },
-  });
+  for (let i = 0; i < maxBatches; i++) {
+    const stale = await prisma.rateLimitBucket.findMany({
+      where: { windowStart: { lt: cutoff } },
+      take: batchSize,
+      select: { key: true, kind: true },
+    });
+    if (stale.length === 0) return;
+    await prisma.rateLimitBucket.deleteMany({
+      where: { OR: stale.map((s) => ({ key: s.key, kind: s.kind })) },
+    });
+    if (stale.length < batchSize) return;
+  }
 }
 
 /** Extract the requesting client's IP from common proxy headers. */

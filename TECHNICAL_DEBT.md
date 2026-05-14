@@ -1,7 +1,7 @@
 # Technical Debt
 
-Last updated: 2026-05-02
-Reviewed by: 6-agent automated audit (security, code-quality, architecture, database, performance, test-quality)
+Last updated: 2026-05-14
+Reviewed by: 6-agent automated audit (security, code-quality, architecture, database, performance, test-quality) + 2026-05-14 production-hardening audit (multi-tenant / 10-shops concurrency focus — see "Production hardening" section at end)
 
 ## Summary
 
@@ -602,3 +602,136 @@ Reviewed by: 6-agent automated audit (security, code-quality, architecture, data
 - [ ] TEST-H2 — Add `customers/data_request` webhook test
 - [ ] TEST-H3 — Add `IncomingEmail` assertion to `shop/redact` test
 - [ ] TEST-M6 — Fix crawler-failure test (non-empty `buildCrawlTasks`)
+
+---
+
+## Production hardening audit — 2026-05-14
+
+Scope: prepare for public-distribution launch with ~10 shops syncing in
+parallel. Focused on multi-tenant isolation, concurrency, rate limits,
+error isolation between shops, webhook idempotence.
+
+### Fixed in this pass (code)
+
+- [x] **C2** — Move entitlement check from scheduling loop into per-job
+      (`auto-sync.ts`). One shop's slow Shopify response no longer
+      serialises scheduling for the others.
+- [x] **C3** — Subscription cache TTL dropped from 5 min to 60 s
+      (`billing/subscription.ts`). Caps revenue-integrity window after a
+      downgrade on a peer worker.
+- [x] **C4** — Postgres advisory-lock leader election for the auto-sync
+      loop (`auto-sync.ts`). Disable via `AUTOSYNC_LEADER_LOCK=off`.
+      Released on graceful shutdown and HMR dispose.
+- [x] **H1** — Global OpenAI semaphore (`OPENAI_MAX_CONCURRENT`, default
+      20) + 429 retry-after backoff in `trackedChatCompletion`
+      (`llm/client.ts`). Stops cascading failures across shops under load.
+- [x] **H2** — `gmail/customers` cache now sweeps expired entries before
+      LRU eviction (no premature kick-out under churn) + exported
+      `invalidateCustomerEmailsCache` wired into uninstall and shop/redact
+      webhooks.
+- [x] **H3** — Job-queue heartbeat (`heartbeatJob`) called every 2 min by
+      the worker. Legitimate long jobs are no longer reclaimed as zombies
+      by a peer worker.
+- [x] **H4** — `customers/data_request` deduplicates exports within a
+      5-min window so Shopify retries don't accumulate JSON files.
+- [x] **H5** — `unauthenticated.admin(shop)` calls wrapped with
+      `withTimeout(10s)` (`util/with-timeout.ts`). A hung Shopify auth
+      lookup can no longer stall a worker indefinitely.
+- [x] **M2** — `pruneOldRateLimitBuckets` bounded to 1000 rows × 5 batches
+      per call so a backlog never holds a long DELETE lock.
+- [x] **M3** — `pickThreadsForClassification` concurrency capped at 10
+      so a sync touching hundreds of threads can't saturate the DB pool.
+- [x] **O3** — `/healthz` route added (DB `SELECT 1`, JSON response, no
+      auth). For platform health checks and uptime monitors.
+
+Note: this audit also confirms several previously-listed items are
+already implemented in the codebase (QA-H1, PERF-H4) — leaving them
+in the legacy list for traceability.
+
+### Must-do before launch (NOT code-fixable here)
+
+- [ ] **C1** — Set `DATABASE_URL?connection_limit=20&pool_timeout=20` in
+      the Render production environment. Default Prisma pool (1-CPU dyno
+      = 3 connections) is too small for `AUTOSYNC_CONCURRENCY=4` + web
+      requests + webhooks. Keep `AUTOSYNC_CONCURRENCY ≤ connection_limit / 4`.
+      If a pooler becomes necessary, use pgBouncer in **session mode**
+      (transaction mode breaks `FOR UPDATE SKIP LOCKED` in `claimNextJob`).
+- [ ] **C4-followup** — On Render multi-instance deployments, verify that
+      exactly one instance logs `[auto-sync] elected leader for this instance`.
+      The `boot-cleanup` `WORKER_ID === "0"` gate also needs an explicit
+      env var on Render or a switch to the same advisory-lock pattern
+      (different lock key).
+- [ ] **Single-process boot-cleanup / billing-backfill** — `runBootCleanup`
+      and `backfillBillingShopFlags` run once per worker today. On a
+      multi-instance deploy they'll run N times in parallel. Either
+      consolidate behind the leader lock (cheap) or move to a one-shot
+      migration script.
+
+### Observability pass — 2026-05-14 (B.3 of the scaling plan)
+
+Fixed in this pass:
+
+- [x] **O4** — Generic circuit-breaker helper (`lib/util/circuit-breaker.ts`).
+      17track breaker refactored to use it. New OpenAI breaker applied
+      inside `trackedChatCompletion` (opens after 8 non-429 failures in
+      any 5-min window, cools down for 2 min). 429s are NOT counted as
+      breaker failures because they signal upstream-is-healthy
+      back-pressure already handled by the semaphore + retry combo.
+- [x] **O2 (partial)** — In-process metrics registry
+      (`lib/metrics/registry.ts`) with counters, gauges and histograms.
+      Prometheus text exposition + JSON snapshot supported. Instrumented:
+      `auto_sync_jobs_total`, `auto_sync_job_duration_seconds`,
+      `auto_sync_in_flight`, `auto_sync_leader`, `llm_calls_total`,
+      `llm_tokens_total`, `llm_cost_usd_total`, `llm_duration_seconds`,
+      `llm_semaphore_in_flight`, `llm_semaphore_queued`, `breaker_state`,
+      `breaker_transitions_total`. SQL-backed cross-worker history in
+      `lib/metrics/stats.ts` (jobs per shop, LLM cost per shop, pipeline
+      health, DB pool).
+- [x] **Dashboard** — `/app/metrics` page, gated by `ShopFlag.isInternal`
+      (same pattern as `api.repair-zoho-images.tsx`). Renders the
+      in-process metric snapshot side-by-side with the SQL stats. No
+      auto-refresh — browser reload is the refresh model for the
+      operator.
+- [x] **/metrics endpoint** — Prometheus-format scrape, gated by a
+      constant-time comparison against `METRICS_TOKEN`. Returns 404 when
+      the env var is unset so the route is invisible in default
+      deployments. Accepts `Authorization: Bearer <token>` or `?token=…`.
+- [x] **Tests** — added concurrency / contention tests
+      (`util/__tests__/concurrency.test.ts`), breaker cycle tests,
+      `trackedChatCompletion` under load (50 concurrent → peak ≤ cap),
+      heartbeat-vs-reclaim integration test (alive job survives, silent
+      job is reclaimed), `/metrics` auth/format tests.
+
+Deferred (intentional):
+
+- [ ] **O1** — Replace remaining `console.*` calls with `createLogger`.
+      Mechanical search-and-replace; defer until a logging backend
+      actually needs structured fields (Datadog / Logflare). Today the
+      Render log search is the consumer and plain console works.
+- [ ] **Shopify Admin breaker** — Not added because failure cadence is
+      per-shop (one merchant's expired token shouldn't trip the breaker
+      for others). Revisit if a global Shopify outage actually happens.
+
+### Deferred follow-ups
+
+- [ ] **H6** — Per-thread advisory lock for user actions vs auto-sync.
+      Today a user clicking "Refine" while auto-sync runs Tier 3 on the
+      same thread can race on `analysisResult`/`replyDraft`; the second
+      write wins. Add `pg_advisory_xact_lock(hashtext(canonicalThreadId))`
+      inside `handleReanalyze` / `handleRedraft` / `handleRefine` and the
+      orchestrator's Tier 3 phase, or a row-level `SELECT … FOR UPDATE`.
+- [ ] **M1** — Move `customers/redact` into a background job. The
+      `findMany` with six `contains` filters on `bodyText` etc. is OK
+      under ~50k emails/shop but will blow Shopify's 5 s webhook budget
+      past that. Enqueue `SyncJob(kind="redact-customer", params={email})`,
+      ack immediately, process in the worker.
+- [ ] **O1 / O2** — Observability:
+      - Replace remaining `console.*` calls with structured `createLogger`
+        (~80 % of files still use bare console).
+      - Metrics: `auto_sync.duration_ms{shop,kind}`, `auto_sync.in_flight`,
+        `job.failed_total{shop,kind}`, `llm.calls_total{shop,call_site}`,
+        `llm.cost_usd_total`, `breaker.open_total{name}`,
+        `openai.queue_depth`, `openai.in_flight`.
+- [ ] **O4** — Process-global circuit breakers for OpenAI and Shopify
+      Admin (mirror the 17track one). Add when metrics show repeat
+      outages; over-engineering today.
