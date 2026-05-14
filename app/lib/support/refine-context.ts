@@ -1,6 +1,19 @@
-import type { FulfillmentTrackingFacts, OrderFacts, SupportAnalysis } from "./types";
+import type { FulfillmentTrackingFacts, OrderFacts, SupportAnalysis, Warning } from "./types";
 
 const MAX_LINE_ITEMS = 5;
+
+// Warning codes worth surfacing to the Refine LLM. Cosmetic/infra codes
+// (llm_fallback, crawl_*) are excluded — they don't change what the
+// merchant should write to the customer.
+const REFINE_VISIBLE_WARNINGS = new Set([
+  "ambiguous_match",
+  "no_order_match",
+  "no_identifiers",
+  "no_fulfillment",
+  "inferred_carrier",
+  "shopify_api_error",
+  "tracking_lookup_error",
+]);
 
 function renderOrderSection(order: OrderFacts): string {
   const lines: string[] = ["=== ORDER ==="];
@@ -61,6 +74,12 @@ function renderTrackingSection(t: FulfillmentTrackingFacts): string | null {
   return lines.join("\n");
 }
 
+function renderWarningsSection(warnings: Warning[]): string | null {
+  const visible = warnings.filter((w) => REFINE_VISIBLE_WARNINGS.has(w.code));
+  if (visible.length === 0) return null;
+  return ["=== WARNINGS ===", ...visible.map((w) => `- ${w.code}: ${w.message}`)].join("\n");
+}
+
 /**
  * Build a compact, English plain-text summary of the verified facts in
  * `analysis`. Fed into the Refine LLM call so it can rewrite the draft
@@ -85,6 +104,9 @@ export function buildRefineContext(analysis: SupportAnalysis): string | null {
     const block = renderTrackingSection(t);
     if (block) sections.push(block);
   }
+
+  const warningsBlock = renderWarningsSection(analysis.warnings);
+  if (warningsBlock) sections.push(warningsBlock);
 
   if (sections.length === 0) return null;
   return sections.join("\n\n");

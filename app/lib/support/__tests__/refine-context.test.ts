@@ -137,4 +137,39 @@ describe("buildRefineContext", () => {
     ];
     expect(buildRefineContext(a)).toBeNull();
   });
+
+  it("renders WARNINGS only for codes that affect what to say to the customer", () => {
+    const a = baseAnalysis();
+    a.order = {
+      id: "gid://1", name: "#1", createdAt: "2026-01-01T00:00:00Z",
+      displayFinancialStatus: null, displayFulfillmentStatus: null,
+      customerName: null, customerEmail: null, lineItems: [], fulfillments: [],
+    };
+    a.warnings = [
+      { code: "ambiguous_match", message: "2 orders match" },
+      { code: "no_order_match", message: "No order found" },
+      { code: "inferred_carrier", message: "Carrier guessed" },
+      { code: "llm_fallback", message: "LLM unavailable" },        // filtered
+      { code: "crawl_partial_failure", message: "Carrier site slow" }, // filtered
+    ];
+    const out = buildRefineContext(a) ?? "";
+    expect(out).toContain("=== WARNINGS ===");
+    expect(out).toContain("ambiguous_match");
+    expect(out).toContain("no_order_match");
+    expect(out).toContain("inferred_carrier");
+    expect(out).not.toContain("llm_fallback");
+    expect(out).not.toContain("crawl_partial_failure");
+  });
+
+  it("omits WARNINGS section when none pass the allowlist", () => {
+    const a = baseAnalysis();
+    a.order = {
+      id: "gid://1", name: "#1", createdAt: "2026-01-01T00:00:00Z",
+      displayFinancialStatus: null, displayFulfillmentStatus: null,
+      customerName: null, customerEmail: null, lineItems: [], fulfillments: [],
+    };
+    a.warnings = [{ code: "llm_fallback", message: "x" }];
+    const out = buildRefineContext(a) ?? "";
+    expect(out).not.toContain("=== WARNINGS ===");
+  });
 });
