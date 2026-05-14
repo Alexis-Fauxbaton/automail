@@ -72,4 +72,69 @@ describe("buildRefineContext", () => {
     expect(out).not.toContain("Item 6");
     expect(out).toContain("+ 3 more");
   });
+
+  it("renders a TRACKING section with carrier, status, last event and ETA", () => {
+    const a = baseAnalysis();
+    a.trackings = [
+      {
+        fulfillmentIndex: 0,
+        lineItems: [],
+        source: "seventeen_track",
+        carrier: "La Poste",
+        trackingNumber: "LP123456789FR",
+        trackingUrl: "https://laposte.fr/x",
+        status: "in_transit",
+        inferred: false,
+        lastEvent: "Out for delivery",
+        lastLocation: "Paris",
+        lastEventDate: "2026-05-13T08:00:00Z",
+        agentStatus: {
+          lastEvent: "Out for delivery",
+          lastLocation: "Paris",
+          estimatedDelivery: "2026-05-14",
+          delivered: false,
+        },
+        last17trackAttempt: "ok",
+        last17trackAttemptAt: "2026-05-13T08:01:00Z",
+      },
+    ];
+    const out = buildRefineContext(a) ?? "";
+    expect(out).toContain("=== TRACKING ===");
+    expect(out).toContain("LP123456789FR (La Poste)");
+    expect(out).toContain("Status: in_transit");
+    expect(out).toContain("Last event: 2026-05-13 — Out for delivery (Paris)");
+    expect(out).toContain("ETA: 2026-05-14");
+  });
+
+  it("emits one TRACKING block per fulfillment, separated by blank lines", () => {
+    const a = baseAnalysis();
+    a.trackings = [
+      {
+        fulfillmentIndex: 0, lineItems: [],
+        source: "shopify_url", trackingNumber: "AAA", carrier: null,
+        trackingUrl: null, status: null, inferred: false,
+      },
+      {
+        fulfillmentIndex: 1, lineItems: [],
+        source: "shopify_url", trackingNumber: "BBB", carrier: null,
+        trackingUrl: null, status: null, inferred: false,
+      },
+    ];
+    const out = buildRefineContext(a) ?? "";
+    expect(out.match(/=== TRACKING ===/g)).toHaveLength(2);
+    expect(out).toContain("AAA");
+    expect(out).toContain("BBB");
+  });
+
+  it("omits TRACKING section entirely when no useful tracking number", () => {
+    const a = baseAnalysis();
+    a.trackings = [
+      {
+        fulfillmentIndex: 0, lineItems: [],
+        source: "none", trackingNumber: null, carrier: null,
+        trackingUrl: null, status: null, inferred: false,
+      },
+    ];
+    expect(buildRefineContext(a)).toBeNull();
+  });
 });

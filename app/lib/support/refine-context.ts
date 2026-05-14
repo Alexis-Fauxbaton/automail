@@ -1,4 +1,4 @@
-import type { OrderFacts, SupportAnalysis } from "./types";
+import type { FulfillmentTrackingFacts, OrderFacts, SupportAnalysis } from "./types";
 
 const MAX_LINE_ITEMS = 5;
 
@@ -36,6 +36,31 @@ function renderOrderSection(order: OrderFacts): string {
   return lines.join("\n");
 }
 
+function renderTrackingSection(t: FulfillmentTrackingFacts): string | null {
+  if (!t.trackingNumber) return null;
+
+  const lines: string[] = ["=== TRACKING ==="];
+  const carrier = t.carrier ? ` (${t.carrier})` : "";
+  lines.push(`${t.trackingNumber}${carrier}`);
+
+  if (t.status) lines.push(`Status: ${t.status}`);
+
+  // Prefer agentStatus (richer) over the raw last* fields when present.
+  const lastEvent = t.agentStatus?.lastEvent ?? t.lastEvent ?? null;
+  const lastLocation = t.agentStatus?.lastLocation ?? t.lastLocation ?? null;
+  const lastDate = t.lastEventDate ?? null;
+  if (lastEvent) {
+    const dateStr = lastDate ? `${lastDate.slice(0, 10)} — ` : "";
+    const locStr = lastLocation ? ` (${lastLocation})` : "";
+    lines.push(`Last event: ${dateStr}${lastEvent}${locStr}`);
+  }
+
+  const eta = t.agentStatus?.estimatedDelivery;
+  if (eta) lines.push(`ETA: ${eta}`);
+
+  return lines.join("\n");
+}
+
 /**
  * Build a compact, English plain-text summary of the verified facts in
  * `analysis`. Fed into the Refine LLM call so it can rewrite the draft
@@ -54,6 +79,11 @@ export function buildRefineContext(analysis: SupportAnalysis): string | null {
 
   if (analysis.order) {
     sections.push(renderOrderSection(analysis.order));
+  }
+
+  for (const t of analysis.trackings) {
+    const block = renderTrackingSection(t);
+    if (block) sections.push(block);
   }
 
   if (sections.length === 0) return null;
