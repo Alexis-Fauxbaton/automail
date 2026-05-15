@@ -55,6 +55,26 @@ export const llmSemaphoreQueued = metrics.gauge(
   "Number of LLM callers currently queued behind the semaphore.",
 );
 
+// --- Outgoing-direction self-healing ---
+export const outgoingSelfHealTotal = metrics.counter(
+  "outgoing_self_heal_total",
+  "Rows whose processingStatus='outgoing' was reset because fromAddress isn't on the shop's outgoing allow-list (mailbox + aliases). Non-zero => a provider-side direction bug occurred for that shop; investigate before the misattribution silently corrupts classification.",
+);
+export const supportNatureUnknownRatio = metrics.gauge(
+  "support_nature_unknown_ratio",
+  "Per-shop ratio of threads with supportNature='unknown' over total threads (0-1). High values (>0.3) flag classification not running — typically due to misattributed outgoing direction.",
+);
+
+// --- 17track ---
+export const seventeenTrackInFlight = metrics.gauge(
+  "seventeen_track_in_flight",
+  "Number of 17track API calls currently in flight (held the semaphore).",
+);
+export const seventeenTrackQueued = metrics.gauge(
+  "seventeen_track_queued",
+  "Number of 17track callers currently queued behind the semaphore.",
+);
+
 // --- Circuit breakers ---
 export const breakerState = metrics.gauge(
   "breaker_state",

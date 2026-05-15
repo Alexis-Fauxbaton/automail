@@ -54,6 +54,14 @@ model MailConnection {
   shop           String   @id
   provider       String   @default("gmail") // "gmail" | "zoho"
   email          String   @default("")      // connected email address
+  // Lowercased addresses from which the merchant can send via this account
+  // (e.g. support@, contact@ aliases configured in Zoho/Gmail/Outlook).
+  // Populated at OAuth completion by querying the provider, refreshed at
+  // each token renewal. Used by outgoing-detection to mark merchant replies
+  // as outgoing without relying on a self-reinforcing pool of prior data.
+  // JSON-encoded String[] for cross-DB portability (Prisma's String[] is
+  // postgres-only on this version, and the column is small).
+  outgoingAliases String  @default("[]")
   accessToken    String   // encrypted
   refreshToken   String   // encrypted
   tokenExpiry    DateTime

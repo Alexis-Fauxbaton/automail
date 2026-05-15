@@ -11,6 +11,7 @@ import {
   hasGeneratedAnyDraft,
   hasCustomizedSupportSettings,
   getShopFlag,
+  markChecklistDismissed,
 } from "../lib/onboarding/repo";
 import { deriveChecklistState, isChecklistDismissed } from "../lib/onboarding/state";
 import { OnboardingChecklist } from "../components/onboarding/OnboardingChecklist";
@@ -73,12 +74,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   await requireOnboardingComplete(session.shop, request);
   const shop = session.shop;
   const onboardingFlag = await getShopFlag(shop);
+  const checklistState = deriveChecklistState({
+    hasDraft: await hasGeneratedAnyDraft(shop),
+    hasCustomizedSettings: await hasCustomizedSupportSettings(shop),
+  });
+  let checklistDismissed = isChecklistDismissed(onboardingFlag);
+  // Stickyness: once the checklist has been fully completed at least once,
+  // persist the dismissal so that destructive ops like "Re-sync all" — which
+  // wipe ReplyDraft rows and would otherwise un-tick "first draft" — can't
+  // resurrect it for users who have clearly moved past onboarding.
+  if (checklistState.allComplete && !checklistDismissed) {
+    await markChecklistDismissed(shop);
+    checklistDismissed = true;
+  }
   const onboardingChecklist = {
-    state: deriveChecklistState({
-      hasDraft: await hasGeneratedAnyDraft(shop),
-      hasCustomizedSettings: await hasCustomizedSupportSettings(shop),
-    }),
-    dismissed: isChecklistDismissed(onboardingFlag),
+    state: checklistState,
+    dismissed: checklistDismissed,
   };
   const connection = await getConnection(shop);
 
@@ -288,6 +299,12 @@ export function shouldRevalidate({
   if (formMethod && formMethod.toUpperCase() !== "GET") return true;
   if (actionResult) return true;
   if (currentUrl.pathname !== nextUrl.pathname) return defaultShouldRevalidate;
+  // Programmatic revalidations (useRevalidator polling for background sync)
+  // arrive with currentUrl === nextUrl. Allow those — otherwise the inbox
+  // never picks up emails ingested by auto-sync until a hard reload.
+  if (currentUrl.search === nextUrl.search) return defaultShouldRevalidate;
+  // Skip the (heavy) inbox loader when ONLY `?thread=` changed (opening/
+  // closing a thread is purely client-side state).
   const a = new URLSearchParams(currentUrl.search);
   const b = new URLSearchParams(nextUrl.search);
   a.delete("thread");

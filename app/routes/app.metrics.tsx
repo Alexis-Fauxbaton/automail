@@ -8,10 +8,12 @@ import {
   getLlmCostPerShop,
   getPipelineHealth,
   getDbPoolStats,
+  getClassificationHealthPerShop,
   type ShopJobStats,
   type ShopLlmCost,
   type StuckCounts,
   type DbPoolStats,
+  type ShopClassificationHealth,
 } from "../lib/metrics/stats";
 
 /**
@@ -49,7 +51,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     return { notAuthorized: true as const, shop };
   }
 
-  const [jobStats, llmCosts, pipelineHealth, dbPool] = await Promise.all([
+  const [jobStats, llmCosts, pipelineHealth, dbPool, classificationHealth] = await Promise.all([
     getJobStatsPerShop(24).catch(() => [] as ShopJobStats[]),
     getLlmCostPerShop(24).catch(() => [] as ShopLlmCost[]),
     getPipelineHealth().catch(
@@ -57,6 +59,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         ({ totalIngested: 0, totalError: 0, totalAnalyzed24h: 0 }) as StuckCounts,
     ),
     getDbPoolStats().catch(() => null as DbPoolStats | null),
+    getClassificationHealthPerShop().catch(() => [] as ShopClassificationHealth[]),
   ]);
 
   const snapshot = metrics.snapshot();
@@ -105,6 +108,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     llmCosts,
     pipelineHealth,
     dbPool,
+    classificationHealth,
+    selfHealTotal: sumCounter("outgoing_self_heal_total"),
     instance: {
       nodeVersion: process.version,
       uptimeSec: Math.round(process.uptime()),
@@ -137,6 +142,8 @@ const FALLBACK = {
   llmCosts: [] as ShopLlmCost[],
   pipelineHealth: { totalIngested: 0, totalError: 0, totalAnalyzed24h: 0 } as StuckCounts,
   dbPool: null as DbPoolStats | null,
+  classificationHealth: [] as ShopClassificationHealth[],
+  selfHealTotal: 0,
   instance: { nodeVersion: "?", uptimeSec: 0 },
 };
 
@@ -174,6 +181,11 @@ export default function MetricsPage() {
       ((raw as Record<string, unknown>)?.pipelineHealth as StuckCounts) ??
       FALLBACK.pipelineHealth,
     dbPool: ((raw as Record<string, unknown>)?.dbPool as DbPoolStats | null) ?? FALLBACK.dbPool,
+    classificationHealth:
+      ((raw as Record<string, unknown>)?.classificationHealth as ShopClassificationHealth[]) ??
+      FALLBACK.classificationHealth,
+    selfHealTotal:
+      ((raw as Record<string, unknown>)?.selfHealTotal as number | undefined) ?? FALLBACK.selfHealTotal,
     instance: { ...FALLBACK.instance, ...((raw as Record<string, unknown>)?.instance as object ?? {}) },
   };
 
@@ -233,6 +245,50 @@ export default function MetricsPage() {
         </Grid>
         <p style={muted}>
           “Ingested” should drain quickly; a chronic backlog means Pass 2 isn't running.
+        </p>
+      </Section>
+
+      <Section title="Classification health">
+        <Grid>
+          <Card
+            label="Self-healed rows (outgoing → ingested)"
+            value={String(data.selfHealTotal)}
+            tone={data.selfHealTotal > 0 ? "warning" : "muted"}
+          />
+        </Grid>
+        <p style={muted}>
+          Non-zero ⇒ at least one row was tagged outgoing despite the sender not being on the merchant's allow-list. Indicates a provider direction bug — check recent Zoho/Gmail integration changes.
+        </p>
+        <table style={tableStyle}>
+          <thead>
+            <tr>
+              <th style={th}>Shop</th>
+              <th style={th}>Total threads</th>
+              <th style={th}>Unknown</th>
+              <th style={th}>Unknown ratio</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.classificationHealth.length === 0 ? (
+              <tr><td colSpan={4} style={{ ...td, color: "#94a3b8" }}>No shop has ≥10 threads yet.</td></tr>
+            ) : (
+              data.classificationHealth.map((c) => {
+                const pct = (c.unknownRatio * 100).toFixed(1);
+                const color = c.unknownRatio > 0.30 ? "#b91c1c" : c.unknownRatio > 0.10 ? "#b45309" : "inherit";
+                return (
+                  <tr key={c.shop}>
+                    <td style={td}>{c.shop}</td>
+                    <td style={td}>{c.totalThreads}</td>
+                    <td style={td}>{c.unknownThreads}</td>
+                    <td style={{ ...td, color }}>{pct}%</td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+        <p style={muted}>
+          Threshold guide: &lt;10% healthy · 10–30% watch · &gt;30% investigate (likely direction misattribution or stuck classifier).
         </p>
       </Section>
 

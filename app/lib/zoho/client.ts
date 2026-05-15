@@ -121,6 +121,7 @@ export async function createZohoClient(shop: string): Promise<MailClient> {
   }
 
   const accountId = conn.zohoAccountId;
+  const mailboxLower = (conn.email ?? "").trim().toLowerCase();
 
   // Cache folder IDs (fetched once per client creation)
   let cachedFolders: ZohoFolders | null = null;
@@ -201,14 +202,19 @@ export async function createZohoClient(shop: string): Promise<MailClient> {
       const token = await getZohoAccessToken(shop);
       const folders = await getFolders(token);
 
-      // Try the SENT folder FIRST so outgoing replies are reliably tagged
-      // with the virtual "SENT" label below — Zoho often surfaces the same
-      // message in both inbox and sent folders, and tagging it inbox-first
-      // produced merchant messages misclassified as customer mail. If sent
-      // doesn't have it, fall back to inbox.
+      // Folder probing is for finding which folder actually hosts the
+      // message content; it CANNOT be used to infer direction. Zoho's
+      // `/folders/{fid}/messages/{messageId}/details` endpoint does not
+      // 404 when the message isn't in that folder — it returns the message
+      // regardless — so a "try SENT first, fall back to INBOX" probe used
+      // to mark EVERY message as SENT, which made the pipeline skip tier1/
+      // tier2 classification on real customer emails.
+      //
+      // Direction is now derived from `fromAddress === mailboxLower` below,
+      // with merchant-alias detection handled by `outgoing-detection.ts`.
       const folderCandidates = [
-        ...(folders.sent ? [folders.sent] : []),
         folders.inbox,
+        ...(folders.sent ? [folders.sent] : []),
       ];
       let folderId = folders.inbox;
       let detailRaw: unknown = null;
@@ -273,9 +279,11 @@ export async function createZohoClient(shop: string): Promise<MailClient> {
         bodyHtml: htmlBody || undefined,
         snippet: detail.summary ? decodeHtmlEntities(detail.summary) : bodyText.slice(0, 200),
         receivedAt: new Date(parseInt(detail.receivedTime, 10)),
-        // Use a virtual "SENT" label when the message lives in the Sent folder
-        // so the pipeline can reliably detect outgoing messages on Zoho too.
-        labelIds: (folders.sent && folderId === folders.sent) ? ["SENT"] : [],
+        // Virtual "SENT" label is set based on the sender matching the
+        // connected mailbox, NOT on the folder we happened to find the
+        // message in (see comment above on folderCandidates). Alias-based
+        // outgoing detection is handled downstream in outgoing-detection.ts.
+        labelIds: (mailboxLower && fromAddress.toLowerCase() === mailboxLower) ? ["SENT"] : [],
         headers: {},
         attachments: zohoAttachments,
       } satisfies MailMessage;

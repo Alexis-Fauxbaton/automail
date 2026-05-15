@@ -44,19 +44,58 @@ export async function exchangeCodeForTokens(code: string) {
   client.setCredentials(tokens);
   const oauth2 = google.oauth2({ version: "v2", auth: client });
   const { data } = await oauth2.userinfo.get();
+  const email = data.email || "unknown";
+  const aliases = await fetchGmailSendAsAliases(client, email).catch((err) => {
+    console.warn("[gmail] sendAs alias fetch failed at OAuth:", err);
+    return [] as string[];
+  });
 
   return {
     accessToken: tokens.access_token,
     refreshToken: tokens.refresh_token,
     expiry: tokens.expiry_date ? new Date(tokens.expiry_date) : new Date(Date.now() + 3600_000),
-    email: data.email || "unknown",
+    email,
+    aliases,
   };
+}
+
+/**
+ * Returns every address the user can send mail from via this Gmail
+ * account: the primary plus every verified entry in their sendAs settings
+ * (custom aliases, group send-as). Used to populate the outgoing-detection
+ * allow-list at OAuth time so customer replies aren't misclassified.
+ */
+async function fetchGmailSendAsAliases(
+  oauthClient: ReturnType<typeof getOAuth2Client>,
+  primaryEmail: string,
+): Promise<string[]> {
+  const gmail = google.gmail({ version: "v1", auth: oauthClient });
+  const res = await gmail.users.settings.sendAs.list({ userId: "me" });
+  const items = res.data.sendAs ?? [];
+  const out = new Set<string>();
+  const p = primaryEmail.trim().toLowerCase();
+  if (p && p !== "unknown") out.add(p);
+  for (const entry of items) {
+    const addr = (entry.sendAsEmail ?? "").trim().toLowerCase();
+    if (!addr) continue;
+    // Only trust verified aliases — unverified ones can't actually send.
+    if (entry.verificationStatus && entry.verificationStatus !== "accepted") continue;
+    out.add(addr);
+  }
+  return Array.from(out);
 }
 
 export async function saveConnection(
   shop: string,
-  tokens: { accessToken: string; refreshToken: string; expiry: Date; email: string },
+  tokens: {
+    accessToken: string;
+    refreshToken: string;
+    expiry: Date;
+    email: string;
+    aliases?: string[];
+  },
 ) {
+  const outgoingAliases = JSON.stringify(tokens.aliases ?? []);
   await prisma.mailConnection.upsert({
     where: { shop },
     create: {
@@ -66,6 +105,7 @@ export async function saveConnection(
       accessToken: encrypt(tokens.accessToken),
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
+      outgoingAliases,
     },
     update: {
       provider: "gmail",
@@ -73,8 +113,39 @@ export async function saveConnection(
       accessToken: encrypt(tokens.accessToken),
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
+      outgoingAliases,
     },
   });
+}
+
+/**
+ * Lazy-populate aliases for shops connected before this feature shipped.
+ * Idempotent and best-effort.
+ */
+export async function backfillGmailAliasesIfMissing(shop: string): Promise<void> {
+  const conn = await prisma.mailConnection.findUnique({
+    where: { shop },
+    select: { provider: true, email: true, outgoingAliases: true },
+  });
+  if (!conn || conn.provider !== "gmail") return;
+  if (conn.outgoingAliases && conn.outgoingAliases !== "[]") return;
+  try {
+    const client = getOAuth2Client();
+    const fullConn = await prisma.mailConnection.findUnique({ where: { shop } });
+    if (!fullConn) return;
+    client.setCredentials({
+      access_token: decrypt(fullConn.accessToken),
+      refresh_token: decrypt(fullConn.refreshToken),
+    });
+    const aliases = await fetchGmailSendAsAliases(client, conn.email);
+    await prisma.mailConnection.update({
+      where: { shop },
+      data: { outgoingAliases: JSON.stringify(aliases) },
+    });
+    console.log(`[gmail] backfilled ${aliases.length} outgoing aliases for shop=${shop}`);
+  } catch (err) {
+    console.warn(`[gmail] alias backfill failed for shop=${shop}:`, err);
+  }
 }
 
 export async function deleteConnection(shop: string) {

@@ -142,6 +142,56 @@ export async function getPipelineHealth(): Promise<StuckCounts> {
   };
 }
 
+export interface ShopClassificationHealth {
+  shop: string;
+  totalThreads: number;
+  unknownThreads: number;
+  unknownRatio: number; // 0..1
+}
+
+/**
+ * Per-shop classification health. A high ratio of `supportNature: "unknown"`
+ * threads is the canonical signal that direction-detection has misattributed
+ * incoming customer mail as outgoing, causing tier1/tier2 to be skipped.
+ *
+ * Threshold guideline for alerting:
+ *   - < 0.10  healthy (most shops have a few uncertain threads)
+ *   - 0.10–0.30  watch (could be normal for a new shop with little history)
+ *   - > 0.30  investigate (likely a provider direction bug or a stuck
+ *             classifier — check outgoing_self_heal_total counter and
+ *             recent logs)
+ *
+ * Only shops with at least 10 threads are returned, to avoid spurious
+ * ratios from shops that just installed.
+ */
+export async function getClassificationHealthPerShop(): Promise<
+  ShopClassificationHealth[]
+> {
+  const rows = await prisma.$queryRaw<
+    Array<{ shop: string; total: bigint; unknown: bigint }>
+  >`
+    SELECT
+      shop,
+      COUNT(*)::bigint AS total,
+      COUNT(*) FILTER (WHERE "supportNature" = 'unknown')::bigint AS unknown
+    FROM "Thread"
+    GROUP BY shop
+    HAVING COUNT(*) >= 10
+    ORDER BY (COUNT(*) FILTER (WHERE "supportNature" = 'unknown'))::float / COUNT(*) DESC
+    LIMIT 50
+  `;
+  return rows.map((r) => {
+    const total = Number(r.total);
+    const unknown = Number(r.unknown);
+    return {
+      shop: r.shop,
+      totalThreads: total,
+      unknownThreads: unknown,
+      unknownRatio: total === 0 ? 0 : unknown / total,
+    };
+  });
+}
+
 export interface DbPoolStats {
   active: number;
   idle: number;
