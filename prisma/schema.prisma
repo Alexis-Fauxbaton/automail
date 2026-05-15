@@ -436,7 +436,9 @@ model BillingUsage {
   id           String   @id @default(cuid())
   shop         String
   periodStart  DateTime
-  draftsCount  Int      @default(0)
+  // Renamed from draftsCount. Each successful first-time Tier 3 on a
+  // Thread increments this by 1 via markThreadAnalyzedIfFirst.
+  analyzedThreadsCount Int @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
