@@ -372,6 +372,49 @@ async function runJob(job: {
         );
         break;
       }
+      case "analyze_thread": {
+        const threadId = String(job.params.threadId ?? "");
+        if (!threadId) throw new Error("analyze_thread job missing threadId");
+        const conn = await prisma.mailConnection.findUnique({
+          where: { shop: job.shop },
+          select: { email: true },
+        });
+        // Pick the latest analyzable email of the thread as anchor.
+        const anchor = await prisma.incomingEmail.findFirst({
+          where: {
+            shop: job.shop,
+            canonicalThreadId: threadId,
+            processingStatus: { notIn: ["outgoing", "error"] },
+            tier1Result: "passed",
+          },
+          orderBy: { receivedAt: "desc" },
+          select: { id: true },
+        });
+        if (!anchor) {
+          console.log(`[auto-sync] analyze_thread skipped: no anchor for thread=${threadId} shop=${job.shop}`);
+          break;
+        }
+        // Need a fresh admin client here — the entitlement try-block above
+        // scoped its `admin` locally. Mirror the pattern used by runSyncForShop.
+        let admin: Awaited<ReturnType<typeof unauthenticated.admin>>["admin"];
+        try {
+          ({ admin } = await withTimeout(
+            unauthenticated.admin(job.shop),
+            10_000,
+            `unauthenticated.admin(${job.shop})`,
+          ));
+        } catch (err) {
+          if (err instanceof Response) {
+            throw new Error(`Shopify auth failed for shop ${job.shop}: HTTP ${err.status} ${err.statusText || err.url}`);
+          }
+          throw err;
+        }
+        const { reanalyzeEmail } = await import("../gmail/pipeline");
+        await reanalyzeEmail(anchor.id, admin, job.shop, { skipDraft: true });
+        // markThreadAnalyzedIfFirst was called inside reanalyzeEmail.
+        console.log(`[auto-sync] analyze_thread ok thread=${threadId} shop=${job.shop} mailbox=${conn?.email ?? "?"}`);
+        break;
+      }
       default:
         throw new Error(`[auto-sync] unknown job kind: ${job.kind}`);
     }

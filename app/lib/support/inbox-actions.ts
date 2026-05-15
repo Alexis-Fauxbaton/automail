@@ -394,6 +394,26 @@ export async function handleMoveThread(params: {
     toState: target,
   });
 
+  const supportNatureFlipped =
+    forceSupport && thread.supportNature !== "confirmed_support";
+
+  // If we just flipped a thread to a support stance AND it has never
+  // been analyzed, enqueue a background analyze_thread job. The
+  // auto-sync loop picks it up at the next tick and runs Tier 3 with
+  // skipDraft:true. The first-time analysis consumes 1 billing unit
+  // via markThreadAnalyzedIfFirst.
+  if (supportNatureFlipped) {
+    const threadRow = await prisma.thread.findUnique({
+      where: { id: canonicalThreadId },
+      select: { analyzedAt: true },
+    });
+    if (threadRow && threadRow.analyzedAt === null) {
+      await enqueueJob(shop, "analyze_thread", { threadId: canonicalThreadId }).catch((err) => {
+        console.error(`[catch-up] enqueueJob analyze_thread failed for thread=${canonicalThreadId}:`, err);
+      });
+    }
+  }
+
   // On reopen, refresh tracking + crawl on the thread anchor immediately.
   // Resolved threads skip those steps during auto-sync (orchestrator's
   // skipTracking flag), so without this hook a freshly-reopened thread
@@ -632,6 +652,20 @@ export async function handleUpdateClassification(params: {
         data: { resolvedOrderNumber: finalOrderNumber },
       }).catch((err) => {
         console.error("[updateClassification] thread sync after refresh failed:", err);
+      });
+    }
+
+    const threadRow = await prisma.thread.findUnique({
+      where: { id: threadId },
+      select: { analyzedAt: true, supportNature: true },
+    });
+    const isSupportNow =
+      threadRow?.supportNature === "confirmed_support" ||
+      threadRow?.supportNature === "probable_support" ||
+      threadRow?.supportNature === "mixed";
+    if (threadRow && isSupportNow && threadRow.analyzedAt === null) {
+      await enqueueJob(shop, "analyze_thread", { threadId }).catch((err) => {
+        console.error(`[catch-up] enqueueJob analyze_thread failed for thread=${threadId}:`, err);
       });
     }
 
