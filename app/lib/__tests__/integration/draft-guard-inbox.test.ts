@@ -26,7 +26,7 @@ describe('handleRedraft — quota enforcement', () => {
     });
     const periodStart = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1));
     await testDb.billingUsage.create({
-      data: { shop: TEST_SHOP, periodStart, draftsCount: 50 },
+      data: { shop: TEST_SHOP, periodStart, analyzedThreadsCount: 50 },
     });
 
     const adminGraphql = vi.fn().mockResolvedValue({
