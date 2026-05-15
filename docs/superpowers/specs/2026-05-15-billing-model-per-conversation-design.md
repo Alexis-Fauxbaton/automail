@@ -173,6 +173,46 @@ happening, just data refresh.
   level via `runJob`'s entitlement gate (which short-circuits the whole
   job). So no extra guard needed here.
 
+### Auto-analysis on re-classification
+
+When a thread moves from a "non-support" stance to a "support" stance
+without the user clicking Generate draft (today's behaviour is: the
+thread sits there with no analysis), we need to catch up. Otherwise
+the merchant has to manually click Generate on every misclassified
+thread, which is friction we don't want.
+
+Two trigger sites that can flip a thread to a support-y state:
+- `handleMoveThread` — moving to `waiting_merchant` /
+  `waiting_customer` (already forces `supportNature: confirmed_support`).
+- `handleUpdateClassification` — explicit user override of the
+  classifier (already touches `supportNature`).
+
+After either of these mutates `Thread.supportNature` to a support-y
+value, **enqueue a `SyncJob` of a new kind `analyze_thread`** with
+`params: { threadId }`. The auto-sync loop picks it up at the next
+tick (~60 s, no user-visible delay) and runs Tier 3 on the thread's
+anchor email with `skipDraft: true` — the same lightweight analysis
+auto-sync already performs on fresh support emails.
+
+The Tier 3 path then triggers `markThreadAnalyzedIfFirst`, which sets
+`analyzedAt` and increments `analyzedThreadsCount`. Subsequent user
+clicks on "Generate draft" go through `redraftEmail` (free) since the
+analysis is already there.
+
+Guardrails:
+- Only enqueue if `Thread.analyzedAt` is null (no duplicate work / no
+  double charge).
+- Only enqueue if `supportNature` actually moved to a support-y value
+  in this call (no enqueue on idempotent no-op).
+- The job uses the existing per-shop concurrency lock so it can't
+  interfere with a running periodic sync.
+
+Adding the new kind: extend `SyncJobKind` type +
+`auto-sync.ts:runJob` switch + a `runAnalyzeThreadJob(threadId)` helper
+that loads the thread, picks the anchor email, and calls
+`analyzeSupportEmail` with `skipDraft: true` then
+`markThreadAnalyzedIfFirst`.
+
 ### Entitlement / suspension logic
 
 No change. `isSyncSuspended` is already computed as `quotaStatus.level
@@ -308,8 +348,12 @@ scenario flips negative on a steady-state basis.
 
 - **Thread classified as `probable_non_client` at Tier 2** — Tier 3
   doesn't run → `analyzedAt` stays null → 0 quota consumed. If the
-  merchant later re-classifies and clicks "Generate draft", Tier 3 runs
-  → 1 quota consumed at that moment. Correct alignment with cost.
+  merchant later moves the thread to a support state or overrides the
+  classification, a `analyze_thread` SyncJob is enqueued (see
+  "Auto-analysis on re-classification" above), Tier 3 runs at the next
+  tick with `skipDraft: true` → 1 unit consumed. No user click required
+  to trigger this; the draft is still gated behind the merchant's
+  explicit "Generate draft" click.
 - **Re-sync (handleResync deletes all `IncomingEmail` rows)** — the
   `Thread` row survives with its `analyzedAt` already set. The
   subsequent Tier 3 pass on re-ingested messages calls
@@ -429,4 +473,7 @@ Manual smoke (after merge):
 8. Migration backfills `Thread.analyzedAt` from existing data; resets
    current-period `analyzedThreadsCount` to 0.
 9. i18n strings updated in both `en.json` and `fr.json`.
-10. All new tests pass; existing tests still pass after the renaming.
+10. Moving a thread from `non_support` to a support stance enqueues an
+    `analyze_thread` SyncJob; auto-sync runs Tier 3 with
+    `skipDraft: true` and consumes 1 unit on first analysis.
+11. All new tests pass; existing tests still pass after the renaming.
