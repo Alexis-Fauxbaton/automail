@@ -241,32 +241,14 @@ export async function handleRedraft(params: {
 
   await maybeRefreshAnalysis(emailId, admin, shop);
 
-  const guarded = await withDraftQuota({
-    shop,
-    limit: ent.quotaStatus.limit,
-    generator: () => redraftEmail(emailId, shop),
-  });
-
-  if (!guarded.ok) {
-    if (guarded.reason === 'quota_exceeded') {
-      return {
-        reanalyzed: null,
-        report: null,
-        disconnected: false,
-        refined: null,
-        quotaExceeded: true,
-        quotaStatus: { used: ent.quotaStatus.used, limit: ent.quotaStatus.limit },
-      };
-    }
-    throw guarded.error ?? new Error('Draft generation failed');
-  }
+  await redraftEmail(emailId, shop);
 
   return {
     reanalyzed: null,
     report: null,
     disconnected: false,
     refined: null,
-    quotaStatus: { used: guarded.newCount, limit: ent.quotaStatus.limit },
+    quotaStatus: { used: ent.quotaStatus.used, limit: ent.quotaStatus.limit },
   };
 }
 
@@ -348,52 +330,31 @@ export async function handleRefine(params: {
     }
   }
 
-  const guarded = await withDraftQuota({
+  const newDraft = await refineDraft(currentDraft, instructions, {
+    subject: record.subject,
+    body: record.bodyText,
+    contextSummary,
+  }, {
     shop,
-    limit: ent.quotaStatus.limit,
-    generator: async () => {
-      const newDraft = await refineDraft(currentDraft, instructions, {
-        subject: record.subject,
-        body: record.bodyText,
-        contextSummary,
-      }, {
-        shop,
-        emailId,
-        threadId: record.threadId,
-      });
-      const { upsertReplyDraftBody } = await import("./reply-draft");
-      await upsertReplyDraftBody(emailId, shop, newDraft);
-      const updatedRD = await prisma.replyDraft.findUnique({
-        where: { emailId },
-        select: { bodyHistory: true },
-      });
-      const history = Array.isArray(updatedRD?.bodyHistory)
-        ? (updatedRD!.bodyHistory as string[])
-        : [];
-      return { newDraft, history };
-    },
+    emailId,
+    threadId: record.threadId,
   });
-
-  if (!guarded.ok) {
-    if (guarded.reason === 'quota_exceeded') {
-      return {
-        report: null,
-        disconnected: false,
-        reanalyzed: null,
-        refined: null,
-        quotaExceeded: true,
-        quotaStatus: { used: ent.quotaStatus.used, limit: ent.quotaStatus.limit },
-      };
-    }
-    throw guarded.error ?? new Error('Draft refine failed');
-  }
+  const { upsertReplyDraftBody } = await import("./reply-draft");
+  await upsertReplyDraftBody(emailId, shop, newDraft);
+  const updatedRD = await prisma.replyDraft.findUnique({
+    where: { emailId },
+    select: { bodyHistory: true },
+  });
+  const history = Array.isArray(updatedRD?.bodyHistory)
+    ? (updatedRD!.bodyHistory as string[])
+    : [];
 
   return {
-    refined: { emailId, newDraft: guarded.value.newDraft, draftHistory: guarded.value.history },
+    refined: { emailId, newDraft, draftHistory: history },
     report: null,
     disconnected: false,
     reanalyzed: null,
-    quotaStatus: { used: guarded.newCount, limit: ent.quotaStatus.limit },
+    quotaStatus: { used: ent.quotaStatus.used, limit: ent.quotaStatus.limit },
   };
 }
 
