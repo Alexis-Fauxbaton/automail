@@ -147,6 +147,12 @@ model Thread {
   // than a confusing gap. `redactedAt` non-null signals tombstone state.
   redactedAt     DateTime?
   redactedReason String?  // e.g. "gdpr_customer_request"
+  // --- Billing (per-conversation) -----------------------------------
+  // Timestamp of the first successful Tier 3 analysis on this thread.
+  // Used by the billing counter `markThreadAnalyzedIfFirst` to guarantee
+  // one billing increment per thread regardless of how many times Tier 3
+  // re-runs (new messages, refresh-stale, user-triggered re-analyse).
+  analyzedAt     DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -161,6 +167,7 @@ model Thread {
   @@index([shop, operationalState, operationalStateUpdatedAt])
   // Helps detect duplicate canonical threads when ThreadProviderId backfill races.
   @@index([shop, provider, subjectKey])
+  @@index([shop, analyzedAt])
 }
 
 // Mapping from a provider-native threadId to the canonical Thread.id.
