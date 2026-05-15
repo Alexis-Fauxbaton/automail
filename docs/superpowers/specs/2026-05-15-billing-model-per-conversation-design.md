@@ -392,38 +392,225 @@ Lightweight, no in-code blocking:
 
 ## Test plan
 
-Unit tests:
-- `markThreadAnalyzedIfFirst` — first call counts; second call no-ops;
-  shop mismatch no-ops.
-- Plan definitions — `analyzedThreadsPerMonth` field present and
-  numerically correct.
-- Quota computation — `computeQuotaStatus(used, limit)` unchanged in
-  logic but tests rename the field in fixtures.
+Billing is a financially sensitive area. The test suite must
+exhaustively cover every code path that could (a) over-bill, (b)
+silently under-bill, (c) leak across shops, or (d) misbehave at period
+boundaries. Tests are grouped by the failure class they prevent.
 
-Integration tests:
-- Auto-sync Tier 3 on a fresh thread → `Thread.analyzedAt` set,
-  `BillingUsage.analyzedThreadsCount` += 1.
-- Auto-sync Tier 3 on a thread with `analyzedAt != null` → no
-  increment.
-- `handleRefine` after auto-sync analysis → 0 quota consumed,
-  `analyzedThreadsCount` unchanged.
-- `handleReanalyze` on unanalyzed thread → Tier 3 runs → 1 unit
-  consumed.
-- `handleReanalyze` on already-analyzed thread → 0 unit consumed.
-- Migration test (separate file): apply migration to a seeded DB
-  containing threads with `analysisResult`; verify `analyzedAt` is
-  backfilled to `createdAt`.
+### Class 1 — Double counting
 
-Migration test:
-- Pre-migration: seed Thread + IncomingEmail with analysisResult, run
-  migration script, assert post-migration `analyzedAt == createdAt`.
+`markThreadAnalyzedIfFirst` is the only writer. Unit + integration
+tests must prove it's idempotent.
 
-Manual smoke (after merge):
-- Fresh shop: sync 5 support emails → counter = 5.
-- Click Refine 3× on one of them → counter still = 5.
-- Re-sync the same shop → counter still = 5.
-- Force quota to 50 → next sync gets suspended → SyncSuspendedBanner
-  shown → upgrade Plan → suspension lifts → catch-up runs.
+- **Unit** — calling the helper twice in a row on the same thread
+  returns `{counted: true}` then `{counted: false, alreadyAnalyzed:
+  true}`. The DB row's `analyzedAt` is set after the first call and
+  unchanged after the second.
+- **Unit** — calling it 100 times sequentially yields exactly 1
+  increment in `BillingUsage.analyzedThreadsCount`.
+- **Integration** — auto-sync runs Tier 3 successfully on a thread,
+  then auto-sync runs again on the same thread (e.g. resync) → only 1
+  increment total.
+- **Integration** — user clicks "Generate draft" on an already-analyzed
+  thread → `redraftEmail` path runs, no `markThreadAnalyzedIfFirst`
+  call, counter unchanged.
+- **Integration** — full sequence: auto-sync analyzes, user clicks
+  Generate draft, user refines 5×, user regenerates 2× → counter = 1.
+- **Integration** — `handleReanalyze` on an already-analyzed thread →
+  Tier 3 may run again to refresh facts, but `markThreadAnalyzedIfFirst`
+  short-circuits → counter unchanged. (Document explicitly: re-analysis
+  cost is absorbed in margin, not re-billed.)
+
+### Class 2 — Concurrent racing (critical)
+
+The atomic `updateMany WHERE analyzedAt IS NULL` is the linchpin.
+Tests must prove it under real concurrent load against Postgres.
+
+- **Integration** — fire 10 parallel `markThreadAnalyzedIfFirst` calls
+  for the same threadId via `Promise.all`. Assert exactly 1 returns
+  `{counted: true}` and 9 return `{counted: false}`. Final counter = 1.
+- **Integration** — same test with 50 parallel calls split across 5
+  distinct threads (10 each). Final counter = 5.
+- **Integration** — fire 20 parallel auto-sync Tier 3 invocations on
+  the same thread (simulating worker overlap or job-queue race). Final
+  counter = 1.
+- **Integration** — interleave: thread A's first analysis racing with
+  thread B's first analysis for the same shop. Both succeed; counter
+  = 2; `BillingUsage` row's `analyzedThreadsCount` is consistent (no
+  lost update from upsert race).
+
+### Class 3 — Spurious counting (should NOT have charged)
+
+- **Unit** — `markThreadAnalyzedIfFirst` called with shop="X" on a
+  thread belonging to shop="Y" → returns `{counted: false}`, no DB
+  mutation, no usage row touched.
+- **Integration** — Tier 3 throws before `markThreadAnalyzedIfFirst`
+  is called → `analyzedAt` stays null, counter unchanged.
+- **Integration** — Tier 3 succeeds but `markThreadAnalyzedIfFirst`
+  fails (DB blip) → `analyzedAt` is not set, counter is not incremented.
+  Next attempt will retry cleanly.
+- **Integration** — `refreshThreadAnalysis({reclassifyIntent: false})`
+  (the lightweight Shopify+17track-only path) runs on an unanalyzed
+  thread → counter unchanged (it's not a Tier 3 first analysis).
+- **Integration** — auto-sync receives a non-support thread (Tier 2
+  returned `probable_non_client`) → Tier 3 never runs → counter
+  unchanged. Move the same thread to support, BUT pretend the enqueue
+  failed (mock the SyncJob create) → counter unchanged.
+- **Integration** — `handleEditThreadIdentifiers` triggers
+  `refreshThreadAnalysis` (light) on an analyzed thread → counter
+  unchanged.
+
+### Class 4 — Cross-shop isolation (must not leak)
+
+- **Unit** — shop X analyzes thread, shop Y's `BillingUsage` for the
+  same period is unaffected.
+- **Integration** — shops X and Y each analyze 10 threads concurrently
+  → X has counter=10, Y has counter=10, neither has 11+.
+- **Integration** — shop X uninstalls → its `BillingUsage` rows are
+  deleted; shop Y's are not.
+
+### Class 5 — Period boundaries (off-by-one billing month bugs)
+
+- **Unit** — `getCurrentPeriodStart` returns the UTC midnight of the
+  1st of the month. Pin the test clock to 2026-03-31T23:59:59Z →
+  period = 2026-03-01. Advance one second → period = 2026-04-01.
+- **Integration** — analyze a thread on Mar 31 23:59 UTC → March
+  counter +1. Analyze another thread on Apr 1 00:01 UTC → April
+  counter +1; March counter unchanged.
+- **Integration** — at the period flip, `getUsage` returns 0 for the
+  new period even if previous period had 50/50.
+- **Integration** — quota `isSyncSuspended` lifts at period start (50
+  used last month, 0 this month → not suspended).
+
+### Class 6 — Quota cap behaviour
+
+- **Unit** — `computeQuotaStatus(49, 50)` → `level: 'ok'`,
+  `canGenerateDraft: true` (handler still gates entry but Tier 3 can
+  still consume the 50th unit cleanly).
+- **Unit** — `computeQuotaStatus(50, 50)` → `level: 'exceeded'`,
+  `isSyncSuspended: true`.
+- **Integration** — shop at 49/50, auto-sync starts a job, Tier 3 runs
+  on one thread → counter becomes 50, no error, job completes.
+- **Integration** — shop at 50/50, auto-sync's next job is skipped
+  (entitlement gate in `runJob`); inbox UI shows `SyncSuspendedBanner`.
+- **Integration** — shop at 50/50, user clicks "Generate draft" on an
+  unanalyzed thread → `handleReanalyze` returns `quotaExceeded: true`,
+  no Tier 3 runs, counter unchanged.
+- **Integration** — shop at 50/50, user clicks "Refine" on an
+  already-analyzed thread → succeeds (refine doesn't consume), counter
+  unchanged.
+- **Integration** — concurrent quota race: at 49/50, fire two parallel
+  user-triggered Tier 3 calls. Outcome: one succeeds (50/50), the
+  other either succeeds-then-counter-is-51 OR fails with
+  `quotaExceeded`. The spec requires the second to FAIL — verify with
+  a deterministic test using transaction-level locking on the
+  `BillingUsage` row, or `pg_advisory_xact_lock` on the shop key
+  before the increment. (Implementation must choose one path; the test
+  pins the behaviour.)
+
+### Class 7 — Migration correctness
+
+- **Migration test** — pre-state: 100 Thread rows, 60 with at least
+  one `IncomingEmail.analysisResult != null`, 40 without. Run
+  migration. Post-state: 60 threads with `analyzedAt = createdAt`, 40
+  with `analyzedAt = null`. Counter unchanged.
+- **Migration test** — pre-state: shop X had `BillingUsage` row for
+  current period with `draftsCount = 30`. Run migration. Post-state:
+  same row, `analyzedThreadsCount = 0` (current period reset). Historical
+  rows from previous periods untouched.
+- **Migration test** — column rename is reversible (Prisma down
+  migration). Smoke-test that the rollback restores the old column
+  name. (Down migrations are off-by-default in production; this test
+  catches latent breakage.)
+- **Migration test** — concurrent writes during migration are
+  serialized by the migration's table lock (Prisma default). No data
+  loss.
+
+### Class 8 — Re-classification catch-up
+
+- **Integration** — non_support thread, user calls `handleMoveThread`
+  to `waiting_merchant` → asserts a `SyncJob {kind: "analyze_thread",
+  params: {threadId}}` row is created.
+- **Integration** — same scenario, BUT `Thread.analyzedAt` was already
+  set → no SyncJob enqueued.
+- **Integration** — same scenario, BUT the call to `handleMoveThread`
+  is a no-op (state unchanged) → no SyncJob enqueued.
+- **Integration** — auto-sync picks up the `analyze_thread` job, runs
+  Tier 3 with `skipDraft: true`, succeeds → `analyzedAt` set, counter
+  +1, no draft generated (assert `replyDraft` row stays null).
+- **Integration** — auto-sync picks up the job, Tier 3 fails →
+  `analyzedAt` stays null, counter unchanged, job retried per existing
+  job-queue retry policy. After 3 failures, job moves to "error" and
+  stays unanalyzed; UI must show a "Retry analysis" affordance.
+- **Integration** — two calls to `handleMoveThread` in quick succession
+  on the same thread → `enqueueJob` deduplicates (existing behaviour),
+  only one SyncJob exists; the second call sees the pending one and
+  returns its id.
+
+### Class 9 — User-action paths (refine/redraft never charge)
+
+- **Unit** — `handleRefine` body inspection: no call to
+  `withDraftQuota`, no call to `markThreadAnalyzedIfFirst`, no call to
+  `incrementUsage`.
+- **Unit** — `handleRedraft` body inspection: same.
+- **Unit** — `handleGenerateDraft` (wrapper) body inspection: same.
+- **Integration** — call `handleRefine` 100 times on the same analyzed
+  thread → counter unchanged.
+- **Integration** — call `handleRedraft` 100 times on the same
+  analyzed thread → counter unchanged.
+
+### Class 10 — Negative / defensive
+
+- **Unit** — `BillingUsage.analyzedThreadsCount` can never go negative.
+  Test: `incrementUsage(shop, -5)` is rejected with a thrown error
+  (the API should be additive-only; if it accepts deltas they must be
+  non-negative integers).
+- **Unit** — `markThreadAnalyzedIfFirst` with an empty or invalid
+  `threadId` (`""`, `null`, malformed CUID) returns `{counted: false}`
+  without touching the DB.
+- **Unit** — `markThreadAnalyzedIfFirst` on a thread that doesn't
+  exist (deleted between read and write) returns `{counted: false}`,
+  no usage row touched.
+
+### Class 11 — Observability for finance audits
+
+- **Integration** — every successful `markThreadAnalyzedIfFirst`
+  emits a metric (`billing.analyzed_thread.counted{shop, plan}`) so
+  finance can reconcile invoices against the metric stream. Test:
+  observation count matches DB increments after a batch of analyses.
+- **Integration** — failed `markThreadAnalyzedIfFirst` (e.g., DB
+  error after Tier 3 success) emits a different metric
+  (`billing.analyzed_thread.skipped{shop, reason}`). The merchant is
+  NOT over-billed if this happens — they're under-billed, but it's
+  visible. Test: simulate DB failure, assert skipped metric is
+  incremented, counter is unchanged.
+
+### Plan / quota assertions
+
+- **Unit** — `PLANS.starter.analyzedThreadsPerMonth === 50`.
+- **Unit** — `PLANS.pro.analyzedThreadsPerMonth === 500`.
+- **Unit** — `PLANS.trial.analyzedThreadsPerMonth === Infinity`.
+- **Unit** — `getPlan('starter')` returns the starter plan.
+- **Unit** — `getPlan('unknown')` returns `null`.
+
+### Manual smoke (after merge, before public launch)
+
+- Fresh shop on Starter: sync 50 support emails → counter = 50. Sync
+  one more → not synced (suspended). UI shows banner. Upgrade to Pro
+  → suspension lifts → catch-up resumes → counter = 51.
+- Refine each of the first 50 conversations 3× → counter still = 50.
+- Re-sync (handleResync) → counter still = 50.
+- Trigger period flip manually (set `BillingUsage.periodStart` to
+  previous month) → next analyze → counter for new period = 1.
+- Migration on a copy of the production DB: capture counter values
+  before/after, manually inspect that they make sense.
+
+### Performance / load (smoke at 10-shop scale)
+
+- Simulate 10 shops each receiving 30 support emails simultaneously
+  → after auto-sync drain, each shop has counter = 30, no
+  cross-pollination. Wall-clock budget for the full simulation < 5
+  minutes on a 4-CPU dev box.
 
 ## Risks
 
@@ -477,3 +664,9 @@ Manual smoke (after merge):
     `analyze_thread` SyncJob; auto-sync runs Tier 3 with
     `skipDraft: true` and consumes 1 unit on first analysis.
 11. All new tests pass; existing tests still pass after the renaming.
+12. **Billing test coverage** — every test class in the Test Plan
+    section above has at least one passing test, and the overall
+    coverage of `markThreadAnalyzedIfFirst`, `incrementUsage`,
+    `getUsage`, `computeQuotaStatus`, and the entitlements builders
+    that read them is at or above 95 % statement coverage (run
+    `npm run test:coverage` and inspect those files specifically).
