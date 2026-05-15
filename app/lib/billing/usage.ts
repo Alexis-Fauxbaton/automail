@@ -84,3 +84,60 @@ export async function getUsage(shop: string, now: Date = new Date()): Promise<Bi
     count: row?.analyzedThreadsCount ?? 0,
   };
 }
+
+export interface MarkThreadAnalyzedResult {
+  counted: boolean;
+  alreadyAnalyzed: boolean;
+}
+
+/**
+ * Sets `Thread.analyzedAt` and increments the shop's
+ * `analyzedThreadsCount` for the current period — but ONLY if this
+ * thread has never been analyzed before. The atomicity comes from
+ * `updateMany WHERE analyzedAt IS NULL`: only one concurrent caller
+ * wins; the rest see `count: 0` and short-circuit.
+ *
+ * Returns:
+ *   { counted: true,  alreadyAnalyzed: false } — increment happened.
+ *   { counted: false, alreadyAnalyzed: true  } — thread already analyzed; no-op.
+ *   { counted: false, alreadyAnalyzed: false } — thread not found, wrong shop,
+ *     or empty id; no-op.
+ *
+ * Never throws on the happy path. DB errors propagate (caller logs).
+ */
+export async function markThreadAnalyzedIfFirst(
+  threadId: string,
+  shop: string,
+): Promise<MarkThreadAnalyzedResult> {
+  if (!threadId || !shop) {
+    return { counted: false, alreadyAnalyzed: false };
+  }
+
+  const result = await prisma.thread.updateMany({
+    where: { id: threadId, shop, analyzedAt: null },
+    data: { analyzedAt: new Date() },
+  });
+
+  if (result.count === 0) {
+    // Either the thread doesn't exist, the shop doesn't match, or
+    // analyzedAt was already set. Distinguish with a single follow-up read.
+    const row = await prisma.thread.findUnique({
+      where: { id: threadId },
+      select: { shop: true, analyzedAt: true },
+    });
+    if (!row || row.shop !== shop) {
+      return { counted: false, alreadyAnalyzed: false };
+    }
+    return { counted: false, alreadyAnalyzed: row.analyzedAt !== null };
+  }
+
+  // Increment the shop's usage counter for the current period.
+  const periodStart = getCurrentPeriodStart();
+  await prisma.billingUsage.upsert({
+    where: { shop_periodStart: { shop, periodStart } },
+    create: { shop, periodStart, analyzedThreadsCount: 1 },
+    update: { analyzedThreadsCount: { increment: 1 } },
+  });
+
+  return { counted: true, alreadyAnalyzed: false };
+}
