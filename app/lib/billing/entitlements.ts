@@ -164,7 +164,7 @@ async function buildPaidEntitlements(input: {
 }): Promise<Entitlements> {
   const plan = PLANS[input.planId];
   const usage = await getUsage(input.shop, input.now);
-  const quotaStatus = computeQuotaStatus(usage.count, plan.draftsPerMonth, usage.periodStart);
+  const quotaStatus = computeQuotaStatus(usage.count, plan.analyzedThreadsPerMonth, usage.periodStart);
 
   return {
     shop: input.shop,

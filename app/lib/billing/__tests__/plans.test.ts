@@ -10,7 +10,7 @@ describe('plans catalog', () => {
   it('starter plan has expected limits', () => {
     expect(PLANS.starter.id).toBe('starter');
     expect(PLANS.starter.priceUsd).toBe(9);
-    expect(PLANS.starter.draftsPerMonth).toBe(50);
+    expect(PLANS.starter.analyzedThreadsPerMonth).toBe(50);
     expect(PLANS.starter.maxMailboxes).toBe(1);
     expect(PLANS.starter.advancedDashboard).toBe(false);
     expect(PLANS.starter.dashboardMaxRangeDays).toBe(7);
@@ -19,14 +19,14 @@ describe('plans catalog', () => {
   it('pro plan has expected limits', () => {
     expect(PLANS.pro.id).toBe('pro');
     expect(PLANS.pro.priceUsd).toBe(49);
-    expect(PLANS.pro.draftsPerMonth).toBe(500);
+    expect(PLANS.pro.analyzedThreadsPerMonth).toBe(500);
     expect(PLANS.pro.maxMailboxes).toBe(3);
     expect(PLANS.pro.advancedDashboard).toBe(true);
     expect(PLANS.pro.dashboardMaxRangeDays).toBe(90);
   });
 
   it('trial plan grants pro-level access for 14 days', () => {
-    expect(PLANS.trial.draftsPerMonth).toBe(Infinity);
+    expect(PLANS.trial.analyzedThreadsPerMonth).toBe(Infinity);
     expect(PLANS.trial.maxMailboxes).toBe(1);
     expect(PLANS.trial.advancedDashboard).toBe(true);
     expect(PLANS.trial.dashboardMaxRangeDays).toBe(90);

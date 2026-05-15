@@ -6,8 +6,12 @@
  * structural data (limits, features) needed by entitlement checks.
  *
  * Trial is treated here as a "plan" for entitlement purposes (pro-level
- * features, illimited drafts, 14 days). The actual trial countdown lives
+ * features, illimited analyses, 14 days). The actual trial countdown lives
  * in `trial.ts`.
+ *
+ * `analyzedThreadsPerMonth` is the per-period billing cap. One unit is
+ * consumed the first time Tier 3 succeeds on a Thread; refines and
+ * regenerations are free within a conversation.
  */
 
 export type PlanId = 'trial' | 'starter' | 'pro';
@@ -15,7 +19,7 @@ export type PlanId = 'trial' | 'starter' | 'pro';
 export interface PlanDefinition {
   id: PlanId;
   priceUsd: number;
-  draftsPerMonth: number;
+  analyzedThreadsPerMonth: number;
   maxMailboxes: number;
   advancedDashboard: boolean;
   dashboardMaxRangeDays: number;
@@ -27,7 +31,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
   trial: {
     id: 'trial',
     priceUsd: 0,
-    draftsPerMonth: Infinity,
+    analyzedThreadsPerMonth: Infinity,
     maxMailboxes: 1,
     advancedDashboard: true,
     dashboardMaxRangeDays: 90,
@@ -36,7 +40,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
   starter: {
     id: 'starter',
     priceUsd: 9,
-    draftsPerMonth: 50,
+    analyzedThreadsPerMonth: 50,
     maxMailboxes: 1,
     advancedDashboard: false,
     dashboardMaxRangeDays: 7,
@@ -44,7 +48,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
   pro: {
     id: 'pro',
     priceUsd: 49,
-    draftsPerMonth: 500,
+    analyzedThreadsPerMonth: 500,
     maxMailboxes: 3,
     advancedDashboard: true,
     dashboardMaxRangeDays: 90,
