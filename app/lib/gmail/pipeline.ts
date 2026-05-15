@@ -830,6 +830,12 @@ export async function backfillResolvedIntents(
         lastAnalyzedAt: new Date(),
       },
     });
+    if (anchor.canonicalThreadId) {
+      const { markThreadAnalyzedIfFirst } = await import("../billing/usage");
+      await markThreadAnalyzedIfFirst(anchor.canonicalThreadId, shop).catch((err) => {
+        console.error(`[billing] markThreadAnalyzedIfFirst failed for thread=${anchor.canonicalThreadId}:`, err);
+      });
+    }
     // Recompute thread state immediately so Thread.structuredState reflects
     // the new analysisResult. Critical for the pre-Pass-1 call: Pass 1's
     // recomputeThreadState reads analysisResult to decide noReplyNeeded, and
@@ -1180,6 +1186,14 @@ export async function classifyAndDraft(
         lastAnalyzedAt: new Date(),
       },
     });
+    if (record.canonicalThreadId) {
+      const { markThreadAnalyzedIfFirst } = await import("../billing/usage");
+      await markThreadAnalyzedIfFirst(record.canonicalThreadId, shop).catch((err) => {
+        // Don't fail the analysis if billing increment fails — the analysis
+        // is real and useful. The skipped metric will flag the discrepancy.
+        console.error(`[billing] markThreadAnalyzedIfFirst failed for thread=${record.canonicalThreadId}:`, err);
+      });
+    }
     if (record.canonicalThreadId) {
       try {
         await recomputeThreadState(record.canonicalThreadId, {
