@@ -2192,8 +2192,16 @@ function DraftBlock({ email, threadSenderEmail }: {
                   }}
                 />
               </div>
-              <div style={{ minWidth: 120, display: "flex", justifyContent: "flex-end" }}>
-                <s-button type="submit" variant="secondary" loading={submitting} disabled={submitting}>
+              <div style={{ width: 140, display: "flex" }}>
+                <s-button
+                  type="submit"
+                  variant="secondary"
+                  loading={submitting}
+                  disabled={submitting}
+                  // Polaris web-component typings omit `style`, but the host element
+                  // honors inline styles so the button stretches across its flex column.
+                  {...({ style: { flex: 1, display: "block", width: "100%" } } as Record<string, unknown>)}
+                >
                   {submitting
                     ? t(wantsRefine ? "inbox.refiningButton" : "inbox.regeneratingButton")
                     : t(wantsRefine ? "inbox.refineButton" : "inbox.regenerateButton")}
