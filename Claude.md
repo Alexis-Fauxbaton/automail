@@ -1,337 +1,301 @@
 # CLAUDE.md
 
+> Last refreshed: 2026-05-15 — covers main + the in-flight billing branch (`feature/billing-per-conversation`). Update when major architecture changes ship.
+
 ## Project
 Shopify app that helps human support agents answer customer emails faster.
 
 Target: public distribution on the Shopify App Store, multi-tenant (multiple merchants / multiple shops).
 
-The codebase originally started as a single-store internal tool. We are now moving it toward public App Store readiness. Until the multi-tenant infra is finalized, the product remains usable single-store, but every new change must assume multi-shop from now on.
+Originally a single-store internal tool; now in the run-up to public App Store launch. Every new change must assume multi-shop.
 
-## Product goal
-The app helps a human support agent answer customer emails faster.
+## Product
 
-At this stage:
-- the user manually pastes the email subject
-- the user manually pastes the email body
-- the app analyzes the message
-- the app retrieves relevant facts from Shopify
-- if needed, the app uses tracking information to enrich the answer
-- the app generates a cautious draft reply
+The app pulls support emails from the merchant's Gmail / Zoho / Outlook inbox, classifies them, matches each to a Shopify order, fetches tracking, and pre-drafts a reply. The merchant reviews, edits, refines, and sends from their own mailbox (we never send mail for them).
 
 This is a support copilot, not a full CRM.
 
-## MVP scope
-The MVP must support these flows:
-- `where_is_my_order` - Where is my order / order tracking request
-- `delivery_delay` - Delivery delay / late delivery, including stuck tracking or no movement updates
-- `marked_delivered_not_received` - Package marked as delivered but not received
-- `damaged_product` - Product or item received damaged, broken, or unusable
-- `order_error` - Wrong item, wrong size/color, missing item, or preparation mistake
-- `refund_request` - Refund or reimbursement request
-- `pre_purchase_question` - Question before buying or placing an order
-- `unknown` - Unknown / manual review case
+Today the merchant:
+- connects a mailbox via OAuth (Gmail / Zoho / Outlook)
+- auto-sync pulls new mail every 5 min by default
+- the pipeline classifies + analyses each thread automatically
+- the merchant opens the inbox, reviews each thread, generates / refines a draft, copies to their mail client to send
 
-These exact values are the canonical support intents. Analyses keep a primary `intent` for compatibility and an ordered `intents` array when several intents apply to the same email or conversation.
+## Supported support intents (canonical)
 
-Intent is classified at the **thread level**, not per message. `buildThreadContext` concatenates all messages in the thread (labeled `--- Earlier message ---` / `--- Latest message ---`) and sends the full block to the LLM. The result is stored on the latest incoming email of the thread (the "semantic anchor") and displayed as the thread's badge.
+- `where_is_my_order` — Where is my order / order tracking request
+- `delivery_delay` — Delivery delay / late delivery, including stuck tracking or no movement updates
+- `marked_delivered_not_received` — Package marked as delivered but not received
+- `damaged_product` — Product or item received damaged, broken, or unusable
+- `order_error` — Wrong item, wrong size/color, missing item, or preparation mistake
+- `refund_request` — Refund or reimbursement request
+- `pre_purchase_question` — Question before buying or placing an order
+- `unknown` — Unknown / manual review case
 
-The MVP must:
-- extract useful identifiers from the message
-- search Shopify for matching orders
-- retrieve order, customer, fulfillment, and tracking information
-- resolve tracking sources when needed
-- generate a professional draft reply based on verified facts
-- clearly show confidence and ambiguities
+Analyses carry a primary `intent` plus an ordered `intents` array when several intents apply.
 
-## Out of scope for MVP
+Intent is classified at the **thread level**, not per message. `buildThreadContext` concatenates all messages in the thread (labelled `--- Earlier message ---` / `--- Latest message ---`) and sends the full block to the LLM. The result is stored on the latest incoming email (the "semantic anchor") and displayed as the thread's badge.
+
+## Out of scope
+
 Do not build any of the following unless explicitly requested:
-- Gmail integration
-- Outlook integration
-- automatic email sending
-- automatic refunds
-- automatic order edits
-- live chat
+- Automatic email sending (the merchant always reviews + sends manually)
+- Automatic refunds
+- Automatic order edits
+- Live chat
 - WhatsApp / Instagram / omnichannel support
-- advanced analytics dashboards
-- background agents doing autonomous actions
+- Background agents doing autonomous actions
+- Generic CRM abstractions
+
+(Gmail / Zoho / Outlook are NOT out of scope — they shipped.)
 
 ## Core principle
-The app must behave as a truth-seeking support assistant.
 
-Order of operations:
-1. Parse the email subject and body
-2. Detect likely intent
-3. Extract identifiers
-4. Search Shopify
-5. Retrieve verified order and fulfillment facts
-6. Resolve tracking source if relevant
-7. Retrieve tracking facts if possible
-8. Separate verified facts from assumptions
-9. Generate a careful draft reply
+Truth-seeking. The app must:
+- never invent Shopify data
+- never invent tracking status
+- never invent a carrier
+- never claim a refund was issued unless verified
+- never claim a parcel is lost unless the source clearly supports it
+- if data is missing, say it is missing
+- if several possible orders exist, show ambiguity clearly
+- if confidence is low, say so
+- prefer structured data over scraping
+- use scraping only as a fallback, behind a dedicated interface
 
-## Non-negotiable rules
-- Never invent Shopify data
-- Never invent tracking status
-- Never invent a carrier
-- Never claim a refund was issued unless verified
-- Never claim a parcel is lost unless the source clearly supports it
-- If data is missing, say it is missing
-- If several possible orders exist, show ambiguity clearly
-- If confidence is low, say so
-- Prefer structured data over scraping
-- Use scraping only as a fallback and isolate it in a dedicated module
+## High-level architecture
 
-## Technical stack
-Use the existing Shopify app scaffold.
+**Stack:** TypeScript, React Router 7, Prisma (Postgres on Neon), Shopify Admin API, OpenAI SDK.
 
-Preferred stack:
-- Shopify app scaffold generated with Shopify CLI
-- React Router
-- TypeScript
-- Shopify Admin API
-- simple server-side modules
-- minimal dependencies
-- clean modular architecture
+**Layout (key modules):**
 
-## Coding style
-- TypeScript only
-- prioritize readability over cleverness
-- small focused modules
-- avoid large monolithic files
-- avoid business logic inside UI components
-- prefer pure functions where possible
-- keep data contracts explicit
-- add types for all major domain objects
-- add comments only where they actually help
+```
+app/
+  routes/                      # React Router routes (loaders + actions)
+    app.inbox.tsx              # the main support inbox UI
+    app.dashboard.tsx          # KPIs, charts
+    app.metrics.tsx            # internal operational dashboard (gated)
+    metrics.tsx                # Prometheus /metrics endpoint
+    healthz.tsx                # /healthz for platform probes
+    webhooks.*.tsx             # Shopify webhooks (uninstall, redact, ...)
+  lib/
+    gmail/, zoho/, outlook/    # mail provider adapters + OAuth
+    mail/                      # provider-agnostic ingest, sync, job queue
+    support/                   # intent classifier, identifier extraction,
+                               # order search, tracking, draft generation,
+                               # thread state, manual classification,
+                               # refine-context
+    billing/                   # entitlements, plans, usage, quota,
+                               # catchup zone, scheduled changes
+    metrics/                   # in-process Prometheus registry +
+                               # SQL-backed stats for the dashboard
+    util/                      # circuit breaker, semaphore, with-timeout
+    log/                       # createLogger + PII sanitizer
+    onboarding/                # onboarding state + guard
+    attachments/               # storage + cleanup
+    net/                       # safe-fetch (SSRF guard)
+    llm/                       # OpenAI client with semaphore + breaker
+  components/
+    billing/                   # quota banner, suspended banner,
+                               # quota exceeded modal, top-bar counter
+    onboarding/                # checklist + wizard steps
+    ui/                        # shared bits (cards, icons, etc.)
+    ClassificationEditModal.tsx
+    SupportAnalysisDisplay.tsx
+    RichDraftEditor.tsx
+  i18n/                        # react-i18next setup + en/fr locales
+prisma/                        # schema + migrations
+```
 
-## Architecture guidelines
-Keep the project modular.
+UI stays thin: routes orchestrate server actions, JSX components render. Business logic lives in `app/lib/*`.
 
-Suggested logical modules:
-- `message-parser`
-- `intent-classifier`
-- `identifier-extractor`
-- `shopify-order-search`
-- `shopify-order-normalizer`
-- `tracking-provider-resolver`
-- `tracking-service`
-- `response-draft-generator`
-- `confidence-scoring`
+## Auto-sync pipeline
 
-UI should stay thin and orchestrate server actions only.
+When a new message arrives in a connected mailbox, the worker runs three tiers (called Pass 1 / 2 / 3 in the code):
 
-## Data flow
-Expected high-level flow:
-1. User submits subject + body
-2. Parse and extract:
-   - order number
-   - customer email
-   - customer name
-   - tracking number
-   - keywords and support intent
-3. Search Shopify in this priority order:
-   - order number
-   - customer email
-   - customer name
-   - tracking number
-4. If order found, retrieve:
-   - order number
-   - order date
-   - customer name
-   - customer email
-   - order status
-   - financial status if useful
-   - fulfillment status
-   - tracking numbers
-   - tracking URLs
-   - carrier if present
-   - line items if useful
-5. If tracking is relevant:
-   - use Shopify tracking URL first if available
-   - otherwise use carrier info if available
-   - otherwise infer likely provider from tracking number pattern
-   - use external tracking lookup only if needed
-6. Build a structured result:
-   - detected primary intent
-   - all detected intents when a message/conversation contains several support intents
-   - extracted identifiers
-   - verified Shopify facts
-   - verified tracking facts
-   - ambiguities / warnings
-   - confidence level
-   - draft reply
+1. **Pass 1 — Tier 1 (free regex prefilter)**: ingest the message, run free heuristics (blacklist, store-domain check, customer-email match). Marks the row `ingested` if it passes, or `classified:filtered:<reason>` if not.
+2. **Pass 2 — Tier 2 (LLM classifier)**: for threads touched by new messages, the **latest incoming** that passed Tier 1 gets sent to the LLM classifier with the full thread context. Outputs `support_client | probable_non_client | incertain`.
+3. **Pass 2 — Tier 3 (full support analysis)**: only for `support_client`. Runs the orchestrator (`analyzeSupportEmail`): LLM parser (intent + identifiers), Shopify order search, tracking resolution + 17track, optional crawl, returns the rich `SupportAnalysis`. Draft generation is skipped during auto-sync; the merchant explicitly triggers it from the inbox.
+
+Re-analysis triggers:
+- a new customer message in an existing thread re-runs Tier 3 on the new latest;
+- `refresh-stale-analyses` runs every minute and refreshes "active" threads when their analysis is older than 1h (lighter path: no LLM intent re-classify, just Shopify + 17track);
+- `handleEditThreadIdentifiers` triggers a lightweight refresh on the anchor after the merchant edits identifiers (also no LLM intent re-classify).
+
+`reanalyzeEmail` (full Tier 3 including LLM intent + draft) runs when the merchant clicks "Generate draft" on an unanalysed thread or explicitly clicks "Reset classification".
 
 ## Confidence model
-Use a simple confidence model:
-- `high`
-- `medium`
-- `low`
 
-Examples:
-- high: exact order match + clear fulfillment/tracking state
-- medium: likely order match but partial tracking info
-- low: ambiguous order match or insufficient data
+- `high`  — exact order match + clear fulfillment/tracking state
+- `medium` — likely order match but partial tracking info
+- `low`   — ambiguous order match or insufficient data
 
-## Draft reply rules
-Draft replies must be:
-- professional
-- concise
-- factual
-- careful
-- ready for human copy/paste
+## Draft generation
 
-Draft replies must:
+The merchant interacts with drafts through a single merged affordance (the legacy "Regenerate" + "Refine with AI" buttons were unified):
+
+- Empty prompt → `handleRedraft` path: re-emit the draft from the existing `analysisResult` (no LLM intent re-run, just a fresh `generateLLMDraft` call).
+- Non-empty prompt → `handleRefine` path: LLM rewrite with the merchant's instructions, fed a curated text block (`buildRefineContext` summarises order + tracking + key warnings).
+
+Cmd/Ctrl+Enter submits. The button label flips between `Regenerate` / `Refine` (idle) and `Regenerating…` / `Refining…` (submitting). Native HTML `<button>` styled to match Polaris, dimensions locked (140 × 60 px) so the layout doesn't shift between labels.
+
+Drafts must always:
 - rely on verified facts first
 - mention uncertainty when needed
 - avoid overpromising
 - avoid saying anything unsupported by data
 
-## UI requirements
-Keep the interface simple.
-
-Main page must include:
-- email subject field
-- email body field
-- analyze button
-
-Results area must include:
-- detected intent
-- extracted identifiers
-- matched Shopify order(s)
-- fulfillment and tracking info
-- confidence level
-- warnings / ambiguities
-- draft reply
-
-No complex design work for MVP.
-Functionality first.
-
 ## Shopify access rules
-Only request and use the minimum necessary Shopify scopes.
 
-Current read scopes (see `shopify.app.toml`):
+Only the minimum read scopes. See `shopify.app.toml`:
 - `read_orders`
 - `read_all_orders`
 - `read_customers`
 - `read_fulfillments`
 
-Do not add write capabilities unless explicitly requested.
+No write scopes unless a feature explicitly requires them. App Store review penalises unjustified scopes.
 
-Because we target the public App Store, access to protected customer data (email, name, address, phone) requires the official Shopify protected-customer-data configuration and approval. Any change that broadens data usage must be reflected in the app listing and the privacy policy.
+Access to protected customer data (email, name, address, phone) requires Shopify's protected-customer-data configuration and approval. Any scope change must be reflected in the listing and the privacy policy.
 
 ## Public distribution requirements
-The app targets the Shopify App Store. Non-negotiable compliance items:
 
-- **Compliance webhooks** — `customers/data_request`, `customers/redact`, `shop/redact` must be registered and implemented (see `shopify.app.toml` and `app/routes/webhooks.*`).
+The app targets the Shopify App Store. Non-negotiable compliance items:
+- **Compliance webhooks** — `customers/data_request`, `customers/redact`, `shop/redact` registered + implemented ([app/routes/webhooks.*](app/routes/)).
 - **Privacy policy** — public route at `/privacy` ([app/routes/privacy.tsx](app/routes/privacy.tsx)), kept in sync with what the app actually stores.
-- **Support channel** — a real support email advertised in the listing and the privacy policy.
+- **Support channel** — a real support email advertised in the listing + privacy policy.
 - **Data minimization** — never store more customer data than strictly needed to draft a reply.
 - **Multi-tenant isolation** — every query, job, cache, and log entry must be scoped per `shop`.
 
 ## Multi-tenant rules
-Assume the app runs for many shops in parallel:
 
-- Every database row that holds shop-scoped data has a `shop` column and is queried with it.
-- Background jobs (sync, backfill, auto-sync) must lock per `shop` — never globally.
+Assume many shops in parallel:
+- Every shop-scoped DB row has a `shop` column and is queried with it.
+- Background jobs (sync, backfill, auto-sync, recompute, reclassify, analyze_thread) hold a per-shop lock via `SyncJob.shop NOT IN (running)` in the DB-level claim query. No global locks.
+- The auto-sync loop itself uses a Postgres advisory lock (`pg_try_advisory_lock`) for leader election across replicas (`AUTOSYNC_LEADER_LOCK=off` to disable).
 - No in-memory singleton may hold shop-scoped state across shops.
 - Errors and metrics are tagged by `shop`.
 - A bug in one shop must never stall sync for other shops.
 
-## Tracking integration rules
-Tracking lookup must be extensible.
+## Tracking integration
 
-Requirements:
-- create a provider resolution layer
-- isolate each tracking source in its own adapter/service
-- prefer Shopify-provided tracking URLs or carrier data
-- if scraping is introduced, keep it behind a dedicated interface
-- clearly label fallback-derived data as less reliable
-- automatic and manual mail sync must refresh active support analyses/tracking when `lastAnalyzedAt` is missing or older than 24 hours
-- draft regeneration and refinement must also refresh analysis/tracking first when the last update is older than 1 hour
-- do not refresh tracking for threads classified as `non_support`, `resolved`, or `no_reply_needed`
-- the last analysis/tracking update time must remain visible next to the Tracking section title
-- 17track retries are adaptive: a fulfillment whose last 17track attempt errored is refreshed after 10 min; a "pending" one after 5 min; "ok" / "skipped" follow the 1h auto-refresh cadence (see `pickCutoffForAnalysis` in `refresh-stale-analyses.ts`)
-- a process-wide circuit breaker (`seventeen-track-breaker.ts`) suspends 17track calls for 15 min after 5 failures in any 10-min window, to protect the shared API quota across shops
+- Provider resolution layer in `app/lib/support/tracking/provider-resolver.ts`.
+- Each tracking source isolated in its own adapter (`tracking/adapters/*`).
+- Prefer Shopify-provided tracking URLs or carrier data.
+- Scraping is fallback-only, behind a dedicated interface (`tracking/crawl/`).
+- Auto and manual mail sync refresh active support analyses/tracking when `lastAnalyzedAt` is missing or older than ~1h (adaptive — see `refresh-stale-analyses.ts:pickCutoffForAnalysis`).
+- Draft regen / refine fall back to the same lightweight refresh (Shopify + 17track only, no LLM) inside `maybeRefreshAnalysis` when the analysis is older than 10 minutes.
+- Do NOT refresh tracking for threads classified `non_support`, `resolved`, or `no_reply_needed`.
+- The last analysis/tracking update time is visible next to the Tracking section title.
+- 17track adaptive retries: a fulfillment whose last 17track attempt errored is refreshed after 10 min; `pending` after 5 min; `ok` / `skipped` follow the 1h cadence.
+- A process-wide circuit breaker ([app/lib/support/tracking/seventeen-track-breaker.ts](app/lib/support/tracking/seventeen-track-breaker.ts)) suspends 17track calls for 15 min after 5 failures in any 10-min window, to protect the shared API quota across shops. Built on the generic [app/lib/util/circuit-breaker.ts](app/lib/util/circuit-breaker.ts).
 
-Do not hardcode one giant tracking logic block inside a route or component.
+## Billing
 
-## Development process
-When working on changes:
-1. inspect the existing scaffold first
-2. propose the minimal implementation plan
-3. identify files to create or modify
-4. implement in small steps
-5. explain meaningful changes
-6. avoid broad refactors unless needed
+Shopify Billing API drives the subscription state. Server-side mirror in `app/lib/billing/`:
+- `plans.ts` — static catalog (trial / starter / pro), prices, monthly quota, mailbox limit, advanced-dashboard flag.
+- `entitlements.ts` — single facade `resolveEntitlements({ shop, admin })` that composes plan + trial + usage + mailbox count + internal-bypass flag. Always call this from loaders/actions; never bypass.
+- `usage.ts` — per-period counters with atomic compare-and-swap reserve (Postgres-side raw SQL).
+- `subscription.ts` — Shopify Billing API integration + 60-second cache.
+- `catchup.ts` — `isWithin48hZone` helper for catch-up logic after suspension lifts.
+- `scheduled-changes.ts` — downgrades scheduled for `effectiveAt`.
 
-Do not rewrite the entire scaffold unless necessary.
+When quota is exhausted, `isSyncSuspended` flips true: auto-sync pauses for that shop (job is skipped), `SyncSuspendedBanner` shows in the inbox, user actions return `quotaExceeded`.
+
+**Pricing model state (2026-05-15):** the in-flight `feature/billing-per-conversation` branch is switching the metered unit from "AI draft generated" to "support conversation analyzed" — refines and regenerations become free within a conversation. Once merged, `BillingUsage.draftsCount` becomes `analyzedThreadsCount`, `Plan.draftsPerMonth` becomes `analyzedThreadsPerMonth`, and the single billing-write site is `markThreadAnalyzedIfFirst` (atomic per-thread). Track in [docs/superpowers/specs/2026-05-14-billing-model-per-conversation-design.md](docs/superpowers/specs/2026-05-15-billing-model-per-conversation-design.md).
+
+## Observability & operations
+
+- **In-process metrics registry** ([app/lib/metrics/registry.ts](app/lib/metrics/registry.ts)) — counters, gauges, histograms, exposed via Prometheus text format on `GET /metrics` (gated by `METRICS_TOKEN` env var) and via JSON snapshot on the internal `/app/metrics` dashboard (gated by `ShopFlag.isInternal`).
+- **OpenAI client** ([app/lib/llm/client.ts](app/lib/llm/client.ts)) — global semaphore (`OPENAI_MAX_CONCURRENT`, default 20), 429 retry-after handling, dedicated circuit breaker (8 non-429 failures in 5 min → opens for 2 min). Every call goes through `trackedChatCompletion` and is metricised.
+- **Auto-sync** ([app/lib/mail/auto-sync.ts](app/lib/mail/auto-sync.ts)) — leader-lock election, configurable concurrency (`AUTOSYNC_CONCURRENCY`, default 4), per-job heartbeat to protect long-running jobs from zombie reclaim, lightweight entitlement check inside `runJob` rather than the scheduling loop.
+- **Job queue** ([app/lib/mail/job-queue.ts](app/lib/mail/job-queue.ts)) — `SyncJob` rows, `FOR UPDATE SKIP LOCKED` claim, per-shop running lock, exponential backoff retries, zombie reclaim every tick. Job kinds: `sync | backfill | resync | recompute | reclassify | analyze_thread`.
+- **/healthz** ([app/routes/healthz.tsx](app/routes/healthz.tsx)) — lightweight DB ping for platform probes.
+- **Rate limit** ([app/lib/rate-limit.ts](app/lib/rate-limit.ts)) — Postgres-backed sliding-window per-shop / per-IP limits for action endpoints.
+- **Structured logger** ([app/lib/log/logger.ts](app/lib/log/logger.ts)) — `createLogger({ shop, mod, ... })`. Replacing remaining `console.*` calls is ongoing (see runbook).
+
+## Mail providers
+
+Three connectors, each behind the same `MailClient` interface ([app/lib/mail/types.ts](app/lib/mail/types.ts)):
+- **Gmail** ([app/lib/gmail/](app/lib/gmail/)) — Google OAuth, History API for incremental sync.
+- **Zoho** ([app/lib/zoho/](app/lib/zoho/)) — Zoho Mail OAuth, timestamp-based incremental sync (no native History API).
+- **Outlook** ([app/lib/outlook/](app/lib/outlook/)) — Microsoft Graph OAuth, delta token-based sync.
+
+OAuth state is HMAC-signed and TTL-bound ([app/lib/mail/oauth-state.ts](app/lib/mail/oauth-state.ts)) — never trust the callback `state` blindly.
+
+Outgoing-message detection is deterministic ([app/lib/mail/outgoing-detection.ts](app/lib/mail/outgoing-detection.ts) — uses `MailConnection.outgoingAliases`, a JSON array of emails the merchant can send from).
+
+## Coding style
+
+- TypeScript only.
+- Prioritise readability over cleverness.
+- Small focused modules.
+- Avoid large monolithic files (a notable exception is `app/routes/app.inbox.tsx` which has grown — splits are welcome when touching nearby code).
+- Avoid business logic inside UI components.
+- Prefer pure functions where possible.
+- Keep data contracts explicit (types for every domain object).
+- Add comments only where they actually help, especially WHY (constraints, invariants, past incidents) rather than WHAT.
+
+## Confidence boundaries & error handling
+
+- Fail safely.
+- Return clear error states.
+- Distinguish: no match found vs ambiguous match vs Shopify API failure vs tracking lookup failure vs parsing failure.
+- Never hide uncertainty behind a confident UI message.
+
+## Testing
+
+- Unit tests: `npm test` (vitest, no DB).
+- Integration tests: `npm run test:integration` (vitest, real Postgres test DB via `DATABASE_URL`).
+- E2E tests: `npm run test:e2e` (Playwright, scaffolded but rarely run — the auth bypass mode is documented in [app/shopify.server.ts](app/shopify.server.ts)).
+- Typecheck: `npm run typecheck` (some pre-existing errors in `app.inbox.tsx` and a few scripts are tracked in `TECHNICAL_DEBT.md`; don't fix unrelated ones in your PR).
+
+Test discipline:
+- Multi-tenant tests use `TEST_SHOP = "integration-test.myshopify.com"` from `app/lib/__tests__/integration/helpers/db.ts`.
+- Always assert shop scoping when testing handlers that take an `emailId` / `threadId`.
+- Concurrency-sensitive code (counters, locks) needs explicit `Promise.all` racing tests, not just sequential coverage.
 
 ## Dependency policy
-- prefer built-in platform capabilities when reasonable
-- avoid adding packages for trivial tasks
-- keep dependencies minimal
-- if adding a dependency, explain why it is needed
 
-## Error handling
-- fail safely
-- return clear error states
-- distinguish between:
-  - no match found
-  - ambiguous match
-  - Shopify API failure
-  - tracking lookup failure
-  - parsing failure
+- Prefer built-in platform capabilities when reasonable.
+- Avoid adding packages for trivial tasks.
+- Keep dependencies minimal.
+- If adding a dependency, explain why in the PR.
 
-Never hide uncertainty behind a confident UI message.
+## Working style
 
-## Testing guidance
-For MVP, prioritize pragmatic testing.
+If asked to implement something:
+1. Inspect the existing scaffold first.
+2. Propose the minimal implementation plan.
+3. Identify files to create or modify.
+4. Implement in small steps.
+5. Explain meaningful changes.
+6. Avoid broad refactors unless needed.
 
-At minimum:
-- test parsing of email subject/body
-- test extraction of order numbers and emails
-- test Shopify search logic
-- test confidence scoring
-- test draft generation for common support cases
-
-Use small deterministic test cases when possible.
-
-## Sample product mindset
-This is not a generic AI chatbot.
-
-This is an operational support tool that helps answer real customer requests using real store data.
-
-The most important thing is not sounding smart.
-The most important thing is being correct, useful, and safe.
-
-## What to avoid
-Avoid:
-- over-engineering
-- generic CRM abstractions too early
-- adding background automation too early
-- mixing UI code and domain logic
-- using AI for facts that can be retrieved from Shopify
-- using scraping as the default strategy
-
-## First implementation priority
-Build the simplest useful vertical slice:
-- page with subject + body input
-- parser and extractor
-- Shopify order search
-- display of verified facts
-- simple confidence level
-- simple draft reply generation
-
-Only after that should tracking enrichment be expanded.
+The brainstorming / writing-plans / subagent-driven-development skills are the standard workflow for non-trivial work — use them.
 
 ## Deferred runbooks
+
 When relevant, follow these prepared step-by-step plans rather than re-deriving them:
 - **Structured logging migration** (start the day a real log backend is wired — Better Stack / Datadog / Axiom / etc.): [docs/logging-migration.md](docs/logging-migration.md)
 - **Reading the operational dashboard** (`/app/metrics` — what each section means, when to look, how to read breakers / pipeline health / DB pool): [docs/metrics-dashboard.md](docs/metrics-dashboard.md)
 
-## Working style
-If asked to implement something:
-- think step by step
-- preserve the current scaffold where possible
-- propose minimal viable architecture first
-- then implement incrementally
+## Specs + plans archive
+
+Active specs and implementation plans live under [docs/superpowers/](docs/superpowers/). The recent ones:
+- 2026-05-02 Outlook integration
+- 2026-05-07 Dashboard SAV v1 handoff
+- 2026-05-14 Refine context auto-refresh (shipped)
+- 2026-05-15 Billing model per conversation (in flight on `feature/billing-per-conversation`)
+
+Past technical debt sits in [TECHNICAL_DEBT.md](TECHNICAL_DEBT.md).
+
+## What to avoid
+
+- Over-engineering before the use case is concrete
+- Generic CRM abstractions
+- Adding background automation eagerly (we already have plenty)
+- Mixing UI code and domain logic
+- Using AI for facts that can be retrieved from Shopify
+- Using scraping as the default strategy
+- Touching the prod Neon DB from local dev (DATABASE_URL pointed at prod = trouble)
+- Committing changes that span two unrelated concerns
