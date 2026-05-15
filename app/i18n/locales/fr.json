@@ -395,8 +395,8 @@
       "cancelScheduled": "Annuler ce changement"
     },
     "plan": {
-      "draftsPerMonth_one": "{{count}} brouillon / mois",
-      "draftsPerMonth_other": "{{count}} brouillons / mois",
+      "analyzedThreadsPerMonth_one": "{{count}} conversation / mois",
+      "analyzedThreadsPerMonth_other": "{{count}} conversations / mois",
       "maxMailboxes_one": "{{count}} boîte mail connectée",
       "maxMailboxes_other": "{{count}} boîtes mail connectées",
       "advancedDashboard_one": "Dashboard avancé — jusqu'à {{count}} jour d'historique",
@@ -413,7 +413,7 @@
     "trialDaysLeft_one": "Essai — {{count}} jour restant",
     "trialDaysLeft_other": "Essai — {{count}} jours restants",
     "trialExpired": "Essai terminé",
-    "draftsCount": "{{used}} / {{limit}} brouillons",
+    "analyzedThreadsCount": "{{used}} / {{limit}} conversations",
     "upgradeCta": "Passer à Pro",
     "choosePlan": "Choisir un plan",
     "dashboard": {
@@ -432,15 +432,15 @@
       "expiredBanner": "Votre essai est terminé. Choisissez un plan pour continuer à utiliser Automail."
     },
     "banner": {
-      "warning": "Vous avez utilisé {{used}} de vos {{limit}} brouillons ce mois-ci.",
-      "critical": "Presque à court : {{used}} brouillons utilisés sur {{limit}} ce mois-ci.",
+      "warning": "Vous avez analysé {{used}} conversations support sur {{limit}} ce mois-ci.",
+      "critical": "Bientôt à court : {{used}} conversations support analysées sur {{limit}} ce mois-ci.",
       "exceeded": "Quota atteint ({{used}} / {{limit}}) — sync suspendue. Passez à un plan supérieur pour continuer."
     },
     "modal": {
-      "exceededTitle": "Quota atteint pour ce mois ({{used}} / {{limit}} brouillons)",
+      "exceededTitle": "Quota atteint pour ce mois ({{used}} / {{limit}} conversations)",
       "exceededBody": "Passez à Pro pour continuer immédiatement, ou attendez le 1er du mois prochain pour la réinitialisation.",
-      "lastUsedTitle": "Vous venez d'utiliser votre dernier brouillon du mois",
-      "lastUsedBody": "{{used}} brouillons utilisés sur {{limit}}. Génération en pause jusqu'au prochain mois ou upgrade.",
+      "lastUsedTitle": "Vous avez analysé toutes les conversations support de votre forfait",
+      "lastUsedBody": "{{used}} conversations analysées sur {{limit}}. L'analyse est en pause jusqu'au prochain mois ou un upgrade.",
       "later": "Plus tard",
       "viewPlans": "Voir les plans"
     },

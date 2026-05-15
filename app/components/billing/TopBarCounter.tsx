@@ -6,7 +6,7 @@ const DISMISS_KEY = (shop: string) => `automail_floating_counter_dismissed_${sho
 
 /**
  * Permanent counter visible on every page of the app.
- * Shows: "47 / 50 drafts" with color pastille, or "Trial — 9 days left", or "0 / 50 — quota reached".
+ * Shows: "47 / 50 conversations" with color pastille, or "Trial — 9 days left", or "0 / 50 — quota reached".
  *
  * Internal shops (state=internal) hide the widget entirely (would always read 0/∞).
  *
@@ -53,7 +53,7 @@ export function TopBarCounter({ variant = 'inline' }: { variant?: 'inline' | 'fl
       icon = ICON_DRAFT;
       const used = ent.quotaStatus.used;
       const limit = ent.quotaStatus.limit;
-      label = t('billing.draftsCount', { used, limit: Number.isFinite(limit) ? limit : '∞' });
+      label = t('billing.analyzedThreadsCount', { used, limit: Number.isFinite(limit) ? limit : '∞' });
     }
     return (
       <button
@@ -121,7 +121,7 @@ export function TopBarCounter({ variant = 'inline' }: { variant?: 'inline' | 'fl
     <div style={wrapperStyle}>
       <span style={dot} />
       <span style={styles.label}>
-        {t('billing.draftsCount', { used, limit: Number.isFinite(limit) ? limit : '∞' })}
+        {t('billing.analyzedThreadsCount', { used, limit: Number.isFinite(limit) ? limit : '∞' })}
       </span>
       {dismissBtn}
     </div>
