@@ -1512,6 +1512,13 @@ export async function reanalyzeEmail(
     },
   });
 
+  if (record.canonicalThreadId) {
+    const { markThreadAnalyzedIfFirst } = await import("../billing/usage");
+    await markThreadAnalyzedIfFirst(record.canonicalThreadId, shop).catch((err) => {
+      console.error(`[billing] markThreadAnalyzedIfFirst failed for thread=${record.canonicalThreadId}:`, err);
+    });
+  }
+
   // If the user manually set the order, re-apply it on Thread now that
   // mergeThreadIdentifiers may have pulled an old order number out of
   // the email body again.
