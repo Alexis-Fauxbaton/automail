@@ -152,6 +152,25 @@ can successfully complete Tier 3 on a thread):
 17track-only path) does NOT count — no first-time-LLM-analysis is
 happening, just data refresh.
 
+### How many Tier 3 runs per conversation? (clarification)
+
+A single thread can have **multiple** Tier 3 runs over its lifetime:
+- 1× when the first customer message arrives.
+- 1× each time a follow-up customer message lands in the same thread
+  (auto-sync re-classifies the new latest incoming).
+- 0-N× when the merchant clicks "Generate draft" or "Reanalyze"
+  explicitly.
+- 0× from `refresh-stale-analyses` and `refreshThreadAnalysis` — those
+  use the light no-LLM path.
+
+But **billing is per conversation, not per Tier 3 run**. The very first
+successful Tier 3 sets `analyzedAt`. Every subsequent Tier 3 on the
+same thread is real LLM work we pay for, but the user pays 1 unit
+total. This is intentional and aligns with how merchants think
+("1 customer issue handled = 1 unit"). The margin section below
+includes a multi-message conversation profile so the cost is honestly
+absorbed.
+
 ### Quota guard sites — what changes
 
 **Removed quota consumption** from:
@@ -283,15 +302,20 @@ external advisors / pricing review.
 | Refine (LLM rewrite from user prompt) | $0.003 | 0–N× per conversation |
 | Regenerate (`handleRedraft` after merge) | $0.003 | 0–N× per conversation |
 
-Per-conversation totals across user-behaviour buckets:
+Per-conversation totals across realistic profiles. Each row factors in
+the typical number of incoming customer messages for that profile
+(each new message triggers a Tier 3 re-analysis we pay for but
+don't re-bill).
 
-| User profile | Cost / conv |
-|---|---|
-| Light (analyse only, no draft click) | $0.005 |
-| Medium (analyse + 1 draft + 0 refines) | $0.008 |
-| Active (analyse + 1 draft + 2 refines + 1 regen) | $0.017 |
-| Power (analyse + 1 draft + 5 refines + 2 regens) | $0.026 |
-| Pathological abuse (analyse + 20 refines) | $0.065 |
+| Profile | # customer messages | Cost / conv |
+|---|---|---|
+| Short-and-done (1 message, no draft click) | 1 | $0.005 |
+| Short with draft (1 message + 1 draft + 0 refines) | 1 | $0.008 |
+| Typical (2 messages + 1 draft + 2 refines + 1 regen) | 2 | $0.022 |
+| Multi-back-and-forth (4 messages + 1 draft + 3 refines) | 4 | $0.029 |
+| Long thread (8 messages + 1 draft + 2 refines) | 8 | $0.049 |
+| Power user on long thread (8 msgs + 1 draft + 10 refines) | 8 | $0.073 |
+| Pathological abuse (any thread + 50 refines) | any | $0.155 |
 
 ### Revenue per conversation
 
@@ -302,14 +326,23 @@ Per-conversation totals across user-behaviour buckets:
 
 | Plan × Profile | Margin |
 |---|---|
-| Starter × Light | 97 % |
-| Starter × Active | 91 % |
-| Starter × Power | 86 % |
-| Starter × Pathological | 64 % |
-| Pro × Light | 95 % |
-| Pro × Active | 83 % |
-| Pro × Power | 74 % |
-| Pro × Pathological | 34 % |
+| Starter × Short-and-done | 97 % |
+| Starter × Typical | 88 % |
+| Starter × Multi-back-and-forth | 84 % |
+| Starter × Long thread | 73 % |
+| Starter × Power-on-long | 59 % |
+| Starter × Pathological | 14 % |
+| Pro × Short-and-done | 95 % |
+| Pro × Typical | 78 % |
+| Pro × Multi-back-and-forth | 70 % |
+| Pro × Long thread | 50 % |
+| Pro × Power-on-long | 26 % |
+| Pro × Pathological | **-58 %** (loss) |
+
+The Pro × Long-thread + Power-on-long rows are the squeeze. They're
+rare in practice but they're the ones to monitor via the alerting
+described below. Pathological abuse is the only consistently-negative
+profile — that's where the operator-level alert applies.
 
 ### Volume assumption per shop
 
@@ -416,6 +449,12 @@ tests must prove it's idempotent.
   call, counter unchanged.
 - **Integration** — full sequence: auto-sync analyzes, user clicks
   Generate draft, user refines 5×, user regenerates 2× → counter = 1.
+- **Integration — long conversation** — seed a thread, run auto-sync
+  → counter = 1. Append a 2nd customer message, sync → counter still
+  = 1 (Tier 3 ran twice but only first time counted). Append 3rd, 4th,
+  5th customer messages, sync after each → counter still = 1 at the
+  end. This is the spec's most important billing invariant: a long
+  conversation never re-bills.
 - **Integration** — `handleReanalyze` on an already-analyzed thread →
   Tier 3 may run again to refresh facts, but `markThreadAnalyzedIfFirst`
   short-circuits → counter unchanged. (Document explicitly: re-analysis
