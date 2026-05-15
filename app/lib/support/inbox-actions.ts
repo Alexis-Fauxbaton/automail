@@ -8,6 +8,7 @@ import {
   persistEmailAttachments,
 } from "../gmail/pipeline";
 import { refineDraft } from "../gmail/refine-draft";
+import { buildRefineContext } from "./refine-context";
 import { runDiagnosis } from "../gmail/diagnose";
 import { enqueueJob } from "../mail/job-queue";
 import { recordStateTransition } from "./thread-state-history";
@@ -16,6 +17,7 @@ import type { AdminGraphqlClient } from "./shopify/order-search";
 import type { ClassificationEdit } from "./manual-classification";
 import { withDraftQuota } from "../billing/draft-guard";
 import { resolveEntitlements } from "../billing/entitlements";
+import { refineContextRefreshTotal } from "../metrics/definitions";
 
 async function maybeRefreshAnalysis(
   emailId: string,
@@ -31,9 +33,18 @@ async function maybeRefreshAnalysis(
   if (record.processingStatus !== "analyzed") return;
   if (!isAnalysisStale(record.lastAnalyzedAt, ANALYSIS_FRESHNESS_MS.draftTrigger)) return;
   try {
-    await reanalyzeEmail(emailId, admin, shop);
+    // Lightweight refresh: Shopify + 17track, no LLM. The intent stays
+    // intact (the customer's message hasn't changed), only the order /
+    // tracking facts are re-fetched in case Shopify-side state drifted
+    // (e.g. order shipped between two refines).
+    const { refreshThreadAnalysis } = await import("./refresh-thread-analysis");
+    await refreshThreadAnalysis(emailId, admin, shop, {
+      reclassifyIntent: false,
+      reSearchOrder: true,
+      refreshTracking: true,
+    });
   } catch (err) {
-    console.error(`[inbox] auto-reanalyze before draft failed for email=${emailId}:`, err);
+    console.error(`[inbox] auto-refresh before draft failed for email=${emailId}:`, err);
   }
 }
 
@@ -322,6 +333,21 @@ export async function handleRefine(params: {
 
   await maybeRefreshAnalysis(emailId, admin, shop);
 
+  // Reload AFTER the refresh so we see fresh analysisResult.
+  const fresh = await prisma.incomingEmail.findUnique({
+    where: { id: emailId },
+    select: { analysisResult: true },
+  });
+  let contextSummary: string | undefined;
+  if (fresh?.analysisResult) {
+    try {
+      const analysis = JSON.parse(fresh.analysisResult);
+      contextSummary = buildRefineContext(analysis) ?? undefined;
+    } catch (err) {
+      console.error(`[refine] malformed analysisResult for email=${emailId}:`, err);
+    }
+  }
+
   const guarded = await withDraftQuota({
     shop,
     limit: ent.quotaStatus.limit,
@@ -329,6 +355,7 @@ export async function handleRefine(params: {
       const newDraft = await refineDraft(currentDraft, instructions, {
         subject: record.subject,
         body: record.bodyText,
+        contextSummary,
       }, {
         shop,
         emailId,
@@ -447,23 +474,49 @@ export async function handleMoveThread(params: {
 
 export async function handleEditThreadIdentifiers(params: {
   shop: string;
+  admin: AdminGraphqlClient;
   canonicalThreadId: string;
   resolvedOrderNumber: string | null;
   resolvedTrackingNumber: string | null;
   resolvedEmail: string | null;
   resolvedCustomerName: string | null;
 }) {
-  const { shop, canonicalThreadId, resolvedOrderNumber, resolvedTrackingNumber, resolvedEmail, resolvedCustomerName } = params;
+  const {
+    shop, admin, canonicalThreadId,
+    resolvedOrderNumber, resolvedTrackingNumber, resolvedEmail, resolvedCustomerName,
+  } = params;
   if (!canonicalThreadId) {
     return { report: null, disconnected: false, reanalyzed: null, refined: null };
   }
-  const thread = await prisma.thread.findUnique({
+  const before = await prisma.thread.findUnique({
     where: { id: canonicalThreadId },
-    select: { shop: true },
+    select: {
+      shop: true,
+      resolvedOrderNumber: true,
+      resolvedTrackingNumber: true,
+      resolvedEmail: true,
+      resolvedCustomerName: true,
+    },
   });
-  if (!thread || thread.shop !== shop) {
+  if (!before || before.shop !== shop) {
     return { report: null, disconnected: false, reanalyzed: null, refined: null };
   }
+
+  const orderChanged    = (before.resolvedOrderNumber    ?? null) !== resolvedOrderNumber;
+  const trackingChanged = (before.resolvedTrackingNumber ?? null) !== resolvedTrackingNumber;
+  const emailChanged    = (before.resolvedEmail          ?? null) !== resolvedEmail;
+  const nameChanged     = (before.resolvedCustomerName   ?? null) !== resolvedCustomerName;
+  const anyChange = orderChanged || trackingChanged || emailChanged || nameChanged;
+
+  if (!anyChange) {
+    refineContextRefreshTotal.inc({ shop, outcome: "skipped_noop" });
+    return {
+      editedThread: { canonicalThreadId },
+      refreshed: "skipped_noop" as const,
+      report: null, disconnected: false, reanalyzed: null, refined: null,
+    };
+  }
+
   await prisma.thread.update({
     where: { id: canonicalThreadId },
     data: {
@@ -474,7 +527,51 @@ export async function handleEditThreadIdentifiers(params: {
       resolutionConfidence: "high",
     },
   });
-  return { editedThread: { canonicalThreadId }, report: null, disconnected: false, reanalyzed: null, refined: null };
+
+  // refreshTracking follows reSearchOrder because a different order on
+  // Shopify means different fulfillments and tracking numbers.
+  const reSearchOrder = orderChanged || trackingChanged || emailChanged;
+  const refreshTracking = reSearchOrder;
+
+  const anchor = await prisma.incomingEmail.findFirst({
+    where: { canonicalThreadId, shop, processingStatus: "analyzed" },
+    orderBy: { receivedAt: "desc" },
+    select: { id: true },
+  });
+  if (!anchor) {
+    refineContextRefreshTotal.inc({ shop, outcome: "no_anchor" });
+    return {
+      editedThread: { canonicalThreadId },
+      refreshed: "no_anchor" as const,
+      report: null, disconnected: false, reanalyzed: null, refined: null,
+    };
+  }
+
+  try {
+    const { refreshThreadAnalysis } = await import("./refresh-thread-analysis");
+    await refreshThreadAnalysis(anchor.id, admin, shop, {
+      reclassifyIntent: false,
+      reSearchOrder,
+      refreshTracking,
+    });
+    refineContextRefreshTotal.inc({ shop, outcome: "ok" });
+    return {
+      editedThread: { canonicalThreadId },
+      refreshed: "ok" as const,
+      report: null, disconnected: false, reanalyzed: null, refined: null,
+    };
+  } catch (err) {
+    console.error(
+      `[edit-identifiers] shop=${shop} canonicalThreadId=${canonicalThreadId} refresh failed:`,
+      err,
+    );
+    refineContextRefreshTotal.inc({ shop, outcome: "error" });
+    return {
+      editedThread: { canonicalThreadId },
+      refreshed: "error" as const,
+      report: null, disconnected: false, reanalyzed: null, refined: null,
+    };
+  }
 }
 
 export async function handleUpdateClassification(params: {
@@ -602,4 +699,33 @@ export async function handleUpdateClassification(params: {
       refined: null,
     };
   }
+}
+
+/**
+ * Unified entry point for the "Generate / Refine" merged UI affordance.
+ * Branches on whether the user typed instructions:
+ *   - empty (after trim) → redraft path (no LLM rewrite, just re-emit
+ *     the draft from the existing analysisResult).
+ *   - non-empty          → refine path (LLM rewrite using the user's
+ *     instructions and the curated contextSummary).
+ *
+ * Both legacy handlers (handleRefine / handleRedraft) remain exported
+ * for any internal caller — this wrapper picks one and forwards.
+ */
+export async function handleGenerateDraft(params: {
+  shop: string;
+  admin: AdminGraphqlClient;
+  emailId: string;
+  instructions: string;
+  currentDraft: string;
+}) {
+  const wantsRefine = params.instructions.trim().length > 0;
+  if (wantsRefine) {
+    return handleRefine(params);
+  }
+  return handleRedraft({
+    shop: params.shop,
+    admin: params.admin,
+    emailId: params.emailId,
+  });
 }

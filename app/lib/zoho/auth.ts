@@ -74,12 +74,14 @@ export async function exchangeZohoCode(code: string) {
     expiry: new Date(Date.now() + (data.expires_in ?? 3600) * 1000),
     email: accountInfo.email,
     accountId: accountInfo.accountId,
+    aliases: accountInfo.aliases,
   };
 }
 
 async function fetchZohoAccount(accessToken: string): Promise<{
   accountId: string;
   email: string;
+  aliases: string[];
 }> {
   const domain = getZohoApiDomain();
   const res = await fetch(`https://${domain}/api/accounts`, {
@@ -89,7 +91,7 @@ async function fetchZohoAccount(accessToken: string): Promise<{
   const account = (json as any).data?.[0];
   if (!account) {
     console.warn("[zoho] Could not fetch Mail account ID, will retry on first sync");
-    return { accountId: "", email: "unknown" };
+    return { accountId: "", email: "unknown", aliases: [] };
   }
 
   const email =
@@ -98,7 +100,17 @@ async function fetchZohoAccount(accessToken: string): Promise<{
     account.incomingUserName ||
     "unknown";
 
-  return { accountId: String(account.accountId), email };
+  // Zoho's `emailAddress` is the list of addresses the account can send
+  // from (primary + aliases). Captured here so the outgoing-detection
+  // allow-list is correct from the very first sync, before any data has
+  // been ingested to infer it from.
+  const aliases: string[] = Array.isArray(account.emailAddress)
+    ? (account.emailAddress as Array<{ mailId?: unknown }>)
+        .map((e) => (typeof e?.mailId === "string" ? e.mailId.trim().toLowerCase() : ""))
+        .filter((s): s is string => s.length > 0)
+    : [];
+
+  return { accountId: String(account.accountId), email, aliases };
 }
 
 export async function saveZohoConnection(
@@ -109,8 +121,11 @@ export async function saveZohoConnection(
     expiry: Date;
     email: string;
     accountId: string;
+    aliases: string[];
   },
 ) {
+  const allowList = buildAllowList(tokens.email, tokens.aliases);
+  const outgoingAliases = JSON.stringify(allowList);
   await prisma.mailConnection.upsert({
     where: { shop },
     create: {
@@ -121,6 +136,7 @@ export async function saveZohoConnection(
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
       zohoAccountId: tokens.accountId,
+      outgoingAliases,
     },
     update: {
       provider: "zoho",
@@ -129,8 +145,47 @@ export async function saveZohoConnection(
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
       zohoAccountId: tokens.accountId,
+      outgoingAliases,
     },
   });
+}
+
+function buildAllowList(primary: string, aliases: string[]): string[] {
+  const set = new Set<string>();
+  const p = primary.trim().toLowerCase();
+  if (p && p !== "unknown") set.add(p);
+  for (const a of aliases) {
+    const n = a.trim().toLowerCase();
+    if (n) set.add(n);
+  }
+  return Array.from(set);
+}
+
+/**
+ * Lazy-populate `MailConnection.outgoingAliases` for shops connected before
+ * the alias-detection feature shipped (or whose row still has the default
+ * empty `"[]"`). Idempotent and best-effort: any API failure is logged and
+ * swallowed so the caller's sync isn't blocked.
+ */
+export async function backfillZohoAliasesIfMissing(shop: string): Promise<void> {
+  const conn = await prisma.mailConnection.findUnique({
+    where: { shop },
+    select: { provider: true, email: true, outgoingAliases: true },
+  });
+  if (!conn || conn.provider !== "zoho") return;
+  if (conn.outgoingAliases && conn.outgoingAliases !== "[]") return;
+  try {
+    const accessToken = await getZohoAccessToken(shop);
+    const info = await fetchZohoAccount(accessToken);
+    const allowList = buildAllowList(conn.email || info.email, info.aliases);
+    await prisma.mailConnection.update({
+      where: { shop },
+      data: { outgoingAliases: JSON.stringify(allowList) },
+    });
+    console.log(`[zoho] backfilled ${allowList.length} outgoing aliases for shop=${shop}`);
+  } catch (err) {
+    console.warn(`[zoho] alias backfill failed for shop=${shop}:`, err);
+  }
 }
 
 export async function refreshZohoToken(shop: string): Promise<string> {

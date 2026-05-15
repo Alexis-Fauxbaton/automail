@@ -11,6 +11,7 @@ import {
   hasGeneratedAnyDraft,
   hasCustomizedSupportSettings,
   getShopFlag,
+  markChecklistDismissed,
 } from "../lib/onboarding/repo";
 import { deriveChecklistState, isChecklistDismissed } from "../lib/onboarding/state";
 import { OnboardingChecklist } from "../components/onboarding/OnboardingChecklist";
@@ -41,6 +42,7 @@ import {
   handleToggleAutoSync,
   handleDiagnose,
   handleReanalyze,
+  handleGenerateDraft,
   handleRedraft,
   handleRefreshEmailHtml,
   handleRefine,
@@ -72,12 +74,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   await requireOnboardingComplete(session.shop, request);
   const shop = session.shop;
   const onboardingFlag = await getShopFlag(shop);
+  const checklistState = deriveChecklistState({
+    hasDraft: await hasGeneratedAnyDraft(shop),
+    hasCustomizedSettings: await hasCustomizedSupportSettings(shop),
+  });
+  let checklistDismissed = isChecklistDismissed(onboardingFlag);
+  // Stickyness: once the checklist has been fully completed at least once,
+  // persist the dismissal so that destructive ops like "Re-sync all" — which
+  // wipe ReplyDraft rows and would otherwise un-tick "first draft" — can't
+  // resurrect it for users who have clearly moved past onboarding.
+  if (checklistState.allComplete && !checklistDismissed) {
+    await markChecklistDismissed(shop);
+    checklistDismissed = true;
+  }
   const onboardingChecklist = {
-    state: deriveChecklistState({
-      hasDraft: await hasGeneratedAnyDraft(shop),
-      hasCustomizedSettings: await hasCustomizedSupportSettings(shop),
-    }),
-    dismissed: isChecklistDismissed(onboardingFlag),
+    state: checklistState,
+    dismissed: checklistDismissed,
   };
   const connection = await getConnection(shop);
 
@@ -287,6 +299,12 @@ export function shouldRevalidate({
   if (formMethod && formMethod.toUpperCase() !== "GET") return true;
   if (actionResult) return true;
   if (currentUrl.pathname !== nextUrl.pathname) return defaultShouldRevalidate;
+  // Programmatic revalidations (useRevalidator polling for background sync)
+  // arrive with currentUrl === nextUrl. Allow those — otherwise the inbox
+  // never picks up emails ingested by auto-sync until a hard reload.
+  if (currentUrl.search === nextUrl.search) return defaultShouldRevalidate;
+  // Skip the (heavy) inbox loader when ONLY `?thread=` changed (opening/
+  // closing a thread is purely client-side state).
   const a = new URLSearchParams(currentUrl.search);
   const b = new URLSearchParams(nextUrl.search);
   a.delete("thread");
@@ -345,6 +363,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return handleReanalyze({ shop, admin, emailId, skipDraft });
   }
 
+  if (intent === "generateDraft") {
+    const emailId = String(formData.get("emailId") ?? "");
+    const instructions = String(formData.get("instructions") ?? "");
+    const currentDraft = String(formData.get("currentDraft") ?? "");
+    return handleGenerateDraft({ shop, admin, emailId, instructions, currentDraft });
+  }
+
   if (intent === "redraft") {
     const emailId = String(formData.get("emailId") ?? "");
     return handleRedraft({ shop, admin, emailId });
@@ -379,7 +404,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const resolvedTrackingNumber = norm(formData.get("resolvedTrackingNumber"));
     const resolvedEmail = norm(formData.get("resolvedEmail"))?.toLowerCase() ?? null;
     const resolvedCustomerName = norm(formData.get("resolvedCustomerName"));
-    return handleEditThreadIdentifiers({ shop, canonicalThreadId, resolvedOrderNumber, resolvedTrackingNumber, resolvedEmail, resolvedCustomerName });
+    return handleEditThreadIdentifiers({ shop, admin, canonicalThreadId, resolvedOrderNumber, resolvedTrackingNumber, resolvedEmail, resolvedCustomerName });
   }
 
   if (intent === "updateClassification") {
@@ -1217,8 +1242,18 @@ function ThreadIdentifiersEditor({
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
-  const fetcher = useFetcher();
+  const [refreshFailed, setRefreshFailed] = useState(false);
+  const fetcher = useFetcher<{ refreshed?: string }>();
   const submitting = fetcher.state !== "idle";
+  useEffect(() => {
+    if (fetcher.state !== "idle") return;
+    const r = fetcher.data?.refreshed;
+    if (r === "error") {
+      setRefreshFailed(true);
+    } else if (r === "ok" || r === "skipped_noop" || r === "no_anchor") {
+      setRefreshFailed(false);
+    }
+  }, [fetcher.state, fetcher.data]);
   return (
     <s-box padding="base" borderWidth="base" borderRadius="base">
       <s-stack direction="block" gap="small-300">
@@ -1228,6 +1263,14 @@ function ThreadIdentifiersEditor({
             {open ? t("inbox.cancel") : t("inbox.edit")}
           </s-button>
         </s-stack>
+        {refreshFailed && (
+          <s-banner tone="warning">
+            {t(
+              "inbox.identifiersRefreshFailed",
+              "Identifiers saved. Order/tracking refresh failed — will retry on next sync.",
+            )}
+          </s-banner>
+        )}
         {!open ? (
           <s-stack direction="block" gap="small-100">
             <s-text variant="bodySm">
@@ -1942,10 +1985,11 @@ function DraftBlock({ email, threadSenderEmail }: {
     setVersionIndex(allVersions.length - 1);
   }, [allVersions.length]);
 
-  const refineFetcher = useFetcher();
-  const redraftFetcher = useFetcher();
-  const refining = refineFetcher.state !== "idle";
-  const redrafting = redraftFetcher.state !== "idle";
+  const generateFetcher = useFetcher();
+  const submitting = generateFetcher.state !== "idle";
+  const [instructions, setInstructions] = useState("");
+  const wantsRefine = instructions.trim().length > 0;
+  const generateFormRef = useRef<HTMLFormElement | null>(null);
 
   const [quotaModal, setQuotaModal] = useState<{
     open: boolean;
@@ -1955,24 +1999,26 @@ function DraftBlock({ email, threadSenderEmail }: {
   }>({ open: false, used: 0, limit: 0, variant: 'exceeded' });
 
   useEffect(() => {
-    const data = refineFetcher.data as { quotaExceeded?: boolean; quotaStatus?: { used: number; limit: number } } | null | undefined;
+    const data = generateFetcher.data as { quotaExceeded?: boolean; quotaStatus?: { used: number; limit: number } } | null | undefined;
     if (!data) return;
     if (data.quotaExceeded) {
       setQuotaModal({ open: true, used: data.quotaStatus?.used ?? 0, limit: data.quotaStatus?.limit ?? 0, variant: 'exceeded' });
     } else if (data.quotaStatus && data.quotaStatus.used === data.quotaStatus.limit && data.quotaStatus.limit > 0) {
       setQuotaModal({ open: true, used: data.quotaStatus.used, limit: data.quotaStatus.limit, variant: 'just_used_last' });
     }
-  }, [refineFetcher.data]);
+  }, [generateFetcher.data]);
 
+  // Clear the instructions textarea after a successful submit so the next
+  // click is a "regenerate", not a stale refine.
   useEffect(() => {
-    const data = redraftFetcher.data as { quotaExceeded?: boolean; quotaStatus?: { used: number; limit: number } } | null | undefined;
+    if (generateFetcher.state !== "idle") return;
+    const data = generateFetcher.data as { quotaExceeded?: boolean; quotaStatus?: unknown } | null | undefined;
     if (!data) return;
-    if (data.quotaExceeded) {
-      setQuotaModal({ open: true, used: data.quotaStatus?.used ?? 0, limit: data.quotaStatus?.limit ?? 0, variant: 'exceeded' });
-    } else if (data.quotaStatus && data.quotaStatus.used === data.quotaStatus.limit && data.quotaStatus.limit > 0) {
-      setQuotaModal({ open: true, used: data.quotaStatus.used, limit: data.quotaStatus.limit, variant: 'just_used_last' });
+    if (data.quotaExceeded) return;
+    if (data.quotaStatus) {
+      setInstructions("");
     }
-  }, [redraftFetcher.data]);
+  }, [generateFetcher.state, generateFetcher.data]);
 
   async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -1999,6 +2045,7 @@ function DraftBlock({ email, threadSenderEmail }: {
 
   return (
     <s-box padding="base" borderWidth="base" borderRadius="base">
+      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
       <s-stack direction="block" gap="base">
 
         {/* Compose header */}
@@ -2126,31 +2173,98 @@ function DraftBlock({ email, threadSenderEmail }: {
 
 
         {isLatest && (
-          <refineFetcher.Form method="post">
-            <input type="hidden" name="_action" value="refine" />
+          <generateFetcher.Form
+            method="post"
+            ref={generateFormRef}
+            style={{ borderTop: "1px solid var(--p-color-border)", paddingTop: "8px" }}
+          >
+            <input type="hidden" name="_action" value="generateDraft" />
             <input type="hidden" name="emailId" value={email.id} />
             <input type="hidden" name="currentDraft" value={bodyText} />
             <s-stack direction={isMobile ? "block" : "inline"} gap="small-300" blockAlign="end">
               <div style={{ flex: 1 }}>
-                <s-text-field label={t("inbox.adjustDraft")} name="instructions"
-                  placeholder={t("inbox.adjustDraftPlaceholder")} />
+                <textarea
+                  name="instructions"
+                  value={instructions}
+                  onChange={(e) => setInstructions(e.target.value)}
+                  onKeyDown={(e) => {
+                    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                      e.preventDefault();
+                      generateFormRef.current?.requestSubmit();
+                    }
+                  }}
+                  placeholder={t("inbox.generateInputPlaceholder")}
+                  rows={3}
+                  style={{
+                    width: "100%",
+                    height: "60px",
+                    padding: "8px",
+                    // Stronger border + a default outline that holds even in
+                    // themes where --p-color-border is near-white.
+                    border: "1px solid #cbd5e1",
+                    borderRadius: "6px",
+                    fontFamily: "inherit",
+                    fontSize: "13px",
+                    background: "var(--p-color-bg-surface)",
+                    color: "var(--p-color-text)",
+                    resize: "none",
+                    boxSizing: "border-box",
+                    outline: "none",
+                  }}
+                  onFocus={(e) => {
+                    e.currentTarget.style.borderColor = "#6366f1";
+                    e.currentTarget.style.boxShadow =
+                      "0 0 0 2px rgba(99, 102, 241, 0.15)";
+                  }}
+                  onBlur={(e) => {
+                    e.currentTarget.style.borderColor = "#cbd5e1";
+                    e.currentTarget.style.boxShadow = "none";
+                  }}
+                />
               </div>
-              <s-button type="submit" variant="secondary" disabled={refining || redrafting}>
-                {refining ? t("inbox.refining") : t("inbox.refineWithAi")}
-              </s-button>
+              <button
+                type="submit"
+                disabled={submitting}
+                style={{
+                  width: 140,
+                  height: 60,
+                  padding: "0 12px",
+                  borderRadius: "8px",
+                  border: "1px solid #cbd5e1",
+                  background: submitting ? "#f1f5f9" : "#ffffff",
+                  color: submitting ? "#94a3b8" : "#0f172a",
+                  fontFamily: "inherit",
+                  fontSize: "13px",
+                  fontWeight: 500,
+                  cursor: submitting ? "wait" : "pointer",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "6px",
+                  boxSizing: "border-box",
+                  transition: "background-color 120ms",
+                }}
+              >
+                {submitting && (
+                  <span
+                    aria-hidden
+                    style={{
+                      width: 12,
+                      height: 12,
+                      borderRadius: "50%",
+                      border: "2px solid #cbd5e1",
+                      borderTopColor: "#475569",
+                      animation: "spin 0.6s linear infinite",
+                    }}
+                  />
+                )}
+                {submitting
+                  ? t(wantsRefine ? "inbox.refiningButton" : "inbox.regeneratingButton")
+                  : t(wantsRefine ? "inbox.refineButton" : "inbox.regenerateButton")}
+              </button>
             </s-stack>
-          </refineFetcher.Form>
+          </generateFetcher.Form>
         )}
-
-        <div style={{ display: "flex", gap: "8px", alignItems: "center", borderTop: "1px solid var(--p-color-border)", paddingTop: "8px" }}>
-          <redraftFetcher.Form method="post">
-            <input type="hidden" name="_action" value="redraft" />
-            <input type="hidden" name="emailId" value={email.id} />
-            <s-button type="submit" variant="secondary" size="slim" disabled={redrafting || refining}>
-              {redrafting ? t("inbox.regenerating") : t("inbox.regenerateDraft")}
-            </s-button>
-          </redraftFetcher.Form>
-        </div>
 
       </s-stack>
 

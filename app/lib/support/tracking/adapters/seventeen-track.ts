@@ -14,6 +14,26 @@ import {
   recordSuccess as breakerSuccess,
   recordFailure as breakerFailure,
 } from "../seventeen-track-breaker";
+import { createSemaphore } from "../../../util/semaphore";
+import {
+  seventeenTrackInFlight,
+  seventeenTrackQueued,
+} from "../../../metrics/definitions";
+
+// Process-wide semaphore for 17track.
+//
+// Why: 17track's API key is shared across all shops on this process, and a
+// single auto-sync cycle issues many parallel tracking lookups via
+// Promise.all (one per fulfillment + crawler calls). With N shops syncing
+// concurrently this trivially bursts past 17track's per-second limit and
+// trips the circuit breaker on 429s. The breaker is the right last resort;
+// the semaphore stops us from getting there in the first place by
+// shaping steady-state throughput.
+const SEVENTEEN_TRACK_MAX_CONCURRENT = Math.max(
+  1,
+  Number(process.env.SEVENTEEN_TRACK_MAX_CONCURRENT ?? "2"),
+);
+const sevenTrackSem = createSemaphore(SEVENTEEN_TRACK_MAX_CONCURRENT);
 
 // ---------------------------------------------------------------------------
 // API response types (v2.2 actual structure)
@@ -243,6 +263,20 @@ export async function fetchTrackingFrom17track(
 
   const payload = [{ number: trackingNumber }];
 
+  seventeenTrackQueued.inc();
+  const release = await sevenTrackSem.acquire();
+  seventeenTrackQueued.dec();
+  seventeenTrackInFlight.inc();
+
+  // Re-check the breaker after the semaphore wait: an earlier holder may
+  // have tripped it while we were queued, and we'd rather skip than pile on.
+  if (breakerOpen()) {
+    seventeenTrackInFlight.dec();
+    release();
+    console.log(`[17track] breaker open — skipping call for ${trackingNumber}`);
+    return null;
+  }
+
   try {
     await postJson<ApiResponse>(`${BASE}/register`, payload, apiKey);
 
@@ -292,5 +326,8 @@ export async function fetchTrackingFrom17track(
     console.error("[17track] Request failed:", err);
     breakerFailure();
     return null;
+  } finally {
+    release();
+    seventeenTrackInFlight.dec();
   }
 }

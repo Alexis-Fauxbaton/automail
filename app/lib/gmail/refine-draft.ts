@@ -24,7 +24,7 @@ function htmlToPlainText(html: string): string {
 export async function refineDraft(
   currentDraft: string,
   instructions: string,
-  context?: { subject?: string; body?: string },
+  context?: { subject?: string; body?: string; contextSummary?: string },
   ctx?: Partial<TrackedCallContext>,
 ): Promise<string> {
   const client = getOpenAIClient();
@@ -38,11 +38,19 @@ You will receive:
 - The current draft reply to a customer (as plain text)
 - The user's instructions on how to modify it
 - Optionally, the original customer email for context
+- Optionally, a "Verified facts" block summarising the matched order
+  and shipment data
 
 Apply the requested changes while keeping the reply:
 - Professional and concise
 - Factual (never invent information)
 - In the same language as the current draft
+
+When a "Verified facts" block is present, treat it as the authoritative
+source for order numbers, statuses, tracking numbers, and delivery
+information. Do not invent or contradict it, but do not blindly recite
+it either — only reference its details when relevant to the user's
+instructions.
 
 Use light Markdown formatting where it helps readability:
 - **bold** for key information
@@ -58,6 +66,9 @@ Return ONLY the updated email text. No explanation, no quotes.`;
       context.body ? `Body:\n${context.body.slice(0, 800)}` : "",
     ].filter(Boolean).join("\n");
     userMessage += `\n\nOriginal customer email:\n${original}`;
+  }
+  if (context?.contextSummary) {
+    userMessage += `\n\nVerified facts about this customer's order:\n${context.contextSummary}`;
   }
 
   const response = await trackedChatCompletion(
