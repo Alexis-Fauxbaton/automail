@@ -15,8 +15,8 @@ import { recordStateTransition } from "./thread-state-history";
 import { isAnalysisStale, ANALYSIS_FRESHNESS_MS, refreshStaleAnalysesForShop } from "./refresh-stale-analyses";
 import type { AdminGraphqlClient } from "./shopify/order-search";
 import type { ClassificationEdit } from "./manual-classification";
-import { withDraftQuota } from "../billing/draft-guard";
 import { resolveEntitlements } from "../billing/entitlements";
+import { getUsage } from "../billing/usage";
 import { refineContextRefreshTotal } from "../metrics/definitions";
 
 async function maybeRefreshAnalysis(
@@ -183,32 +183,24 @@ export async function handleReanalyze(params: {
       };
     }
 
-    const guarded = await withDraftQuota({
-      shop,
-      limit: ent.quotaStatus.limit,
-      generator: () => reanalyzeEmail(emailId, admin, shop, { skipDraft: false }),
-    });
-
-    if (!guarded.ok) {
-      if (guarded.reason === 'quota_exceeded') {
-        return {
-          reanalyzed: null,
-          report: null,
-          disconnected: false,
-          refined: null,
-          quotaExceeded: true,
-          quotaStatus: { used: ent.quotaStatus.used, limit: ent.quotaStatus.limit },
-        };
-      }
-      throw guarded.error ?? new Error('Reanalyze with draft generation failed');
+    // Quota was already pre-checked via `ent.canGenerateDraft`. The
+    // actual increment happens inside reanalyzeEmail → Tier 3 success →
+    // markThreadAnalyzedIfFirst (idempotent per thread).
+    let analysis: Awaited<ReturnType<typeof reanalyzeEmail>>;
+    try {
+      analysis = await reanalyzeEmail(emailId, admin, shop, { skipDraft: false });
+    } catch (err) {
+      // Tier 3 failed — no increment happened, no refund needed.
+      throw err;
     }
 
+    const freshUsage = await getUsage(shop);
     return {
-      reanalyzed: { emailId, analysis: guarded.value },
+      reanalyzed: { emailId, analysis },
       report: null,
       disconnected: false,
       refined: null,
-      quotaStatus: { used: guarded.newCount, limit: ent.quotaStatus.limit },
+      quotaStatus: { used: freshUsage.count, limit: ent.quotaStatus.limit },
     };
   }
 
