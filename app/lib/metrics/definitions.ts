@@ -97,6 +97,16 @@ export const refineContextRefreshTotal = metrics.counter(
   "Outcomes of the edit-time analysis refresh triggered by handleEditThreadIdentifiers.",
 );
 
+// --- Billing audit metrics ---
+export const billingAnalyzedThreadCountedTotal = metrics.counter(
+  "billing_analyzed_thread_counted_total",
+  "Number of times markThreadAnalyzedIfFirst succeeded in counting a new analyzed thread. Reconcile this against BillingUsage.analyzedThreadsCount for finance audits.",
+);
+export const billingAnalyzedThreadSkippedTotal = metrics.counter(
+  "billing_analyzed_thread_skipped_total",
+  "Number of times markThreadAnalyzedIfFirst returned counted=false. Labels: reason ∈ { already_analyzed | not_found | invalid_input }.",
+);
+
 // --- Helper to time a histogram observation. Returns a stop() function
 //     that records duration in seconds. ---
 export function startTimer(): () => number {

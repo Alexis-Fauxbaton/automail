@@ -13,6 +13,10 @@
  */
 
 import prisma from '../../db.server';
+import {
+  billingAnalyzedThreadCountedTotal,
+  billingAnalyzedThreadSkippedTotal,
+} from "../metrics/definitions";
 
 export interface BillingUsage {
   shop: string;
@@ -110,6 +114,7 @@ export async function markThreadAnalyzedIfFirst(
   shop: string,
 ): Promise<MarkThreadAnalyzedResult> {
   if (!threadId || !shop) {
+    billingAnalyzedThreadSkippedTotal.inc({ shop: shop || "", reason: "invalid_input" });
     return { counted: false, alreadyAnalyzed: false };
   }
 
@@ -119,19 +124,18 @@ export async function markThreadAnalyzedIfFirst(
   });
 
   if (result.count === 0) {
-    // Either the thread doesn't exist, the shop doesn't match, or
-    // analyzedAt was already set. Distinguish with a single follow-up read.
     const row = await prisma.thread.findUnique({
       where: { id: threadId },
       select: { shop: true, analyzedAt: true },
     });
     if (!row || row.shop !== shop) {
+      billingAnalyzedThreadSkippedTotal.inc({ shop, reason: "not_found" });
       return { counted: false, alreadyAnalyzed: false };
     }
+    billingAnalyzedThreadSkippedTotal.inc({ shop, reason: "already_analyzed" });
     return { counted: false, alreadyAnalyzed: row.analyzedAt !== null };
   }
 
-  // Increment the shop's usage counter for the current period.
   const periodStart = getCurrentPeriodStart();
   await prisma.billingUsage.upsert({
     where: { shop_periodStart: { shop, periodStart } },
@@ -139,5 +143,6 @@ export async function markThreadAnalyzedIfFirst(
     update: { analyzedThreadsCount: { increment: 1 } },
   });
 
+  billingAnalyzedThreadCountedTotal.inc({ shop });
   return { counted: true, alreadyAnalyzed: false };
 }
