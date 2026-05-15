@@ -2210,7 +2210,7 @@ function DraftBlock({ email, threadSenderEmail }: {
                 disabled={submitting}
                 style={{
                   width: 140,
-                  height: 36,
+                  height: 60,
                   padding: "0 12px",
                   borderRadius: "8px",
                   border: "1px solid #cbd5e1",
