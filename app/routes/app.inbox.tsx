@@ -2028,6 +2028,7 @@ function DraftBlock({ email, threadSenderEmail }: {
 
   return (
     <s-box padding="base" borderWidth="base" borderRadius="base">
+      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
       <s-stack direction="block" gap="base">
 
         {/* Compose header */}
@@ -2181,7 +2182,9 @@ function DraftBlock({ email, threadSenderEmail }: {
                     width: "100%",
                     height: "60px",
                     padding: "8px",
-                    border: "1px solid var(--p-color-border)",
+                    // Stronger border + a default outline that holds even in
+                    // themes where --p-color-border is near-white.
+                    border: "1px solid #cbd5e1",
                     borderRadius: "6px",
                     fontFamily: "inherit",
                     fontSize: "13px",
@@ -2189,24 +2192,59 @@ function DraftBlock({ email, threadSenderEmail }: {
                     color: "var(--p-color-text)",
                     resize: "none",
                     boxSizing: "border-box",
+                    outline: "none",
+                  }}
+                  onFocus={(e) => {
+                    e.currentTarget.style.borderColor = "#6366f1";
+                    e.currentTarget.style.boxShadow =
+                      "0 0 0 2px rgba(99, 102, 241, 0.15)";
+                  }}
+                  onBlur={(e) => {
+                    e.currentTarget.style.borderColor = "#cbd5e1";
+                    e.currentTarget.style.boxShadow = "none";
                   }}
                 />
               </div>
-              <div style={{ width: 140, display: "flex" }}>
-                <s-button
-                  type="submit"
-                  variant="secondary"
-                  loading={submitting}
-                  disabled={submitting}
-                  // Polaris web-component typings omit `style`, but the host element
-                  // honors inline styles so the button stretches across its flex column.
-                  {...({ style: { flex: 1, display: "block", width: "100%" } } as Record<string, unknown>)}
-                >
-                  {submitting
-                    ? t(wantsRefine ? "inbox.refiningButton" : "inbox.regeneratingButton")
-                    : t(wantsRefine ? "inbox.refineButton" : "inbox.regenerateButton")}
-                </s-button>
-              </div>
+              <button
+                type="submit"
+                disabled={submitting}
+                style={{
+                  width: 140,
+                  height: 36,
+                  padding: "0 12px",
+                  borderRadius: "8px",
+                  border: "1px solid #cbd5e1",
+                  background: submitting ? "#f1f5f9" : "#ffffff",
+                  color: submitting ? "#94a3b8" : "#0f172a",
+                  fontFamily: "inherit",
+                  fontSize: "13px",
+                  fontWeight: 500,
+                  cursor: submitting ? "wait" : "pointer",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "6px",
+                  boxSizing: "border-box",
+                  transition: "background-color 120ms",
+                }}
+              >
+                {submitting && (
+                  <span
+                    aria-hidden
+                    style={{
+                      width: 12,
+                      height: 12,
+                      borderRadius: "50%",
+                      border: "2px solid #cbd5e1",
+                      borderTopColor: "#475569",
+                      animation: "spin 0.6s linear infinite",
+                    }}
+                  />
+                )}
+                {submitting
+                  ? t(wantsRefine ? "inbox.refiningButton" : "inbox.regeneratingButton")
+                  : t(wantsRefine ? "inbox.refineButton" : "inbox.regenerateButton")}
+              </button>
             </s-stack>
           </generateFetcher.Form>
         )}
