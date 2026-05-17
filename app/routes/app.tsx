@@ -11,6 +11,7 @@ import { EntitlementsProvider } from "../lib/billing/entitlements-context";
 import { TopBarCounter } from "../components/billing/TopBarCounter";
 import { QuotaBanner } from "../components/billing/QuotaBanner";
 import { TrialBanner } from "../components/billing/TrialBanner";
+import { SyncSuspendedBanner as SyncSuspendedBannerSlot } from "../components/billing/SyncSuspendedBanner";
 
 // Strict shape check: we only accept canonical Shopify shop domains for
 // the synthetic-host fallback below. Anything else (typos, attempted host
@@ -114,19 +115,34 @@ export default function App() {
               other sticky element underneath (notably the inbox detail panel
               header). Scrolling it out of view is a fair tradeoff — the
               messages reappear at the next page navigation. */}
+          {/* Top app-shell strip.
+              CSS grid with 2 columns: [banners 1fr] [counter auto]
+              Row 1: TrialBanner + QuotaBanner share col 1, TopBarCounter in col 2.
+              Row 2: SyncSuspendedBanner spans col 1 only — col 2 stays empty so
+              both rows share the same right edge for the banner column,
+              regardless of the counter's dynamic width.
+              SyncSuspendedBanner is null-rendering when ent.isSyncSuspended
+              is false, so this stays invisible in healthy state. */}
           <div style={{
             background: "rgba(248, 250, 252, 0.92)",
             backdropFilter: "saturate(180%) blur(8px)",
             WebkitBackdropFilter: "saturate(180%) blur(8px)",
             padding: "10px 16px",
-            display: "flex",
+            display: "grid",
+            gridTemplateColumns: "1fr auto",
+            columnGap: 12,
+            rowGap: 8,
             alignItems: "center",
-            gap: 12,
             borderBottom: "1px solid #e2e8f0",
           }}>
-            <TrialBanner />
-            <QuotaBanner />
+            <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+              <TrialBanner />
+              <QuotaBanner />
+            </div>
             <TopBarCounter />
+            <div style={{ gridColumn: "1 / 2", minWidth: 0 }}>
+              <SyncSuspendedBannerSlot />
+            </div>
           </div>
           <Outlet />
           {/* Floating quota counter — persists at the bottom-right of the

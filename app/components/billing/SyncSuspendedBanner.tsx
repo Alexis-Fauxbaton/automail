@@ -26,7 +26,6 @@ export function SyncSuspendedBanner() {
       gap: 12,
       fontSize: 13.5,
       lineHeight: 1.4,
-      marginBottom: 12,
       boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
     }}>
       <span style={{ flex: 1, minWidth: 0 }}>

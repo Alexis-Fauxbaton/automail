@@ -29,7 +29,6 @@ import { sanitizeEmailHtml, buildCidMap } from "../lib/mail/sanitize-html";
 import { buildReplySubject } from "../lib/support/draft-subject";
 import { RichDraftEditor } from "../components/RichDraftEditor";
 import { QuotaExceededModal } from "../components/billing/QuotaExceededModal";
-import { SyncSuspendedBanner } from "../components/billing/SyncSuspendedBanner";
 import prisma from "../db.server";
 import { computePriorContact } from "../lib/support/prior-contact";
 import {
@@ -3257,7 +3256,8 @@ export default function InboxPage() {
 
   return (
     <div className="ui-inbox-root">
-      <SyncSuspendedBanner />
+      {/* SyncSuspendedBanner moved to the app-shell top strip (app.tsx) so it
+          aligns with TrialBanner / QuotaBanner on the right edge. */}
       <div className="ui-inbox-heading"><h1>{t("nav.emailInbox")}</h1></div>
 
       {/* Onboarding checklist (auto-hides when dismissed or complete) */}
