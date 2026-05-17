@@ -7,8 +7,13 @@ const { dbState } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../../../db.server", () => ({
-  default: {
+vi.mock("../../../db.server", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mockClient: any = {
+    // The unit-under-test wraps reads + writes in $transaction. Our mock
+    // forwards the callback with `this` so calls to mockClient.thread.*
+    // still hit the same in-memory state.
+    $transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb(mockClient)),
     thread: {
       updateMany: vi.fn(
         async ({
@@ -60,8 +65,9 @@ vi.mock("../../../db.server", () => ({
         },
       ),
     },
-  },
-}));
+  };
+  return { default: mockClient };
+});
 
 import { markThreadAnalyzedIfFirst } from "../usage";
 

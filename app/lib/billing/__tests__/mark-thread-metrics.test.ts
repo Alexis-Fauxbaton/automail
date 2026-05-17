@@ -7,8 +7,10 @@ const { dbState } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../../../db.server", () => ({
-  default: {
+vi.mock("../../../db.server", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mockClient: any = {
+    $transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb(mockClient)),
     thread: {
       updateMany: async ({
         where,
@@ -53,8 +55,9 @@ vi.mock("../../../db.server", () => ({
         }
       },
     },
-  },
-}));
+  };
+  return { default: mockClient };
+});
 
 import { metrics } from "../../metrics/registry";
 import {

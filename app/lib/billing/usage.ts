@@ -68,31 +68,38 @@ export async function markThreadAnalyzedIfFirst(
     return { counted: false, alreadyAnalyzed: false };
   }
 
-  const result = await prisma.thread.updateMany({
-    where: { id: threadId, shop, analyzedAt: null },
-    data: { analyzedAt: new Date() },
-  });
-
-  if (result.count === 0) {
-    const row = await prisma.thread.findUnique({
-      where: { id: threadId },
-      select: { shop: true, analyzedAt: true },
+  // Atomic per-thread "first analysis" counter (H-8): the conditional
+  // UPDATE + counter upsert run in a single transaction so two concurrent
+  // analyses on the same thread can never both succeed and double-charge.
+  // Postgres serializes the UPDATE on the row; whichever loses the race
+  // sees result.count === 0 and skips the upsert.
+  return prisma.$transaction(async (tx) => {
+    const result = await tx.thread.updateMany({
+      where: { id: threadId, shop, analyzedAt: null },
+      data: { analyzedAt: new Date() },
     });
-    if (!row || row.shop !== shop) {
-      billingAnalyzedThreadSkippedTotal.inc({ shop, reason: "not_found" });
-      return { counted: false, alreadyAnalyzed: false };
+
+    if (result.count === 0) {
+      const row = await tx.thread.findUnique({
+        where: { id: threadId },
+        select: { shop: true, analyzedAt: true },
+      });
+      if (!row || row.shop !== shop) {
+        billingAnalyzedThreadSkippedTotal.inc({ shop, reason: "not_found" });
+        return { counted: false, alreadyAnalyzed: false };
+      }
+      billingAnalyzedThreadSkippedTotal.inc({ shop, reason: "already_analyzed" });
+      return { counted: false, alreadyAnalyzed: row.analyzedAt !== null };
     }
-    billingAnalyzedThreadSkippedTotal.inc({ shop, reason: "already_analyzed" });
-    return { counted: false, alreadyAnalyzed: row.analyzedAt !== null };
-  }
 
-  const periodStart = getCurrentPeriodStart();
-  await prisma.billingUsage.upsert({
-    where: { shop_periodStart: { shop, periodStart } },
-    create: { shop, periodStart, analyzedThreadsCount: 1 },
-    update: { analyzedThreadsCount: { increment: 1 } },
+    const periodStart = getCurrentPeriodStart();
+    await tx.billingUsage.upsert({
+      where: { shop_periodStart: { shop, periodStart } },
+      create: { shop, periodStart, analyzedThreadsCount: 1 },
+      update: { analyzedThreadsCount: { increment: 1 } },
+    });
+
+    billingAnalyzedThreadCountedTotal.inc({ shop });
+    return { counted: true, alreadyAnalyzed: false };
   });
-
-  billingAnalyzedThreadCountedTotal.inc({ shop });
-  return { counted: true, alreadyAnalyzed: false };
 }
