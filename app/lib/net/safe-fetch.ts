@@ -128,7 +128,15 @@ async function assertPublicHost(host: string): Promise<void> {
     if (isPrivateIPv6(host)) throw new Error("safe_fetch_private_ip");
     return;
   }
-  const addrs = await lookup(host, { all: true });
+  // DNS lookup with a hard 5 s timeout — `dns.lookup` can hang for the OS
+  // default (often 30 s+) on network partitions, which leaves an inbound
+  // request waiting and starves the event loop.
+  const addrs = await Promise.race([
+    lookup(host, { all: true }),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("safe_fetch_dns_timeout")), 5_000),
+    ),
+  ]);
   if (!addrs.length) throw new Error("safe_fetch_dns_empty");
   for (const a of addrs) {
     if (a.family === 4 && isPrivateIPv4(a.address)) throw new Error("safe_fetch_private_ip");

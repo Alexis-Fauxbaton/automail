@@ -181,9 +181,14 @@ export async function trackedChatCompletion(
         // we retry once and let the semaphore throttle the next batch.
         if (retryMs !== null && attempt < MAX_ATTEMPTS) {
           console.warn(
-            `[llm] OpenAI 429 (attempt ${attempt}/${MAX_ATTEMPTS}), backing off ${retryMs}ms`,
+            `[llm] OpenAI 429 (attempt ${attempt}/${MAX_ATTEMPTS}), backing off ${retryMs}ms ` +
+              `shop=${ctx.shop ?? ""} callSite=${ctx.callSite} model=${params.model}`,
           );
-          await new Promise((r) => setTimeout(r, retryMs));
+          // Jitter prevents 20 queued shops from all resuming together when
+          // Retry-After is the same — that would just create a second burst
+          // and trigger another 429. Jitter spread = 20% of the wait window.
+          const jitter = Math.floor(Math.random() * Math.max(50, retryMs * 0.2));
+          await new Promise((r) => setTimeout(r, retryMs + jitter));
           continue;
         }
         // Any other failure (5xx, network, timeout) counts toward the
