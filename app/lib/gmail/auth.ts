@@ -107,6 +107,9 @@ export async function saveConnection(
       tokenExpiry: tokens.expiry,
       outgoingAliases,
     },
+    // Reconnect: wipe sync-state fields so the new connection starts clean.
+    // Stale historyId / lastSyncError from a previous (possibly invalidated)
+    // session would otherwise be replayed against the new tokens.
     update: {
       provider: "gmail",
       email: tokens.email,
@@ -114,6 +117,12 @@ export async function saveConnection(
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
       outgoingAliases,
+      lastSyncError: null,
+      lastSyncAt: null,
+      historyId: null,
+      deltaToken: null,
+      onboardingBackfillDoneAt: null,
+      syncCancelledAt: null,
     },
   });
 }

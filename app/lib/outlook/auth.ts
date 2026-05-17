@@ -247,6 +247,13 @@ export async function saveConnection(
       tokenExpiry: tokens.expiry,
       outgoingAliases,
     },
+    // Reconnect: wipe sync-state fields so the new connection starts clean.
+    // Stale state from a previous session (deltaToken, lastSyncError,
+    // onboardingBackfillDoneAt) would otherwise be replayed against the
+    // new tokens — e.g. a deltaToken bound to the OLD account would 410
+    // on first call, or a leftover lastSyncError ("Vite module runner has
+    // been closed" from a dev process) would surface on the inbox UI even
+    // though the new connection is healthy.
     update: {
       provider: "outlook",
       email: tokens.email,
@@ -254,6 +261,12 @@ export async function saveConnection(
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
       outgoingAliases,
+      lastSyncError: null,
+      lastSyncAt: null,
+      historyId: null,
+      deltaToken: null,
+      onboardingBackfillDoneAt: null,
+      syncCancelledAt: null,
     },
   });
 }

@@ -138,6 +138,9 @@ export async function saveZohoConnection(
       zohoAccountId: tokens.accountId,
       outgoingAliases,
     },
+    // Reconnect: wipe sync-state fields so the new connection starts clean.
+    // Stale historyId / lastSyncError / onboardingBackfillDoneAt from a
+    // prior session would otherwise be replayed against the new tokens.
     update: {
       provider: "zoho",
       email: tokens.email,
@@ -146,6 +149,12 @@ export async function saveZohoConnection(
       tokenExpiry: tokens.expiry,
       zohoAccountId: tokens.accountId,
       outgoingAliases,
+      lastSyncError: null,
+      lastSyncAt: null,
+      historyId: null,
+      deltaToken: null,
+      onboardingBackfillDoneAt: null,
+      syncCancelledAt: null,
     },
   });
 }
