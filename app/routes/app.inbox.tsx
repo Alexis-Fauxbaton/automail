@@ -3357,7 +3357,7 @@ export default function InboxPage() {
                 tabs={[
                   { key: "to_handle", label: t("inbox.bucketToHandle"), count: bucketCounts.to_handle },
                   ...(bucketCounts.to_analyze > 0
-                    ? [{ key: "to_analyze" as const, label: t("inbox.bucketToAnalyze"), count: bucketCounts.to_analyze }]
+                    ? [{ key: "to_analyze" as const, label: t("inbox.bucketToAnalyze"), count: bucketCounts.to_analyze, countTone: "warning" as const }]
                     : []),
                   { key: "waiting_customer", label: t("inbox.bucketWaitingCustomer"), count: bucketCounts.waiting_customer },
                   { key: "resolved", label: t("inbox.bucketResolved"), count: bucketCounts.resolved },

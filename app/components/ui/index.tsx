@@ -319,7 +319,7 @@ export function SegmentedTabs<T extends string>({
   active,
   onChange,
 }: {
-  tabs: ReadonlyArray<{ key: T; label: string; count?: number }>;
+  tabs: ReadonlyArray<{ key: T; label: string; count?: number; countTone?: "default" | "warning" }>;
   active: T;
   onChange: (key: T) => void;
 }) {
@@ -327,6 +327,18 @@ export function SegmentedTabs<T extends string>({
     <div className="ui-tabs">
       {tabs.map((t) => {
         const isActive = t.key === active;
+        // Amber count pill flags transient / billing-suspended buckets
+        // (e.g. À analyser when the shop has accumulated unanalyzed support
+        // threads under a suspended state). Inactive when no count or no tone.
+        const countStyle =
+          t.countTone === "warning" && !isActive
+            ? {
+                background: "#fff7ed",
+                color: "#9a3412",
+                border: "1px solid #fed7aa",
+                fontWeight: 700,
+              }
+            : undefined;
         return (
           <button
             key={t.key}
@@ -335,7 +347,9 @@ export function SegmentedTabs<T extends string>({
             onClick={() => onChange(t.key)}
           >
             {t.label}
-            {typeof t.count === "number" && <span className="ui-tab__count">{t.count}</span>}
+            {typeof t.count === "number" && (
+              <span className="ui-tab__count" style={countStyle}>{t.count}</span>
+            )}
           </button>
         );
       })}
