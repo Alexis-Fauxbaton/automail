@@ -2965,6 +2965,7 @@ function DismissThreadFromAnalyzeButton({ canonicalThreadId }: { canonicalThread
       <button
         type="submit"
         disabled={isSubmitting}
+        title={t("inbox.dismissFromAnalyzeQueueTitle")}
         style={{
           background: "transparent",
           color: "#475569",
