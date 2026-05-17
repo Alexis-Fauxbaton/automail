@@ -462,7 +462,7 @@
       "viewPlans": "View plans"
     },
     "syncSuspended": {
-      "banner": "Mailbox sync is paused — your quota is exhausted or your trial has ended. Upgrade or wait for the next monthly reset to resume."
+      "banner": "Full analysis and draft generation are paused — your quota is exhausted or your trial has ended. Mails are still received and classified as support / non-support; they accumulate in the \"To analyze\" tab until you upgrade or the monthly reset kicks in."
     }
   },
   "classification": {
