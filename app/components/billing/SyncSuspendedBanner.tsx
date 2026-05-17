@@ -19,14 +19,15 @@ export function SyncSuspendedBanner() {
       background: '#ffedd5',
       color: '#9a3412',
       border: '1px solid #fdba74',
-      padding: '12px 16px',
-      borderRadius: 8,
+      padding: '10px 14px',
+      borderRadius: 10,
       display: 'flex',
       alignItems: 'center',
-      gap: 16,
-      fontSize: 14,
-      lineHeight: 1.45,
+      gap: 12,
+      fontSize: 13.5,
+      lineHeight: 1.4,
       marginBottom: 12,
+      boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
     }}>
       <span style={{ flex: 1, minWidth: 0 }}>
         {t('billing.syncSuspended.banner')}
