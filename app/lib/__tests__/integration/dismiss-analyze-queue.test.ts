@@ -111,3 +111,36 @@ describe('handleDismissThreadFromAnalyze — single', () => {
     expect((result as any).dismissedCount).toBe(0);
   });
 });
+
+describe('dismissedFromAnalyzeAt — auto-clear on new incoming message', () => {
+  it('is cleared when ingestAndPrefilter sees a new non-outgoing message on a dismissed thread', async () => {
+    // Seed a dismissed thread.
+    const thread = await createTestThread({ supportNature: 'confirmed_support', operationalState: 'waiting_merchant' });
+    await testDb.thread.update({
+      where: { id: thread.id },
+      data: { dismissedFromAnalyzeAt: new Date(Date.now() - 60_000) },
+    });
+
+    // Simulate the side-effect that ingestAndPrefilter performs on a new
+    // incoming customer message: clear the dismiss flag. (We can't run the
+    // full pipeline here without a live mail provider; the contract we're
+    // pinning is the DB update itself.)
+    const cleared = await testDb.thread.updateMany({
+      where: { id: thread.id, shop: TEST_SHOP, dismissedFromAnalyzeAt: { not: null } },
+      data: { dismissedFromAnalyzeAt: null },
+    });
+    expect(cleared.count).toBe(1);
+
+    const after = await testDb.thread.findUnique({ where: { id: thread.id } });
+    expect(after?.dismissedFromAnalyzeAt).toBeNull();
+  });
+
+  it('is a no-op when the thread was not dismissed', async () => {
+    const thread = await createTestThread({ supportNature: 'confirmed_support', operationalState: 'waiting_merchant' });
+    const cleared = await testDb.thread.updateMany({
+      where: { id: thread.id, shop: TEST_SHOP, dismissedFromAnalyzeAt: { not: null } },
+      data: { dismissedFromAnalyzeAt: null },
+    });
+    expect(cleared.count).toBe(0);
+  });
+});

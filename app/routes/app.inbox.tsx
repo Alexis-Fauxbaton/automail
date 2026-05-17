@@ -691,14 +691,18 @@ function getOpsBucket(
   // accumulated while the shop was suspended) and haven't been dismissed
   // by the merchant. They wait for an explicit "Analyser" click. Once Tier 3
   // runs (analyzedAt set) the thread falls through to the regular buckets.
-  // Once dismissed, same fall-through — they show up wherever their other
-  // signals place them.
   const isSupportStance =
     state?.supportNature === "confirmed_support" ||
     state?.supportNature === "probable_support" ||
     state?.supportNature === "mixed";
-  if (isSupportStance && !state?.analyzedAt && !state?.dismissedFromAnalyzeAt) {
-    return "to_analyze";
+  if (isSupportStance && !state?.analyzedAt) {
+    if (!state?.dismissedFromAnalyzeAt) return "to_analyze";
+    // Dismissed unanalyzed support thread → "Autre". The merchant explicitly
+    // chose not to deal with it through the AI flow, so keep it out of the
+    // primary actionable buckets. A new incoming customer message clears
+    // dismissedFromAnalyzeAt server-side (see ingestAndPrefilter) and the
+    // thread comes back to À analyser automatically.
+    return "other";
   }
   if (threadNeedsReply(thread, connectedEmail)) return "to_process";
   const op = state?.operationalState;

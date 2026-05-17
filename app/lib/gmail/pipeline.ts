@@ -456,6 +456,16 @@ export async function ingestAndPrefilter(
     return;
   }
 
+  // New incoming customer message on a previously dismissed thread re-opens
+  // the À analyser queue for it: the merchant chose to defer the prior
+  // signal, but new customer activity warrants re-surfacing. Outgoing
+  // messages (merchant replies) don't clear the dismiss — those don't
+  // represent customer demand.
+  await prisma.thread.updateMany({
+    where: { id: canonicalThreadId, shop, dismissedFromAnalyzeAt: { not: null } },
+    data: { dismissedFromAnalyzeAt: null },
+  }).catch(() => { /* best-effort */ });
+
   // Cheap per-message regex extraction + thread-level consolidation.
   // Must run for every non-outgoing message so the thread's
   // resolvedOrderNumber / resolvedTrackingNumber are always fresh.
