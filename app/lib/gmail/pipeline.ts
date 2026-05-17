@@ -61,6 +61,7 @@ export async function getMailClient(shop: string, provider: string): Promise<Mai
 export async function processNewEmails(
   shop: string,
   admin: AdminGraphqlClient,
+  options?: { tier3Allowed?: boolean },
 ): Promise<ProcessingReport> {
   const report: ProcessingReport = {
     total: 0,
@@ -75,6 +76,10 @@ export async function processNewEmails(
 
   const syncStartedAt = new Date();
   const log = createLogger({ shop, mod: "gmail/pipeline" });
+  // Default true: pre-billing-suspension callers (tests, internal shops,
+  // healthy plans) get the full pipeline. Auto-sync and handleSync pass
+  // `false` when the shop is suspended so Tier 3 is skipped per-shop.
+  const tier3Allowed = options?.tier3Allowed ?? true;
 
   // Clear any previous top-level error and cancel flag at the start of a new sync.
   await prisma.mailConnection.update({
@@ -83,7 +88,7 @@ export async function processNewEmails(
   }).catch(() => { /* ignore if connection gone */ });
 
   try {
-    return await _processNewEmails(shop, admin, report, syncStartedAt);
+    return await _processNewEmails(shop, admin, report, syncStartedAt, tier3Allowed);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error({ err }, "Top-level sync error");
@@ -100,6 +105,7 @@ async function _processNewEmails(
   admin: AdminGraphqlClient,
   report: ProcessingReport,
   syncStartedAt: Date,
+  tier3Allowed: boolean,
 ): Promise<ProcessingReport> {
   const log = createLogger({ shop, mod: "gmail/pipeline" });
   const conn = await prisma.mailConnection.findUnique({ where: { shop } });
@@ -259,7 +265,7 @@ async function _processNewEmails(
       await Promise.allSettled(
         batch.map(async (recordId) => {
           try {
-            await classifyAndDraft(shop, admin, client, recordId, customerEmails, conn.email, report);
+            await classifyAndDraft(shop, admin, client, recordId, customerEmails, conn.email, report, { tier3Allowed });
           } catch (err) {
             report.errors++;
             log.error({ err, recordId }, "Classification error");
@@ -957,7 +963,9 @@ export async function classifyAndDraft(
   customerEmails: Set<string>,
   mailboxAddress: string,
   report: ProcessingReport,
+  options: { tier3Allowed?: boolean } = {},
 ) {
+  const tier3Allowed = options.tier3Allowed ?? true;
   const log = createLogger({ shop, mod: "gmail/pipeline:classifyAndDraft", recordId });
   const record = await prisma.incomingEmail.findFirst({
     where: { id: recordId, shop },
@@ -1067,6 +1075,19 @@ export async function classifyAndDraft(
 
   // --- Tier 3: Full support analysis ---
   report.supportClient++;
+
+  // Per-conversation billing: when the shop is suspended (quota exceeded
+  // or trial expired) we still ingest + classify (free / cheap) but skip
+  // the expensive Tier 3 step (intent extraction + Shopify order search +
+  // tracking + draft). The mail surfaces in the inbox as "support, unanalyzed"
+  // until the merchant upgrades or the period rolls over.
+  if (!tier3Allowed) {
+    await prisma.incomingEmail.update({
+      where: { id: record.id },
+      data: { processingStatus: "classified" },
+    });
+    return;
+  }
 
   try {
     const threadContext = await buildThreadContext(

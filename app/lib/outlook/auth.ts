@@ -74,13 +74,53 @@ export async function exchangeCodeForTokens(code: string) {
   if (!meRes.ok) {
     console.warn("[outlook/auth] failed to fetch user email from Graph /me, using 'unknown'");
   }
-  const meData = meRes.ok ? await meRes.json() as { mail?: string; userPrincipalName?: string } : {};
-  const email = meData.mail || meData.userPrincipalName || "unknown";
-
-  const aliases = await fetchOutlookAliases(tokenData.access_token, email).catch((err) => {
+  const meData = meRes.ok ? await meRes.json() as { mail?: string; userPrincipalName?: string; otherMails?: string[] } : {};
+  // Some Microsoft accounts return `mail: null` (no Exchange mailbox configured
+  // yet) and a non-email userPrincipalName (e.g. live.com#alias@…). Fall back
+  // through `otherMails` and proxyAddresses before giving up.
+  let email = meData.mail || meData.userPrincipalName || "";
+  // Reject UPNs that aren't plausible email addresses.
+  if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) email = "";
+  if (!email && Array.isArray(meData.otherMails) && meData.otherMails.length > 0) {
+    email = meData.otherMails.find((e) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) ?? "";
+  }
+  // Last resort: pull the primary SMTP address from proxyAddresses (the
+  // entry prefixed with uppercase "SMTP:"). fetchOutlookAliases already calls
+  // /me?$select=mail,proxyAddresses — reuse it.
+  let aliases: string[] = [];
+  try {
+    const proxyRes = await fetch(GRAPH_ME_PROXY, {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
+    });
+    if (proxyRes.ok) {
+      const proxyData = (await proxyRes.json()) as { mail?: string; proxyAddresses?: string[] };
+      if (!email) {
+        // Primary (uppercase "SMTP:") wins.
+        const primary = (proxyData.proxyAddresses ?? []).find(
+          (e) => typeof e === "string" && e.startsWith("SMTP:"),
+        );
+        if (primary) email = primary.slice("SMTP:".length).trim().toLowerCase();
+        else if (proxyData.mail) email = proxyData.mail;
+      }
+      const set = new Set<string>();
+      if (email) set.add(email.toLowerCase());
+      for (const entry of proxyData.proxyAddresses ?? []) {
+        if (typeof entry !== "string") continue;
+        const idx = entry.indexOf(":");
+        if (idx < 0) continue;
+        if (entry.slice(0, idx).toLowerCase() !== "smtp") continue;
+        const addr = entry.slice(idx + 1).trim().toLowerCase();
+        if (addr) set.add(addr);
+      }
+      aliases = Array.from(set);
+    }
+  } catch (err) {
     console.warn("[outlook/auth] proxyAddresses fetch failed:", err);
-    return [] as string[];
-  });
+  }
+  if (!email) {
+    console.warn("[outlook/auth] could not determine primary email from Graph; using 'unknown'");
+    email = "unknown";
+  }
 
   return {
     accessToken: tokenData.access_token,
@@ -206,17 +246,66 @@ export async function backfillOutlookAliasesIfMissing(shop: string): Promise<voi
     select: { provider: true, email: true, outgoingAliases: true },
   });
   if (!conn || conn.provider !== "outlook") return;
-  if (conn.outgoingAliases && conn.outgoingAliases !== "[]") return;
+  const aliasesNeedBackfill = !conn.outgoingAliases || conn.outgoingAliases === "[]";
+  const emailIsUnknown = !conn.email || conn.email === "unknown";
+  if (!aliasesNeedBackfill && !emailIsUnknown) return;
   try {
     const { accessToken } = await getAuthenticatedClient(shop);
-    const aliases = await fetchOutlookAliases(accessToken, conn.email);
-    await prisma.mailConnection.update({
-      where: { shop },
-      data: { outgoingAliases: JSON.stringify(aliases) },
-    });
-    console.log(`[outlook] backfilled ${aliases.length} outgoing aliases for shop=${shop}`);
+    // Recover the primary email from Graph if the connection was saved with
+    // "unknown". Old connections predate the proxyAddresses fallback in
+    // authenticate(); refresh them lazily on the next sync.
+    let primaryEmail = conn.email;
+    if (emailIsUnknown) {
+      try {
+        const meRes = await fetch(GRAPH_ME, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (!meRes.ok) {
+          console.warn(`[outlook] /me failed during recovery: HTTP ${meRes.status}`);
+        }
+        if (meRes.ok) {
+          const meData = (await meRes.json()) as { mail?: string; userPrincipalName?: string; otherMails?: string[] };
+          console.log(`[outlook] /me recovery data for shop=${shop}: mail=${meData.mail ?? "null"} upn=${meData.userPrincipalName ?? "null"} otherMails=${JSON.stringify(meData.otherMails ?? [])}`);
+          const isEmail = (s: string | undefined) => !!s && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s);
+          let email = (meData.mail && isEmail(meData.mail) ? meData.mail : "")
+            || (meData.userPrincipalName && isEmail(meData.userPrincipalName) ? meData.userPrincipalName : "")
+            || (Array.isArray(meData.otherMails) ? (meData.otherMails.find(isEmail) ?? "") : "");
+          if (!email) {
+            // proxyAddresses fallback
+            const proxyRes = await fetch(GRAPH_ME_PROXY, {
+              headers: { Authorization: `Bearer ${accessToken}` },
+            });
+            if (proxyRes.ok) {
+              const proxyData = (await proxyRes.json()) as { proxyAddresses?: string[] };
+              const primary = (proxyData.proxyAddresses ?? []).find(
+                (e) => typeof e === "string" && e.startsWith("SMTP:"),
+              );
+              if (primary) email = primary.slice("SMTP:".length).trim().toLowerCase();
+            }
+          }
+          if (email) {
+            primaryEmail = email.toLowerCase();
+            await prisma.mailConnection.update({
+              where: { shop },
+              data: { email: primaryEmail },
+            });
+            console.log(`[outlook] recovered primary email for shop=${shop} → ${primaryEmail}`);
+          }
+        }
+      } catch (err) {
+        console.warn(`[outlook] email recovery failed for shop=${shop}:`, err);
+      }
+    }
+    if (aliasesNeedBackfill) {
+      const aliases = await fetchOutlookAliases(accessToken, primaryEmail);
+      await prisma.mailConnection.update({
+        where: { shop },
+        data: { outgoingAliases: JSON.stringify(aliases) },
+      });
+      console.log(`[outlook] backfilled ${aliases.length} outgoing aliases for shop=${shop}`);
+    }
   } catch (err) {
-    console.warn(`[outlook] alias backfill failed for shop=${shop}:`, err);
+    console.warn(`[outlook] backfill failed for shop=${shop}:`, err);
   }
 }
 

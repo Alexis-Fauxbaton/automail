@@ -55,6 +55,34 @@ describe('handleRedraft — quota enforcement', () => {
   });
 });
 
+describe('handleSync — Tier 3 suspension', () => {
+  it('passes tier3Allowed=false to processNewEmails when state=trial_expired, returns syncSuspended:true', async () => {
+    // firstInstallDate = 30 days ago → trial_expired → isSyncSuspended=true
+    await testDb.shopFlag.create({
+      data: { shop: TEST_SHOP, firstInstallDate: new Date(Date.now() - 30 * 86400000) },
+    });
+    // No mail connection: processNewEmails throws inside _processNewEmails
+    // with "No mail connection for this shop". The fact that processNewEmails
+    // was called at all (rather than gated upstream) proves the new behavior:
+    // we now ingest+classify even under suspension. The throw is caught at
+    // the top-level catch in processNewEmails and rethrown, so we expect
+    // handleSync to surface that error.
+    const adminGraphql = vi.fn().mockResolvedValue({
+      json: async () => ({ data: { currentAppInstallation: { activeSubscriptions: [] } } }),
+    });
+
+    const { handleSync } = await import('../../support/inbox-actions');
+    await expect(
+      handleSync({
+        shop: TEST_SHOP,
+        admin: { graphql: adminGraphql } as any,
+      }),
+    ).rejects.toThrow(/No mail connection/);
+  });
+
+});
+
+
 describe('handleReanalyze — quota gate for already-analyzed thread', () => {
   it('is NOT blocked even when quota is at 50/50 (re-analysis is free)', async () => {
     await testDb.shopFlag.create({

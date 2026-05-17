@@ -124,11 +124,21 @@ export async function handleReclassify(params: { shop: string }) {
 
 export async function handleSync(params: { shop: string; admin: AdminGraphqlClient }) {
   const { shop, admin } = params;
-  const report = await processNewEmails(shop, admin);
-  const staleRefresh = await refreshStaleAnalysesForShop(shop, admin, {
-    maxAgeMs: ANALYSIS_FRESHNESS_MS.autoRefresh,
-  });
-  return { report, syncCompleted: true, disconnected: false, reanalyzed: null, refined: null, stopped: false, staleRefresh };
+  // Mirror auto-sync's per-conversation billing semantics: when the shop is
+  // suspended (quota exceeded or trial expired) the pipeline still runs but
+  // Tier 3 (intent + Shopify + tracking + draft) is skipped — Tier 1 + 2
+  // keep classifying so merchants see new support mails arriving, even if
+  // they're not analyzed. The stale-analysis refresh is also Tier 3 work
+  // and is skipped in that case.
+  const ent = await resolveEntitlements({ shop, admin });
+  const tier3Allowed = !ent.isSyncSuspended;
+  const report = await processNewEmails(shop, admin, { tier3Allowed });
+  const staleRefresh = tier3Allowed
+    ? await refreshStaleAnalysesForShop(shop, admin, {
+        maxAgeMs: ANALYSIS_FRESHNESS_MS.autoRefresh,
+      })
+    : null;
+  return { report, syncCompleted: true, disconnected: false, reanalyzed: null, refined: null, stopped: false, staleRefresh, syncSuspended: !tier3Allowed };
 }
 
 export async function handleBackfill(params: { shop: string; days: number }) {

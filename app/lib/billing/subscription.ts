@@ -59,8 +59,24 @@ export async function resolveActivePlan(input: {
     return cached.result;
   }
 
-  const response = await input.admin.graphql(QUERY);
-  const body = await response.json();
+  // Network / Shopify Billing API failures must not crash the whole app.
+  // If the call fails we fall back to the last cached value (even if expired)
+  // or to "no active plan" so the rest of the app stays usable. The cache
+  // will refresh on the next successful call or webhook invalidation.
+  let response: { json: () => Promise<any> };
+  try {
+    response = await input.admin.graphql(QUERY);
+  } catch (err) {
+    if (cached) return cached.result;
+    return { plan: 'none', subscriptionId: null, currentPeriodEnd: null };
+  }
+  let body: any;
+  try {
+    body = await response.json();
+  } catch (err) {
+    if (cached) return cached.result;
+    return { plan: 'none', subscriptionId: null, currentPeriodEnd: null };
+  }
   const subs = body?.data?.currentAppInstallation?.activeSubscriptions ?? [];
 
   const active = subs.find((s: any) => s.status === 'ACTIVE');

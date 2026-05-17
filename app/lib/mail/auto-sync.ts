@@ -296,6 +296,13 @@ async function runJob(job: {
     // Shopify response can't serialise the scheduling loop.
     // Fail-open on errors (e.g. transient Shopify outage) so paying shops
     // aren't blocked from syncing by a billing-API blip.
+    //
+    // Per-conversation billing nuance: under suspension, "sync" and "resync"
+    // still run with `tier3Allowed=false` so merchants keep seeing new mails
+    // classified support/non-support, only the expensive Tier 3 (intent +
+    // Shopify + tracking + draft) is gated. Heavier kinds (backfill, recompute,
+    // reclassify, analyze_thread) remain fully blocked.
+    let isSuspended = false;
     try {
       const { admin } = await withTimeout(
         unauthenticated.admin(job.shop),
@@ -307,8 +314,9 @@ async function runJob(job: {
         10_000,
         `resolveEntitlements(${job.shop})`,
       );
-      if (ent.isSyncSuspended) {
-        console.log(`[auto-sync] skipping ${job.shop} — sync suspended (state=${ent.state})`);
+      isSuspended = ent.isSyncSuspended;
+      if (isSuspended && job.kind !== "sync" && job.kind !== "resync") {
+        console.log(`[auto-sync] skipping ${job.shop} ${job.kind} — sync suspended (state=${ent.state})`);
         finalStatus = "suspended";
         await markJobDone(job.id);
         return;
@@ -330,6 +338,7 @@ async function runJob(job: {
         await runSyncForShop(job.shop, {
           runOnboarding: !conn?.onboardingBackfillDoneAt,
           onboardingDays: conn?.onboardingBackfillDays ?? 60,
+          tier3Allowed: !isSuspended,
         });
         break;
       }
@@ -449,8 +458,9 @@ async function runJob(job: {
  */
 async function runSyncForShop(
   shop: string,
-  opts: { runOnboarding: boolean; onboardingDays: number },
+  opts: { runOnboarding: boolean; onboardingDays: number; tier3Allowed?: boolean },
 ): Promise<void> {
+  const tier3Allowed = opts.tier3Allowed ?? true;
   // unauthenticated.admin may throw a Response object (Remix redirect) when
   // the shop's offline token is missing or expired. Convert it to a proper
   // Error so markJobFailed captures a readable message.
@@ -479,9 +489,9 @@ async function runSyncForShop(
       console.error(`[auto-sync] shop=${shop} onboarding backfill failed:`, err);
     }
   }
-  const report = await processNewEmails(shop, admin);
+  const report = await processNewEmails(shop, admin, { tier3Allowed });
   console.log(
-    `[auto-sync] shop=${shop} fetched=${report.total} support=${report.supportClient} errors=${report.errors}`,
+    `[auto-sync] shop=${shop} fetched=${report.total} support=${report.supportClient} errors=${report.errors} tier3Allowed=${tier3Allowed}`,
   );
 
   // Best-effort refresh of active thread analyses every sync tick — independently
