@@ -238,6 +238,20 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       await saveConnection(shop, tokens);
     }
 
+    // Kick off the first sync immediately instead of waiting up to 60 s for
+    // the next auto-sync tick. The worker picks this job up at the next
+    // tick (≤ 60 s) and triggers the onboarding backfill (60 days by default)
+    // + first regular sync. Without this, a freshly-connected merchant sees
+    // an empty inbox for up to a minute, with no visible activity — confusing.
+    try {
+      const { enqueueJob } = await import("../lib/mail/job-queue");
+      await enqueueJob(shop, "sync");
+    } catch (err) {
+      // Non-blocking: if enqueueJob fails (e.g. transient DB blip) the
+      // periodic scheduler will still queue one within ≤ 60 s.
+      console.warn(`[mail-auth] failed to enqueue initial sync for ${shop}:`, err);
+    }
+
     return redirect(adminInboxUrl(shop, { connected: "true" }));
   } catch (err) {
     const correlationId = Date.now().toString(36);
