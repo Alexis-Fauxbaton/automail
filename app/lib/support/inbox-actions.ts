@@ -231,29 +231,17 @@ export async function handleReanalyze(params: {
   const { shop, admin, emailId, skipDraft } = params;
 
   // Gate on entitlements regardless of skipDraft. Both branches run Tier 3
-  // (intent + Shopify + tracking) which is the billable unit, and the call
-  // to markThreadAnalyzedIfFirst inside reanalyzeEmail will increment the
-  // counter for a never-analyzed thread. Under suspension we must refuse
-  // any Tier 3, including error-retry paths that set skipDraft=1.
+  // (LLM intent extraction + Shopify + tracking + optional draft) — these
+  // cost real money on every call even when markThreadAnalyzedIfFirst would
+  // return counted=false (idempotent at the billing layer, but the LLM /
+  // Shopify roundtrips still happen).
   //
-  // Exception: if the thread was already analyzed in this billing period
-  // (Thread.analyzedAt set), re-analyse is free (markThreadAnalyzedIfFirst
-  // returns counted=false). Allow it so merchants on suspended accounts
-  // can still refresh a previously-paid analysis.
+  // Under suspension (trial_expired OR paid + quota_exceeded) we refuse ALL
+  // Tier 3 work, including re-analysis of previously-analyzed threads and
+  // error-retries (skipDraft=1). The merchant must upgrade or wait for the
+  // next period to refresh anything.
   const ent = await resolveEntitlements({ shop, admin });
-  const emailForGate = await prisma.incomingEmail.findUnique({
-    where: { id: emailId },
-    select: { canonicalThreadId: true },
-  });
-  let alreadyAnalyzed = false;
-  if (emailForGate?.canonicalThreadId) {
-    const tRow = await prisma.thread.findUnique({
-      where: { id: emailForGate.canonicalThreadId },
-      select: { analyzedAt: true },
-    });
-    alreadyAnalyzed = tRow?.analyzedAt !== null && tRow?.analyzedAt !== undefined;
-  }
-  if (!alreadyAnalyzed && !ent.canGenerateDraft) {
+  if (!ent.canGenerateDraft) {
     return {
       reanalyzed: null,
       report: null,
@@ -389,9 +377,11 @@ export async function handleRefine(params: {
 
   await maybeRefreshAnalysis(emailId, admin, shop);
 
-  // Reload AFTER the refresh so we see fresh analysisResult.
-  const fresh = await prisma.incomingEmail.findUnique({
-    where: { id: emailId },
+  // Reload AFTER the refresh so we see fresh analysisResult. Defence-in-
+  // depth: re-include `shop` in the where clause so this reload cannot
+  // pull another shop's data even in the unlikely event of an id collision.
+  const fresh = await prisma.incomingEmail.findFirst({
+    where: { id: emailId, shop },
     select: { analysisResult: true },
   });
   let contextSummary: string | undefined;
@@ -737,8 +727,12 @@ export async function handleUpdateClassification(params: {
       });
     }
 
-    const threadRow = await prisma.thread.findUnique({
-      where: { id: threadId },
+    // Re-include `shop` even though persistClassificationEdit above already
+    // validated ownership — defence-in-depth so this lookup can never
+    // return another shop's thread row even if a future refactor changes
+    // the call shape.
+    const threadRow = await prisma.thread.findFirst({
+      where: { id: threadId, shop },
       select: { analyzedAt: true, supportNature: true },
     });
     const isSupportNow =

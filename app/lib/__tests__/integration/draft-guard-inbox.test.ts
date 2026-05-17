@@ -84,8 +84,10 @@ describe('handleSync — Tier 3 suspension', () => {
 });
 
 
-describe('handleReanalyze — quota gate for already-analyzed thread', () => {
-  it('is NOT blocked even when quota is at 50/50 (re-analysis is free)', async () => {
+describe('handleReanalyze — strict quota gate', () => {
+  it('IS blocked under quota exceeded even on a previously-analyzed thread', async () => {
+    // Strict policy: Tier 3 runs real LLM/Shopify calls; we refuse them under
+    // any suspended state, even for threads that were analyzed earlier.
     await testDb.shopFlag.create({
       data: { shop: TEST_SHOP, firstInstallDate: new Date(Date.now() - 30 * 86400000) },
     });
@@ -94,7 +96,6 @@ describe('handleReanalyze — quota gate for already-analyzed thread', () => {
       data: { shop: TEST_SHOP, periodStart, analyzedThreadsCount: 50 },
     });
 
-    // Seed a thread that has already been analyzed (analyzedAt != null).
     const thread = await createTestThread({});
     await testDb.thread.update({
       where: { id: thread.id },
@@ -135,9 +136,8 @@ describe('handleReanalyze — quota gate for already-analyzed thread', () => {
       skipDraft: false,
     });
 
-    expect((result as any).quotaExceeded).toBeUndefined();
-    expect((result as any).reanalyzed).not.toBeNull();
-    expect((result as any).reanalyzed.emailId).toBe(email.id);
+    expect((result as any).quotaExceeded).toBe(true);
+    expect((result as any).reanalyzed).toBeNull();
   });
 
   it('IS blocked when quota is at 50/50 and the thread has never been analyzed', async () => {
