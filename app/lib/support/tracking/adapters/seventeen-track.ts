@@ -7,7 +7,10 @@
  * API key: https://www.17track.net/en/api (free: 100 trackings/month)
  */
 
-const BASE = "https://api.17track.net/track/v2.2";
+// API version overridable via env so a 17track upgrade doesn't require a
+// code redeploy. Default kept at v2.2 (current stable as of 2026-05).
+const SEVENTEEN_TRACK_VERSION = process.env.SEVENTEEN_TRACK_API_VERSION || "v2.2";
+const BASE = `https://api.17track.net/track/${SEVENTEEN_TRACK_VERSION}`;
 
 import {
   isOpen as breakerOpen,
@@ -95,8 +98,14 @@ interface ApiResponse {
 // ---------------------------------------------------------------------------
 
 export interface SevenTrackResult {
-  /** "pending" = registered but 17track hasn't fetched data yet */
-  state: "ok" | "pending" | "error";
+  /**
+   * - "ok": data returned
+   * - "pending": registered but 17track hasn't fetched data yet
+   * - "quota_exhausted": our 17track plan ran out for the period — not a
+   *   transient error, retry won't help until the next billing cycle
+   * - "error": transient or unexpected failure
+   */
+  state: "ok" | "pending" | "error" | "quota_exhausted";
   carrierName: string | null;
   status: string | null;
   lastEvent: string | null;
@@ -311,6 +320,24 @@ export async function fetchTrackingFrom17track(
         breakerSuccess();
         return {
           state: "pending",
+          carrierName: null, status: null, lastEvent: null,
+          lastLocation: null, lastEventDate: null, delivered: false, events: [],
+        };
+      }
+
+      // Quota / billing errors from 17track are upstream-healthy: the API is
+      // up, our account has just run out of quota for the period. Treat them
+      // as a success from the breaker's POV (the API isn't broken) and
+      // surface a typed state so the caller can show "wait until quota
+      // resets" instead of breaking tracking for all shops.
+      // Codes -18010008 / -18010009 / -18019902 are observed quota-exhausted
+      // signals; we also catch the generic -1801_xxxx family defensively.
+      const code = rejection?.error?.code;
+      if (typeof code === "number" && (code === -18010008 || code === -18010009 || code === -18019902 || (code <= -18010000 && code >= -18019999))) {
+        console.warn(`[17track] quota exhausted for ${trackingNumber} (code=${code})`);
+        breakerSuccess();
+        return {
+          state: "quota_exhausted",
           carrierName: null, status: null, lastEvent: null,
           lastLocation: null, lastEventDate: null, delivered: false, events: [],
         };

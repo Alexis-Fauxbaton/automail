@@ -61,7 +61,7 @@ describe('resolveEntitlements — trial active, no subscription', () => {
       data: {
         shop: TEST_SHOP,
         periodStart: new Date('2026-05-01T00:00:00Z'),
-        draftsCount: 7,
+        analyzedThreadsCount: 7,
       },
     });
 
@@ -121,7 +121,7 @@ describe('resolveEntitlements — starter active', () => {
       data: {
         shop: TEST_SHOP,
         periodStart: new Date('2026-05-01T00:00:00Z'),
-        draftsCount: 40, // 40/50 = 80%
+        analyzedThreadsCount: 40, // 40/50 = 80%
       },
     });
 
@@ -144,7 +144,7 @@ describe('resolveEntitlements — starter active', () => {
       data: {
         shop: TEST_SHOP,
         periodStart: new Date('2026-05-01T00:00:00Z'),
-        draftsCount: 50,
+        analyzedThreadsCount: 50,
       },
     });
 
@@ -167,7 +167,7 @@ describe('resolveEntitlements — starter active', () => {
       data: {
         shop: TEST_SHOP,
         periodStart: new Date('2026-05-01T00:00:00Z'),
-        draftsCount: 48, // 48/50 = 96% → critical
+        analyzedThreadsCount: 48, // 48/50 = 96% → critical
       },
     });
 
@@ -282,7 +282,7 @@ describe('resolveEntitlements — isSyncSuspended', () => {
     const now = new Date('2026-05-08T12:00:00Z');
     await setInstallDate(TEST_SHOP, new Date(now.getTime() - 30 * DAY_MS));
     await testDb.billingUsage.create({
-      data: { shop: TEST_SHOP, periodStart: new Date('2026-05-01T00:00:00Z'), draftsCount: 10 },
+      data: { shop: TEST_SHOP, periodStart: new Date('2026-05-01T00:00:00Z'), analyzedThreadsCount: 10 },
     });
     const ent = await resolveEntitlements({
       shop: TEST_SHOP,
@@ -298,7 +298,7 @@ describe('resolveEntitlements — isSyncSuspended', () => {
     const now = new Date('2026-05-08T12:00:00Z');
     await setInstallDate(TEST_SHOP, new Date(now.getTime() - 30 * DAY_MS));
     await testDb.billingUsage.create({
-      data: { shop: TEST_SHOP, periodStart: new Date('2026-05-01T00:00:00Z'), draftsCount: 50 },
+      data: { shop: TEST_SHOP, periodStart: new Date('2026-05-01T00:00:00Z'), analyzedThreadsCount: 50 },
     });
     const ent = await resolveEntitlements({
       shop: TEST_SHOP,

@@ -174,22 +174,66 @@ export async function getAuthenticatedClient(shop: string) {
     expiry_date: conn.tokenExpiry.getTime(),
   });
 
-  // Refresh if expired
-  if (conn.tokenExpiry.getTime() < Date.now() + 60_000) {
-    const { credentials } = await client.refreshAccessToken();
-    client.setCredentials(credentials);
-    // Persist new tokens
-    await prisma.mailConnection.update({
-      where: { shop },
-      data: {
-        accessToken: encrypt(credentials.access_token!),
-        tokenExpiry: new Date(credentials.expiry_date!),
-        ...(credentials.refresh_token
-          ? { refreshToken: encrypt(credentials.refresh_token) }
-          : {}),
-      },
-    });
+  // Refresh if expired (120 s buffer to match Zoho/Outlook).
+  if (conn.tokenExpiry.getTime() < Date.now() + 120_000) {
+    try {
+      const { credentials } = await client.refreshAccessToken();
+      client.setCredentials(credentials);
+      // Persist new tokens
+      await prisma.mailConnection.update({
+        where: { shop },
+        data: {
+          accessToken: encrypt(credentials.access_token!),
+          tokenExpiry: new Date(credentials.expiry_date!),
+          ...(credentials.refresh_token
+            ? { refreshToken: encrypt(credentials.refresh_token) }
+            : {}),
+        },
+      });
+    } catch (err) {
+      // googleapis raises GaxiosError with response.data.error === "invalid_grant"
+      // when the user revoked access (Google account → Security → Apps).
+      // We surface a typed marker so callers can prompt the merchant to
+      // reconnect, instead of looping forever on a dead refresh token.
+      const code = extractOAuthErrorCode(err);
+      if (code === "invalid_grant") {
+        await prisma.mailConnection
+          .update({
+            where: { shop },
+            data: { lastSyncError: "MAILBOX_REVOKED: please reconnect Gmail" },
+          })
+          .catch(() => undefined);
+        throw new MailboxRevokedError("gmail", shop);
+      }
+      throw err;
+    }
   }
 
   return client;
+}
+
+/**
+ * Thrown when the provider says the stored refresh token is invalid /
+ * revoked. The auto-sync loop, inbox loader and onboarding flow all check
+ * for this to display a "reconnect" CTA instead of retrying forever.
+ */
+export class MailboxRevokedError extends Error {
+  readonly provider: string;
+  readonly shop: string;
+  constructor(provider: string, shop: string) {
+    super(`Mailbox revoked for ${provider} on ${shop}`);
+    this.provider = provider;
+    this.shop = shop;
+  }
+}
+
+function extractOAuthErrorCode(err: unknown): string | null {
+  if (!err || typeof err !== "object") return null;
+  // googleapis: GaxiosError.response.data.error
+  const e = err as { response?: { data?: { error?: unknown } }; code?: unknown };
+  const errorField = e.response?.data?.error;
+  if (typeof errorField === "string") return errorField;
+  // Some googleapis paths throw a plain Error with a code property.
+  if (typeof e.code === "string") return e.code;
+  return null;
 }

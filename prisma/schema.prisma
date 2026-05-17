@@ -147,6 +147,19 @@ model Thread {
   // than a confusing gap. `redactedAt` non-null signals tombstone state.
   redactedAt     DateTime?
   redactedReason String?  // e.g. "gdpr_customer_request"
+  // --- Billing (per-conversation) -----------------------------------
+  // Timestamp of the first successful Tier 3 analysis on this thread.
+  // Used by the billing counter `markThreadAnalyzedIfFirst` to guarantee
+  // one billing increment per thread regardless of how many times Tier 3
+  // re-runs (new messages, refresh-stale, user-triggered re-analyse).
+  analyzedAt     DateTime?
+  // Merchant explicitly dismissed this thread from the "À analyser" queue
+  // (the list of support threads waiting for a Tier 3 run that accumulate
+  // when the shop is suspended). Used to hide the thread from that queue
+  // without touching billing or operational state. Set by the bulk "Vider"
+  // action on the À analyser tab. Cleared automatically when analyzedAt is
+  // populated (Tier 3 ran).
+  dismissedFromAnalyzeAt DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -161,6 +174,7 @@ model Thread {
   @@index([shop, operationalState, operationalStateUpdatedAt])
   // Helps detect duplicate canonical threads when ThreadProviderId backfill races.
   @@index([shop, provider, subjectKey])
+  @@index([shop, analyzedAt])
 }
 
 // Mapping from a provider-native threadId to the canonical Thread.id.
@@ -429,7 +443,9 @@ model BillingUsage {
   id           String   @id @default(cuid())
   shop         String
   periodStart  DateTime
-  draftsCount  Int      @default(0)
+  // Renamed from draftsCount. Each successful first-time Tier 3 on a
+  // Thread increments this by 1 via markThreadAnalyzedIfFirst.
+  analyzedThreadsCount Int @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

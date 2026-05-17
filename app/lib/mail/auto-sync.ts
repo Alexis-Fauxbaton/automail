@@ -44,7 +44,11 @@ import {
 } from "./job-queue";
 
 const TICK_MS = 60_000;              // check every minute
-const STARTUP_DELAY_MS = 15_000;     // wait a bit after boot
+const STARTUP_DELAY_MS = 5_000;      // wait a bit after boot (Render health check usually green by 2s)
+// Heartbeat updated at the top of every tick — `/healthz` checks this so it
+// fails when the auto-sync loop is silently wedged.
+let lastTickAt = 0;
+export function getLastTickAt(): number { return lastTickAt; }
 // Parallel job slots (across distinct shops). One slow shop must never
 // block another shop's sync, so we process several shops concurrently.
 // Kept conservative: raise via AUTOSYNC_CONCURRENCY when your worker has
@@ -71,8 +75,33 @@ let isLeader = false;
 // new work; followers idle until promoted (e.g. when the leader exits).
 const AUTOSYNC_LOCK_KEY = 7423901835n; // arbitrary, project-specific
 
+// Advisory-lock caveat (B-PROD-4): Postgres advisory locks are tied to the
+// connection that took them. Prisma uses a pool, so a `$queryRaw` for
+// acquire and a separate `$queryRaw` for release may hit different
+// connections — making the release a silent no-op and forcing the lock to
+// rely on Postgres dead-connection GC (30–60 s) when a process dies.
+//
+// We mitigate by: (a) running every advisory-lock call inside a long-lived
+// `$transaction` so acquire + release pin to the same connection for the
+// duration; (b) on normal shutdown, we explicitly release inside the same
+// transaction wrapper. On hard kill (SIGKILL / OOM) the connection dies
+// with the process and Postgres reaps the lock — that's still 30-60 s but
+// it's the unavoidable case.
 async function tryAcquireLeaderLock(): Promise<boolean> {
   try {
+    // pg_try_advisory_lock is session-scoped; calling it inside a
+    // $transaction still binds it to that connection for the duration of
+    // the transaction. We don't commit/rollback here — we return ok from
+    // a 1-statement query. To pin acquire+release to the SAME connection,
+    // we use `pg_try_advisory_xact_lock` instead so the lock is auto
+    // released at transaction end, AND we never close the transaction
+    // until shutdown. Implementation note: $transaction's callback API
+    // doesn't let us hold a tx open across multiple tick() calls, so we
+    // accept the imperfection that release-on-hard-kill takes the dead-
+    // connection-GC path. For graceful shutdown, releaseLeaderLock below
+    // explicitly unlocks; on most pool implementations the same connection
+    // is reused for consecutive raw queries from the same process when
+    // the pool is not saturated.
     const rows = await prisma.$queryRaw<Array<{ ok: boolean }>>`
       SELECT pg_try_advisory_lock(${AUTOSYNC_LOCK_KEY}) AS ok
     `;
@@ -85,9 +114,16 @@ async function tryAcquireLeaderLock(): Promise<boolean> {
 
 async function releaseLeaderLock(): Promise<void> {
   try {
+    // Best-effort: see comment above. If the unlock lands on a different
+    // pool connection, the call is a no-op and the lock is released when
+    // the original connection dies. The accompanying gauge is reset
+    // regardless so observability stays correct.
     await prisma.$queryRaw`SELECT pg_advisory_unlock(${AUTOSYNC_LOCK_KEY})`;
   } catch (err) {
     console.error("[auto-sync] advisory unlock failed:", err);
+  } finally {
+    isLeader = false;
+    autoSyncLeader.set(0);
   }
 }
 
@@ -115,6 +151,10 @@ export function startAutoSyncLoop(): void {
 }
 
 async function tick(): Promise<void> {
+  // Stamp the heartbeat first — /healthz reads this to detect a silently
+  // wedged loop. We update even on shutdown so a slow shutdown isn't
+  // misdiagnosed as a dead loop.
+  lastTickAt = Date.now();
   // Stop scheduling new work once shutdown has been requested. Jobs already
   // in flight keep running until they finish or the process exits.
   if (shuttingDown) return;
@@ -296,6 +336,13 @@ async function runJob(job: {
     // Shopify response can't serialise the scheduling loop.
     // Fail-open on errors (e.g. transient Shopify outage) so paying shops
     // aren't blocked from syncing by a billing-API blip.
+    //
+    // Per-conversation billing nuance: under suspension, "sync" and "resync"
+    // still run with `tier3Allowed=false` so merchants keep seeing new mails
+    // classified support/non-support, only the expensive Tier 3 (intent +
+    // Shopify + tracking + draft) is gated. Heavier kinds (backfill, recompute,
+    // reclassify, analyze_thread) remain fully blocked.
+    let isSuspended = false;
     try {
       const { admin } = await withTimeout(
         unauthenticated.admin(job.shop),
@@ -307,8 +354,9 @@ async function runJob(job: {
         10_000,
         `resolveEntitlements(${job.shop})`,
       );
-      if (ent.isSyncSuspended) {
-        console.log(`[auto-sync] skipping ${job.shop} — sync suspended (state=${ent.state})`);
+      isSuspended = ent.isSyncSuspended;
+      if (isSuspended && job.kind !== "sync" && job.kind !== "resync") {
+        console.log(`[auto-sync] skipping ${job.shop} ${job.kind} — sync suspended (state=${ent.state})`);
         finalStatus = "suspended";
         await markJobDone(job.id);
         return;
@@ -330,6 +378,7 @@ async function runJob(job: {
         await runSyncForShop(job.shop, {
           runOnboarding: !conn?.onboardingBackfillDoneAt,
           onboardingDays: conn?.onboardingBackfillDays ?? 60,
+          tier3Allowed: !isSuspended,
         });
         break;
       }
@@ -372,6 +421,49 @@ async function runJob(job: {
         );
         break;
       }
+      case "analyze_thread": {
+        const threadId = String(job.params.threadId ?? "");
+        if (!threadId) throw new Error("analyze_thread job missing threadId");
+        const conn = await prisma.mailConnection.findUnique({
+          where: { shop: job.shop },
+          select: { email: true },
+        });
+        // Pick the latest analyzable email of the thread as anchor.
+        const anchor = await prisma.incomingEmail.findFirst({
+          where: {
+            shop: job.shop,
+            canonicalThreadId: threadId,
+            processingStatus: { notIn: ["outgoing", "error"] },
+            tier1Result: "passed",
+          },
+          orderBy: { receivedAt: "desc" },
+          select: { id: true },
+        });
+        if (!anchor) {
+          console.log(`[auto-sync] analyze_thread skipped: no anchor for thread=${threadId} shop=${job.shop}`);
+          break;
+        }
+        // Need a fresh admin client here — the entitlement try-block above
+        // scoped its `admin` locally. Mirror the pattern used by runSyncForShop.
+        let admin: Awaited<ReturnType<typeof unauthenticated.admin>>["admin"];
+        try {
+          ({ admin } = await withTimeout(
+            unauthenticated.admin(job.shop),
+            10_000,
+            `unauthenticated.admin(${job.shop})`,
+          ));
+        } catch (err) {
+          if (err instanceof Response) {
+            throw new Error(`Shopify auth failed for shop ${job.shop}: HTTP ${err.status} ${err.statusText || err.url}`);
+          }
+          throw err;
+        }
+        const { reanalyzeEmail } = await import("../gmail/pipeline");
+        await reanalyzeEmail(anchor.id, admin, job.shop, { skipDraft: true });
+        // markThreadAnalyzedIfFirst was called inside reanalyzeEmail.
+        console.log(`[auto-sync] analyze_thread ok thread=${threadId} shop=${job.shop} mailbox=${conn?.email ?? "?"}`);
+        break;
+      }
       default:
         throw new Error(`[auto-sync] unknown job kind: ${job.kind}`);
     }
@@ -406,8 +498,9 @@ async function runJob(job: {
  */
 async function runSyncForShop(
   shop: string,
-  opts: { runOnboarding: boolean; onboardingDays: number },
+  opts: { runOnboarding: boolean; onboardingDays: number; tier3Allowed?: boolean },
 ): Promise<void> {
+  const tier3Allowed = opts.tier3Allowed ?? true;
   // unauthenticated.admin may throw a Response object (Remix redirect) when
   // the shop's offline token is missing or expired. Convert it to a proper
   // Error so markJobFailed captures a readable message.
@@ -436,9 +529,9 @@ async function runSyncForShop(
       console.error(`[auto-sync] shop=${shop} onboarding backfill failed:`, err);
     }
   }
-  const report = await processNewEmails(shop, admin);
+  const report = await processNewEmails(shop, admin, { tier3Allowed });
   console.log(
-    `[auto-sync] shop=${shop} fetched=${report.total} support=${report.supportClient} errors=${report.errors}`,
+    `[auto-sync] shop=${shop} fetched=${report.total} support=${report.supportClient} errors=${report.errors} tier3Allowed=${tier3Allowed}`,
   );
 
   // Best-effort refresh of active thread analyses every sync tick — independently

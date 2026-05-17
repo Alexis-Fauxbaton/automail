@@ -20,15 +20,31 @@ export function SyncSuspendedBanner() {
       color: '#9a3412',
       border: '1px solid #fdba74',
       padding: '10px 14px',
-      borderRadius: 6,
+      borderRadius: 10,
       display: 'flex',
       alignItems: 'center',
-      justifyContent: 'space-between',
-      fontSize: 14,
-      marginBottom: 12,
+      gap: 12,
+      fontSize: 13.5,
+      lineHeight: 1.4,
+      boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
     }}>
-      <span>{t('billing.syncSuspended.banner')}</span>
-      <Link to="/app/billing" style={{ color: 'inherit', fontWeight: 600 }}>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        {t('billing.syncSuspended.banner')}
+      </span>
+      <Link
+        to="/app/billing"
+        style={{
+          flexShrink: 0,
+          fontWeight: 600,
+          textDecoration: 'none',
+          fontSize: 13,
+          padding: '6px 12px',
+          borderRadius: 6,
+          background: '#9a3412',
+          color: 'white',
+          whiteSpace: 'nowrap',
+        }}
+      >
         {t('billing.upgradeCta')}
       </Link>
     </div>

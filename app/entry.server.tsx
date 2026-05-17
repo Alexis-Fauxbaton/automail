@@ -14,21 +14,35 @@ export const streamTimeout = 5000;
 // Fire up the backend auto-sync loop exactly once at server boot
 // (spec §10). The function itself is idempotent, so double-import
 // (HMR, etc.) is safe.
-startAutoSyncLoop();
-runBootCleanup().catch((err) => console.error("[entry.server] boot cleanup failed:", err));
-backfillBillingShopFlags().catch((err) => console.error("[billing-migration] backfill failed at boot:", err));
+//
+// All three boot tasks are wrapped in try/catch so a single failure can't
+// brick boot. A failure here is logged and emits BOOT_DEGRADED so ops can
+// distinguish "running with reduced functionality" from "running healthy".
+try {
+  startAutoSyncLoop();
+} catch (err) {
+  console.error("[BOOT_DEGRADED] startAutoSyncLoop failed at boot:", err);
+}
+runBootCleanup().catch((err) =>
+  console.error("[BOOT_DEGRADED] boot cleanup failed:", err),
+);
+backfillBillingShopFlags().catch((err) =>
+  console.error("[BOOT_DEGRADED] billing flags backfill failed:", err),
+);
 
-// Graceful shutdown: when the platform sends SIGTERM (Render, Fly, etc. wait
-// ~30s before SIGKILL), stop claiming new jobs and let in-flight syncs drain
-// up to 25s. Anything still running past that is reclaimed as a zombie on
-// the next boot, so no data loss — just a small retry delay.
+// Graceful shutdown: when the platform sends SIGTERM (Render waits 30s
+// before SIGKILL), stop claiming new jobs and let in-flight syncs drain up
+// to 20s. Anything still running past that is reclaimed as a zombie on the
+// next boot, so no data loss — just a small retry delay. The 20s + 5s
+// post-drain buffer leaves 5s of margin before Render force-kills, which
+// is enough for prisma.$disconnect, log flush, and tcp FIN.
 let shutdownStarted = false;
 async function handleShutdown(signal: string) {
   if (shutdownStarted) return;
   shutdownStarted = true;
   console.log(`[shutdown] received ${signal}, draining auto-sync...`);
   try {
-    await stopAutoSyncLoop(25_000);
+    await stopAutoSyncLoop(20_000);
   } catch (err) {
     console.error("[shutdown] drain error:", err);
   }

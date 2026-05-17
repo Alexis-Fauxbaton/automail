@@ -89,7 +89,7 @@ describe("histogram", () => {
 });
 
 describe("renderPrometheus", () => {
-  it("produces well-formed text exposition for counters", () => {
+  it("produces well-formed text exposition for counters, hashing shop labels", () => {
     const c = metrics.counter("auto_sync_jobs_total", "Total jobs.");
     c.inc({ shop: "a", status: "ok" });
     c.inc({ shop: "a", status: "ok" });
@@ -98,8 +98,17 @@ describe("renderPrometheus", () => {
     const out = metrics.renderPrometheus();
     expect(out).toContain("# HELP auto_sync_jobs_total Total jobs.");
     expect(out).toContain("# TYPE auto_sync_jobs_total counter");
-    expect(out).toContain('auto_sync_jobs_total{shop="a",status="ok"} 2');
-    expect(out).toContain('auto_sync_jobs_total{shop="b",status="error"} 1');
+    // `shop` labels are HMAC-hashed at render time so scrapers cannot
+    // enumerate the merchant list. The dimension is preserved (each shop
+    // maps to a stable opaque id) — assert the hashed shape + that two
+    // different shop values produce distinct hashes.
+    expect(out).toMatch(/auto_sync_jobs_total\{shop="shop_[a-f0-9]{8}",status="ok"\} 2/);
+    expect(out).toMatch(/auto_sync_jobs_total\{shop="shop_[a-f0-9]{8}",status="error"\} 1/);
+    const hashA = /shop="(shop_[a-f0-9]{8})",status="ok"/.exec(out)?.[1];
+    const hashB = /shop="(shop_[a-f0-9]{8})",status="error"/.exec(out)?.[1];
+    expect(hashA).toBeDefined();
+    expect(hashB).toBeDefined();
+    expect(hashA).not.toBe(hashB);
   });
 
   it("emits buckets, sum, count for histograms with le ordered ascending", () => {

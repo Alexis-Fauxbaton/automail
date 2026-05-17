@@ -133,8 +133,9 @@ export async function llmParseEmail(
 }
 
 function normalizeIntents(value: unknown, primary: SupportIntent): SupportIntent[] {
-  const parsed = Array.isArray(value) ? value.map(coerceIntent).filter((intent) => intent !== "unknown") : [];
-  const meaningful = parsed.filter((intent) => intent !== "unknown");
+  const meaningful = Array.isArray(value)
+    ? value.map(coerceIntent).filter((intent) => intent !== "unknown")
+    : [];
   const ordered = primary !== "unknown" ? [primary, ...meaningful] : meaningful;
   const unique = [...new Set(ordered)];
   return unique.length > 0 ? unique : ["unknown"];

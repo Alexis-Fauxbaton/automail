@@ -13,6 +13,22 @@ export async function upsertReplyDraftBody(
   shop: string,
   newBody: string,
 ): Promise<void> {
+  // Defence-in-depth: callers verify the email belongs to `shop`, but this
+  // function shouldn't trust that — a future refactor could land an
+  // unguarded call here. Throw if the email actually belongs to a different
+  // shop so we fail loudly instead of silently writing a draft for the
+  // wrong tenant.
+  const owner = await prisma.incomingEmail.findUnique({
+    where: { id: emailId },
+    select: { shop: true },
+  });
+  if (!owner) throw new Error(`upsertReplyDraftBody: email ${emailId} not found`);
+  if (owner.shop !== shop) {
+    throw new Error(
+      `upsertReplyDraftBody: shop mismatch for email ${emailId} (expected ${shop})`,
+    );
+  }
+
   const existing = await prisma.replyDraft.findUnique({
     where: { emailId },
     select: { id: true, body: true, bodyHistory: true },
@@ -47,6 +63,16 @@ export async function updateReplyDraftBody(
   shop: string,
   newBody: string,
 ): Promise<void> {
+  const owner = await prisma.incomingEmail.findUnique({
+    where: { id: emailId },
+    select: { shop: true },
+  });
+  if (!owner) throw new Error(`updateReplyDraftBody: email ${emailId} not found`);
+  if (owner.shop !== shop) {
+    throw new Error(
+      `updateReplyDraftBody: shop mismatch for email ${emailId} (expected ${shop})`,
+    );
+  }
   await prisma.replyDraft.upsert({
     where: { emailId },
     create: { emailId, shop, body: newBody, bodyHistory: [] },

@@ -50,6 +50,28 @@ function escapeLabelValue(v: string): string {
   return v.replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/"/g, '\\"');
 }
 
+// Hash shop domains in Prometheus output so scrapers can't enumerate the
+// merchant list. Uses an 8-character hex prefix of an HMAC over the
+// METRICS_LABEL_SALT (or, in dev, a fixed dev-only salt). The dimension
+// is preserved (each shop maps to a stable opaque ID) so per-shop
+// time-series still work for alerting / dashboards.
+let _hashShopFn: ((s: string) => string) | null = null;
+function hashShopLabel(shop: string): string {
+  if (!shop) return "";
+  if (!_hashShopFn) {
+    // Lazy-load crypto so registry.ts stays import-safe in any context.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { createHmac } = require("node:crypto") as typeof import("node:crypto");
+    const salt = process.env.METRICS_LABEL_SALT || "dev-metrics-salt-do-not-use-in-prod";
+    _hashShopFn = (s: string) =>
+      "shop_" + createHmac("sha256", salt).update(s).digest("hex").slice(0, 8);
+  }
+  return _hashShopFn(shop);
+}
+
+// Labels that name a merchant and should be hashed in the Prometheus output.
+const PII_LABEL_KEYS = new Set(["shop"]);
+
 function normaliseLabels(input: LabelValues | undefined): Record<string, string> {
   if (!input) return {};
   const out: Record<string, string> = {};
@@ -74,7 +96,13 @@ function formatLabels(labels: Record<string, string>): string {
   if (keys.length === 0) return "";
   return (
     "{" +
-    keys.map((k) => `${k}="${escapeLabelValue(labels[k])}"`).join(",") +
+    keys
+      .map((k) => {
+        const raw = labels[k];
+        const value = PII_LABEL_KEYS.has(k) ? hashShopLabel(raw) : raw;
+        return `${k}="${escapeLabelValue(value)}"`;
+      })
+      .join(",") +
     "}"
   );
 }

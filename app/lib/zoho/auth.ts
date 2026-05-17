@@ -209,6 +209,20 @@ export async function refreshZohoToken(shop: string): Promise<string> {
     error?: string;
   };
   if (data.error || !data.access_token) {
+    // Zoho returns "invalid_code" / "invalid_client" / "access_denied" when
+    // the refresh token has been revoked from the user's Zoho account.
+    // Surface a typed marker so callers prompt the merchant to reconnect
+    // instead of looping on a dead token.
+    if (data.error === "invalid_code" || data.error === "access_denied" || data.error === "invalid_client") {
+      await prisma.mailConnection
+        .update({
+          where: { shop },
+          data: { lastSyncError: "MAILBOX_REVOKED: please reconnect Zoho Mail" },
+        })
+        .catch(() => undefined);
+      const { MailboxRevokedError } = await import("../gmail/auth");
+      throw new MailboxRevokedError("zoho", shop);
+    }
     throw new Error(`Zoho token refresh failed: ${data.error || "no token"}`);
   }
 

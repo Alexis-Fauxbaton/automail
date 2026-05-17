@@ -217,7 +217,11 @@ async function runSearch(
       const msg = json.errors.map((e) => e.message).join(" | ");
       lastError = new Error(`Shopify GraphQL error: ${msg}`);
       if (throttled && attempt < RETRY_DELAYS_MS.length) {
-        const delay = RETRY_DELAYS_MS[attempt];
+        // Add ±25% jitter so a burst of throttled requests doesn't all
+        // resume in lock-step and trigger a second throttle wave.
+        const base = RETRY_DELAYS_MS[attempt];
+        const jitter = base * (0.5 - Math.random()) * 0.5; // ±25%
+        const delay = Math.max(50, Math.round(base + jitter));
         console.warn(
           `[order-search] Throttled (attempt ${attempt + 1}), retrying in ${delay}ms | query: ${query}`,
         );

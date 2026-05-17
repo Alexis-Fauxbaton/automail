@@ -754,6 +754,57 @@ Out of scope (kept for later):
 - Legacy `intent === "refine"` and `intent === "redraft"` route branches
   stay alongside `generateDraft`. Prune when nothing else calls them.
 
+### Billing model — per analyzed conversation — 2026-05-15
+
+Fixed in this pass:
+
+- [x] **Schema migration** — `Thread.analyzedAt` added; backfilled
+      from existing `analysisResult` so current shops are
+      grandfathered. `BillingUsage.draftsCount` renamed to
+      `analyzedThreadsCount` with current-period reset.
+- [x] **`markThreadAnalyzedIfFirst` helper** — atomic
+      `updateMany WHERE analyzedAt IS NULL` + `BillingUsage` upsert.
+      Single billing-write site. Audited via two new metrics:
+      `billing_analyzed_thread_counted_total` and
+      `billing_analyzed_thread_skipped_total{reason}`.
+- [x] **Tier 3 increment site wired** in `classifyAndDraft`,
+      `backfillResolvedIntents.processThread`, and `reanalyzeEmail`.
+- [x] **Refine/redraft don't charge** — `withDraftQuota` removed
+      from `handleRefine` and `handleRedraft`. `canGenerateDraft`
+      pre-check stays on `handleReanalyze` (which still triggers
+      Tier 3 directly).
+- [x] **Catch-up on classification change** — new
+      `SyncJobKind: "analyze_thread"`. `handleMoveThread` and
+      `handleUpdateClassification` enqueue when supportNature flips
+      to support AND `analyzedAt` is null. Auto-sync runs Tier 3 with
+      `skipDraft: true` and consumes 1 unit on first success.
+- [x] **Plan names** — `draftsPerMonth` → `analyzedThreadsPerMonth`.
+      Caps unchanged: 50 Starter / 500 Pro / Infinity Trial.
+- [x] **i18n + UI** — "drafts" replaced by "conversations" in
+      user-facing strings (en + fr).
+- [x] **Test coverage** — 11 failure classes from the spec covered.
+      Statement coverage >= 95 % on the billing-critical files.
+
+Known follow-ups (subtle, not blocking):
+- `__resetMetricsForTest` is incomplete: counter API closures
+  captured at module-load time keep referencing the pre-reset
+  registry. Workaround in `mark-thread-metrics.test.ts` uses
+  baseline-delta assertions on unique shop labels. Fix the reset
+  helper to also rebuild the closures, or stop calling `inc()`
+  through captured references.
+
+Operator follow-up:
+- Send the soft-comm email to active paying shops explaining the
+  change ("Now we count conversations instead of drafts; refines and
+  regens are free").
+
+Out of scope (kept for later):
+- Manual drafting feature (separate spec; billing decoupling makes
+  it a small follow-up PR).
+- Soft overage / usage charges.
+- Per-seat pricing.
+- Refine-count cap (alerting instead, operator-driven).
+
 ### Deferred follow-ups
 
 - [ ] **H6** — Per-thread advisory lock for user actions vs auto-sync.

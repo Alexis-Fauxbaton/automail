@@ -26,13 +26,6 @@ vi.mock("../../billing/entitlements", () => ({
   }),
   __resetCacheForTests: () => undefined,
 }));
-vi.mock("../../billing/draft-guard", () => ({
-  withDraftQuota: async ({ generator }: { generator: () => Promise<unknown> }) => {
-    const value = await generator();
-    return { ok: true as const, value, newCount: 1 };
-  },
-}));
-
 // Import AFTER vi.mock so the mocks are in place.
 import { handleEditThreadIdentifiers, handleRefine } from "../../support/inbox-actions";
 

@@ -15,8 +15,8 @@ import { recordStateTransition } from "./thread-state-history";
 import { isAnalysisStale, ANALYSIS_FRESHNESS_MS, refreshStaleAnalysesForShop } from "./refresh-stale-analyses";
 import type { AdminGraphqlClient } from "./shopify/order-search";
 import type { ClassificationEdit } from "./manual-classification";
-import { withDraftQuota } from "../billing/draft-guard";
 import { resolveEntitlements } from "../billing/entitlements";
+import { getUsage } from "../billing/usage";
 import { refineContextRefreshTotal } from "../metrics/definitions";
 
 async function maybeRefreshAnalysis(
@@ -32,6 +32,18 @@ async function maybeRefreshAnalysis(
   if (!record || record.shop !== shop) return;
   if (record.processingStatus !== "analyzed") return;
   if (!isAnalysisStale(record.lastAnalyzedAt, ANALYSIS_FRESHNESS_MS.draftTrigger)) return;
+  // Gate on entitlements: a refresh still hits Shopify Admin + 17track, and
+  // on a suspended account we must not subsidise those calls. The merchant
+  // sees the slightly-stale analysis instead — it will refresh naturally
+  // after they upgrade.
+  try {
+    const ent = await resolveEntitlements({ shop, admin });
+    if (!ent.canGenerateDraft) return;
+  } catch {
+    // Fail-open on entitlement lookup glitches — the refresh is best-effort
+    // anyway, and blocking it on a transient Shopify outage would degrade UX
+    // for paying merchants without protecting much spend.
+  }
   try {
     // Lightweight refresh: Shopify + 17track, no LLM. The intent stays
     // intact (the customer's message hasn't changed), only the order /
@@ -122,13 +134,75 @@ export async function handleReclassify(params: { shop: string }) {
   return { syncStarted: true, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
 }
 
+/**
+ * Bulk-dismiss every thread currently visible in the "À analyser" tab.
+ * Sets `dismissedFromAnalyzeAt = now` on threads matching the same filter
+ * used by the inbox loader (support stance + analyzedAt null + not resolved).
+ * Idempotent: re-dismissing an already-dismissed thread is a no-op (whereIs
+ * `dismissedFromAnalyzeAt: null`).
+ */
+export async function handleDismissAnalyzeQueue(params: { shop: string }) {
+  const { shop } = params;
+  const result = await prisma.thread.updateMany({
+    where: {
+      shop,
+      analyzedAt: null,
+      dismissedFromAnalyzeAt: null,
+      supportNature: { in: ["confirmed_support", "probable_support", "mixed"] },
+      operationalState: { notIn: ["resolved", "no_reply_needed"] },
+    },
+    data: { dismissedFromAnalyzeAt: new Date() },
+  });
+  return { dismissedCount: result.count, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
+}
+
+/** Dismiss a single thread from the "À analyser" queue. */
+export async function handleDismissThreadFromAnalyze(params: { shop: string; canonicalThreadId: string }) {
+  const { shop, canonicalThreadId } = params;
+  if (!canonicalThreadId) {
+    return { dismissedCount: 0, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
+  }
+  const result = await prisma.thread.updateMany({
+    where: { id: canonicalThreadId, shop, dismissedFromAnalyzeAt: null },
+    data: { dismissedFromAnalyzeAt: new Date() },
+  });
+  return { dismissedCount: result.count, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
+}
+
 export async function handleSync(params: { shop: string; admin: AdminGraphqlClient }) {
   const { shop, admin } = params;
-  const report = await processNewEmails(shop, admin);
-  const staleRefresh = await refreshStaleAnalysesForShop(shop, admin, {
-    maxAgeMs: ANALYSIS_FRESHNESS_MS.autoRefresh,
-  });
-  return { report, syncCompleted: true, disconnected: false, reanalyzed: null, refined: null, stopped: false, staleRefresh };
+  // Mirror auto-sync's per-conversation billing semantics: when the shop is
+  // suspended (quota exceeded or trial expired) the pipeline still runs but
+  // Tier 3 (intent + Shopify + tracking + draft) is skipped — Tier 1 + 2
+  // keep classifying so merchants see new support mails arriving, even if
+  // they're not analyzed. The stale-analysis refresh is also Tier 3 work
+  // and is skipped in that case.
+  const ent = await resolveEntitlements({ shop, admin });
+  const tier3Allowed = !ent.isSyncSuspended;
+  // The mail provider (Gmail / Outlook / Zoho) can throw — typically when the
+  // OAuth refresh token is invalidated (user revoked, app secret rotated,
+  // token TTL exceeded). processNewEmails already records the message in
+  // MailConnection.lastSyncError; we must return a structured error here
+  // instead of letting it propagate as a 500 (which would render a generic
+  // "Erreur applicative" page that swallows the whole inbox).
+  let report = null as Awaited<ReturnType<typeof processNewEmails>> | null;
+  let syncError: string | null = null;
+  try {
+    report = await processNewEmails(shop, admin, { tier3Allowed });
+  } catch (err) {
+    syncError = err instanceof Error ? err.message : String(err);
+  }
+  let staleRefresh = null as Awaited<ReturnType<typeof refreshStaleAnalysesForShop>> | null;
+  if (tier3Allowed && !syncError) {
+    try {
+      staleRefresh = await refreshStaleAnalysesForShop(shop, admin, {
+        maxAgeMs: ANALYSIS_FRESHNESS_MS.autoRefresh,
+      });
+    } catch {
+      // Best-effort refresh — never block the sync response on this.
+    }
+  }
+  return { report, syncCompleted: !syncError, syncError, disconnected: false, reanalyzed: null, refined: null, stopped: false, staleRefresh, syncSuspended: !tier3Allowed };
 }
 
 export async function handleBackfill(params: { shop: string; days: number }) {
@@ -168,51 +242,51 @@ export async function handleReanalyze(params: {
 }) {
   const { shop, admin, emailId, skipDraft } = params;
 
-  // skipDraft=true → analysis only, no quota consumed (refresh stale, error retry).
-  // skipDraft=false → analysis + draft generated → 1 unit consumed, must be gated.
-  if (!skipDraft) {
-    const ent = await resolveEntitlements({ shop, admin });
-    if (!ent.canGenerateDraft) {
-      return {
-        reanalyzed: null,
-        report: null,
-        disconnected: false,
-        refined: null,
-        quotaExceeded: true,
-        quotaStatus: { used: ent.quotaStatus.used, limit: ent.quotaStatus.limit },
-      };
-    }
-
-    const guarded = await withDraftQuota({
-      shop,
-      limit: ent.quotaStatus.limit,
-      generator: () => reanalyzeEmail(emailId, admin, shop, { skipDraft: false }),
-    });
-
-    if (!guarded.ok) {
-      if (guarded.reason === 'quota_exceeded') {
-        return {
-          reanalyzed: null,
-          report: null,
-          disconnected: false,
-          refined: null,
-          quotaExceeded: true,
-          quotaStatus: { used: ent.quotaStatus.used, limit: ent.quotaStatus.limit },
-        };
-      }
-      throw guarded.error ?? new Error('Reanalyze with draft generation failed');
-    }
-
+  // Gate on entitlements regardless of skipDraft. Both branches run Tier 3
+  // (LLM intent extraction + Shopify + tracking + optional draft) — these
+  // cost real money on every call even when markThreadAnalyzedIfFirst would
+  // return counted=false (idempotent at the billing layer, but the LLM /
+  // Shopify roundtrips still happen).
+  //
+  // Under suspension (trial_expired OR paid + quota_exceeded) we refuse ALL
+  // Tier 3 work, including re-analysis of previously-analyzed threads and
+  // error-retries (skipDraft=1). The merchant must upgrade or wait for the
+  // next period to refresh anything.
+  const ent = await resolveEntitlements({ shop, admin });
+  if (!ent.canGenerateDraft) {
     return {
-      reanalyzed: { emailId, analysis: guarded.value },
+      reanalyzed: null,
       report: null,
       disconnected: false,
       refined: null,
-      quotaStatus: { used: guarded.newCount, limit: ent.quotaStatus.limit },
+      quotaExceeded: true,
+      quotaStatus: { used: ent.quotaStatus.used, limit: ent.quotaStatus.limit },
     };
   }
 
-  // skipDraft=true path: analysis only, no quota gating.
+  if (!skipDraft) {
+    // The actual increment happens inside reanalyzeEmail → Tier 3 success →
+    // markThreadAnalyzedIfFirst (idempotent per thread).
+    let analysis: Awaited<ReturnType<typeof reanalyzeEmail>>;
+    try {
+      analysis = await reanalyzeEmail(emailId, admin, shop, { skipDraft: false });
+    } catch (err) {
+      // Tier 3 failed — no increment happened, no refund needed.
+      throw err;
+    }
+
+    const freshUsage = await getUsage(shop);
+    return {
+      reanalyzed: { emailId, analysis },
+      report: null,
+      disconnected: false,
+      refined: null,
+      quotaStatus: { used: freshUsage.count, limit: ent.quotaStatus.limit },
+    };
+  }
+
+  // skipDraft=true path: analysis only (no draft generated). Still gated
+  // above; we just suppress the draftReply field on the response.
   const analysis = await reanalyzeEmail(emailId, admin, shop, { skipDraft: true });
   if (analysis) {
     (analysis as { draftReply?: string }).draftReply = undefined;
@@ -241,32 +315,14 @@ export async function handleRedraft(params: {
 
   await maybeRefreshAnalysis(emailId, admin, shop);
 
-  const guarded = await withDraftQuota({
-    shop,
-    limit: ent.quotaStatus.limit,
-    generator: () => redraftEmail(emailId, shop),
-  });
-
-  if (!guarded.ok) {
-    if (guarded.reason === 'quota_exceeded') {
-      return {
-        reanalyzed: null,
-        report: null,
-        disconnected: false,
-        refined: null,
-        quotaExceeded: true,
-        quotaStatus: { used: ent.quotaStatus.used, limit: ent.quotaStatus.limit },
-      };
-    }
-    throw guarded.error ?? new Error('Draft generation failed');
-  }
+  await redraftEmail(emailId, shop);
 
   return {
     reanalyzed: null,
     report: null,
     disconnected: false,
     refined: null,
-    quotaStatus: { used: guarded.newCount, limit: ent.quotaStatus.limit },
+    quotaStatus: { used: ent.quotaStatus.used, limit: ent.quotaStatus.limit },
   };
 }
 
@@ -333,9 +389,11 @@ export async function handleRefine(params: {
 
   await maybeRefreshAnalysis(emailId, admin, shop);
 
-  // Reload AFTER the refresh so we see fresh analysisResult.
-  const fresh = await prisma.incomingEmail.findUnique({
-    where: { id: emailId },
+  // Reload AFTER the refresh so we see fresh analysisResult. Defence-in-
+  // depth: re-include `shop` in the where clause so this reload cannot
+  // pull another shop's data even in the unlikely event of an id collision.
+  const fresh = await prisma.incomingEmail.findFirst({
+    where: { id: emailId, shop },
     select: { analysisResult: true },
   });
   let contextSummary: string | undefined;
@@ -348,52 +406,31 @@ export async function handleRefine(params: {
     }
   }
 
-  const guarded = await withDraftQuota({
+  const newDraft = await refineDraft(currentDraft, instructions, {
+    subject: record.subject,
+    body: record.bodyText,
+    contextSummary,
+  }, {
     shop,
-    limit: ent.quotaStatus.limit,
-    generator: async () => {
-      const newDraft = await refineDraft(currentDraft, instructions, {
-        subject: record.subject,
-        body: record.bodyText,
-        contextSummary,
-      }, {
-        shop,
-        emailId,
-        threadId: record.threadId,
-      });
-      const { upsertReplyDraftBody } = await import("./reply-draft");
-      await upsertReplyDraftBody(emailId, shop, newDraft);
-      const updatedRD = await prisma.replyDraft.findUnique({
-        where: { emailId },
-        select: { bodyHistory: true },
-      });
-      const history = Array.isArray(updatedRD?.bodyHistory)
-        ? (updatedRD!.bodyHistory as string[])
-        : [];
-      return { newDraft, history };
-    },
+    emailId,
+    threadId: record.threadId,
   });
-
-  if (!guarded.ok) {
-    if (guarded.reason === 'quota_exceeded') {
-      return {
-        report: null,
-        disconnected: false,
-        reanalyzed: null,
-        refined: null,
-        quotaExceeded: true,
-        quotaStatus: { used: ent.quotaStatus.used, limit: ent.quotaStatus.limit },
-      };
-    }
-    throw guarded.error ?? new Error('Draft refine failed');
-  }
+  const { upsertReplyDraftBody } = await import("./reply-draft");
+  await upsertReplyDraftBody(emailId, shop, newDraft);
+  const updatedRD = await prisma.replyDraft.findUnique({
+    where: { emailId },
+    select: { bodyHistory: true },
+  });
+  const history = Array.isArray(updatedRD?.bodyHistory)
+    ? (updatedRD!.bodyHistory as string[])
+    : [];
 
   return {
-    refined: { emailId, newDraft: guarded.value.newDraft, draftHistory: guarded.value.history },
+    refined: { emailId, newDraft, draftHistory: history },
     report: null,
     disconnected: false,
     reanalyzed: null,
-    quotaStatus: { used: guarded.newCount, limit: ent.quotaStatus.limit },
+    quotaStatus: { used: ent.quotaStatus.used, limit: ent.quotaStatus.limit },
   };
 }
 
@@ -441,28 +478,59 @@ export async function handleMoveThread(params: {
     toState: target,
   });
 
+  const supportNatureFlipped =
+    forceSupport && thread.supportNature !== "confirmed_support";
+
+  // If we just flipped a thread to a support stance AND it has never
+  // been analyzed, enqueue a background analyze_thread job. The
+  // auto-sync loop picks it up at the next tick and runs Tier 3 with
+  // skipDraft:true. The first-time analysis consumes 1 billing unit
+  // via markThreadAnalyzedIfFirst.
+  if (supportNatureFlipped) {
+    const threadRow = await prisma.thread.findUnique({
+      where: { id: canonicalThreadId },
+      select: { analyzedAt: true },
+    });
+    if (threadRow && threadRow.analyzedAt === null) {
+      await enqueueJob(shop, "analyze_thread", { threadId: canonicalThreadId }).catch((err) => {
+        console.error(`[catch-up] enqueueJob analyze_thread failed for thread=${canonicalThreadId}:`, err);
+      });
+    }
+  }
+
   // On reopen, refresh tracking + crawl on the thread anchor immediately.
   // Resolved threads skip those steps during auto-sync (orchestrator's
   // skipTracking flag), so without this hook a freshly-reopened thread
   // would show stale tracking until the next refresh-stale tick (~1h).
+  //
+  // Gated on entitlements: refreshThreadAnalysis runs Tier 3 (Shopify
+  // order search + tracking + optional crawl) which costs real money on
+  // every call. Under suspension we must not subsidize those operations.
   if (isReopen) {
     try {
-      const anchor = await prisma.incomingEmail.findFirst({
-        where: { canonicalThreadId, shop, processingStatus: "analyzed" },
-        orderBy: { receivedAt: "desc" },
-        select: { id: true },
-      });
-      if (anchor) {
-        const { refreshThreadAnalysis } = await import("./refresh-thread-analysis");
-        // reSearchOrder: true — the previous analysis (taken while resolved)
-        // had `orderCandidates: []` because Shopify search was skipped. We
-        // must force a fresh search; otherwise reuseOrder would replay the
-        // empty result.
-        await refreshThreadAnalysis(anchor.id, admin, shop, {
-          reclassifyIntent: false,
-          reSearchOrder: true,
-          refreshTracking: true,
+      const ent = await resolveEntitlements({ shop, admin });
+      if (!ent.canGenerateDraft) {
+        // Suspended shop — leave the thread reopened, but skip the refresh.
+        // The tracking will catch up the next time the merchant resumes a
+        // paid period and triggers an analysis manually.
+      } else {
+        const anchor = await prisma.incomingEmail.findFirst({
+          where: { canonicalThreadId, shop, processingStatus: "analyzed" },
+          orderBy: { receivedAt: "desc" },
+          select: { id: true },
         });
+        if (anchor) {
+          const { refreshThreadAnalysis } = await import("./refresh-thread-analysis");
+          // reSearchOrder: true — the previous analysis (taken while resolved)
+          // had `orderCandidates: []` because Shopify search was skipped. We
+          // must force a fresh search; otherwise reuseOrder would replay the
+          // empty result.
+          await refreshThreadAnalysis(anchor.id, admin, shop, {
+            reclassifyIntent: false,
+            reSearchOrder: true,
+            refreshTracking: true,
+          });
+        }
       }
     } catch (err) {
       console.error("[moveThread] reopen refresh failed:", err);
@@ -545,6 +613,23 @@ export async function handleEditThreadIdentifiers(params: {
       refreshed: "no_anchor" as const,
       report: null, disconnected: false, reanalyzed: null, refined: null,
     };
+  }
+
+  // Gate: identifier edit on a suspended account persists the new values
+  // but skips the Tier 3 refresh (Shopify + 17track). Counter and metrics
+  // are tagged 'skipped_suspended' for visibility.
+  try {
+    const ent = await resolveEntitlements({ shop, admin });
+    if (!ent.canGenerateDraft) {
+      refineContextRefreshTotal.inc({ shop, outcome: "skipped_suspended" });
+      return {
+        editedThread: { canonicalThreadId },
+        refreshed: "skipped_suspended" as const,
+        report: null, disconnected: false, reanalyzed: null, refined: null,
+      };
+    }
+  } catch {
+    // Fail-open on entitlement glitch.
   }
 
   try {
@@ -655,22 +740,32 @@ export async function handleUpdateClassification(params: {
       orderChangeType === "reset";
     const isReset = orderChangeType === "reset";
     if (orderTouched) {
+      // Gate the refresh on entitlements (Shopify search + 17track cost).
+      let allowRefresh = true;
       try {
-        const { refreshThreadAnalysis } = await import("./refresh-thread-analysis");
-        // On reset: re-derive order from scratch (reSearchOrder=true) and
-        // re-classify intent if the user also asked to reset intents.
-        analysis = await refreshThreadAnalysis(
-          persisted.emailId,
-          admin,
-          shop,
-          {
-            reclassifyIntent: isReset && edit.resetIntents === true,
-            reSearchOrder: isReset,
-            refreshTracking: true,
-          },
-        ) as typeof analysis;
-      } catch (err) {
-        console.error("[updateClassification] tracking refresh failed:", err);
+        const ent = await resolveEntitlements({ shop, admin });
+        allowRefresh = ent.canGenerateDraft;
+      } catch {
+        // Fail-open.
+      }
+      if (allowRefresh) {
+        try {
+          const { refreshThreadAnalysis } = await import("./refresh-thread-analysis");
+          // On reset: re-derive order from scratch (reSearchOrder=true) and
+          // re-classify intent if the user also asked to reset intents.
+          analysis = await refreshThreadAnalysis(
+            persisted.emailId,
+            admin,
+            shop,
+            {
+              reclassifyIntent: isReset && edit.resetIntents === true,
+              reSearchOrder: isReset,
+              refreshTracking: true,
+            },
+          ) as typeof analysis;
+        } catch (err) {
+          console.error("[updateClassification] tracking refresh failed:", err);
+        }
       }
 
       const finalOrderNumber = analysis.order?.name?.replace(/^#/, "") ?? null;
@@ -679,6 +774,24 @@ export async function handleUpdateClassification(params: {
         data: { resolvedOrderNumber: finalOrderNumber },
       }).catch((err) => {
         console.error("[updateClassification] thread sync after refresh failed:", err);
+      });
+    }
+
+    // Re-include `shop` even though persistClassificationEdit above already
+    // validated ownership — defence-in-depth so this lookup can never
+    // return another shop's thread row even if a future refactor changes
+    // the call shape.
+    const threadRow = await prisma.thread.findFirst({
+      where: { id: threadId, shop },
+      select: { analyzedAt: true, supportNature: true },
+    });
+    const isSupportNow =
+      threadRow?.supportNature === "confirmed_support" ||
+      threadRow?.supportNature === "probable_support" ||
+      threadRow?.supportNature === "mixed";
+    if (threadRow && isSupportNow && threadRow.analyzedAt === null) {
+      await enqueueJob(shop, "analyze_thread", { threadId }).catch((err) => {
+        console.error(`[catch-up] enqueueJob analyze_thread failed for thread=${threadId}:`, err);
       });
     }
 

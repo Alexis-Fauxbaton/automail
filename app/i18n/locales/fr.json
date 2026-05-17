@@ -15,7 +15,15 @@
   },
   "help": {
     "title": "Aide & support",
-    "contactHeading": "Nous contacter"
+    "contactHeading": "Nous contacter",
+    "contactBody1": "Une question, un bug ou une suggestion ? Écrivez-nous à",
+    "contactBody2": ". Nous vous répondons sous 1 jour ouvré.",
+    "quickStartHeading": "Démarrage rapide",
+    "quickStartStep1": "Connectez votre boîte mail (Gmail, Zoho ou Outlook) depuis l'onglet Inbox.",
+    "quickStartStep2": "Configurez votre signature et votre ton dans les Paramètres.",
+    "quickStartStep3": "Automail analyse les emails entrants et propose un brouillon. Vous gardez toujours la main pour valider et envoyer.",
+    "privacyHeading": "Confidentialité",
+    "privacyBody": "Notre politique de confidentialité est disponible sur"
   },
   "support": {
     "pageHeading": "Copilot support",
@@ -282,10 +290,19 @@
     "tier3": "Tier 3 (analyse)",
     "tier3Helper": "Analyse complète Shopify",
     "bucketToHandle": "À traiter",
+    "bucketToAnalyze": "À analyser",
     "bucketWaitingCustomer": "Attente client",
     "bucketResolved": "Résolu",
     "bucketOther": "Autre",
     "bucketAll": "Tout",
+    "toAnalyzeHint_one": "{{count}} conversation classée support mais non analysée. Cliquez « Analyser » pour lancer l'analyse complète (consomme 1 conversation de votre quota). Les fils retirés sont déplacés vers l'onglet « Autre ».",
+    "toAnalyzeHint_other": "{{count}} conversations classées support mais non analysées. Cliquez « Analyser » sur un fil pour lancer l'analyse complète (consomme 1 conversation de votre quota par fil). Les fils retirés sont déplacés vers l'onglet « Autre ».",
+    "clearAnalyzeQueue": "Tout déplacer vers Autre",
+    "clearAnalyzeQueueConfirm_one": "Déplacer {{count}} fil vers l'onglet « Autre » ? Un nouveau message client le ramènera automatiquement ici.",
+    "clearAnalyzeQueueConfirm_other": "Déplacer {{count}} fils vers l'onglet « Autre » ? Un nouveau message client les ramènera automatiquement ici.",
+    "dismissFromAnalyzeQueue": "Déplacer vers Autre",
+    "dismissFromAnalyzeQueueTitle": "Retirer ce fil de la file À analyser et le déplacer dans l'onglet Autre. Un nouveau message client le ramènera ici automatiquement.",
+    "analyze": "Analyser",
     "reopen": "Rouvrir",
     "markResolved": "Marquer comme résolu",
     "parsedIdentifiers": "Identifiants détectés",
@@ -395,8 +412,8 @@
       "cancelScheduled": "Annuler ce changement"
     },
     "plan": {
-      "draftsPerMonth_one": "{{count}} brouillon / mois",
-      "draftsPerMonth_other": "{{count}} brouillons / mois",
+      "analyzedThreadsPerMonth_one": "{{count}} conversation / mois",
+      "analyzedThreadsPerMonth_other": "{{count}} conversations / mois",
       "maxMailboxes_one": "{{count}} boîte mail connectée",
       "maxMailboxes_other": "{{count}} boîtes mail connectées",
       "advancedDashboard_one": "Dashboard avancé — jusqu'à {{count}} jour d'historique",
@@ -413,7 +430,7 @@
     "trialDaysLeft_one": "Essai — {{count}} jour restant",
     "trialDaysLeft_other": "Essai — {{count}} jours restants",
     "trialExpired": "Essai terminé",
-    "draftsCount": "{{used}} / {{limit}} brouillons",
+    "analyzedThreadsCount": "{{used}} / {{limit}} conversations",
     "upgradeCta": "Passer à Pro",
     "choosePlan": "Choisir un plan",
     "dashboard": {
@@ -432,20 +449,20 @@
       "expiredBanner": "Votre essai est terminé. Choisissez un plan pour continuer à utiliser Automail."
     },
     "banner": {
-      "warning": "Vous avez utilisé {{used}} de vos {{limit}} brouillons ce mois-ci.",
-      "critical": "Presque à court : {{used}} brouillons utilisés sur {{limit}} ce mois-ci.",
+      "warning": "Vous avez analysé {{used}} conversations support sur {{limit}} ce mois-ci.",
+      "critical": "Bientôt à court : {{used}} conversations support analysées sur {{limit}} ce mois-ci.",
       "exceeded": "Quota atteint ({{used}} / {{limit}}) — sync suspendue. Passez à un plan supérieur pour continuer."
     },
     "modal": {
-      "exceededTitle": "Quota atteint pour ce mois ({{used}} / {{limit}} brouillons)",
+      "exceededTitle": "Quota atteint pour ce mois ({{used}} / {{limit}} conversations)",
       "exceededBody": "Passez à Pro pour continuer immédiatement, ou attendez le 1er du mois prochain pour la réinitialisation.",
-      "lastUsedTitle": "Vous venez d'utiliser votre dernier brouillon du mois",
-      "lastUsedBody": "{{used}} brouillons utilisés sur {{limit}}. Génération en pause jusqu'au prochain mois ou upgrade.",
+      "lastUsedTitle": "Vous avez analysé toutes les conversations support de votre forfait",
+      "lastUsedBody": "{{used}} conversations analysées sur {{limit}}. L'analyse est en pause jusqu'au prochain mois ou un upgrade.",
       "later": "Plus tard",
       "viewPlans": "Voir les plans"
     },
     "syncSuspended": {
-      "banner": "La synchronisation de votre boîte mail est en pause — votre quota est épuisé ou votre essai est terminé. Passez à un plan supérieur ou attendez la réinitialisation mensuelle pour reprendre."
+      "banner": "L'analyse complète et la génération de brouillons sont en pause — votre quota est épuisé ou votre essai est terminé. Vos mails continuent d'être reçus et classés support / non-support ; ils s'accumulent dans l'onglet « À analyser » en attendant un upgrade ou la réinitialisation mensuelle."
     }
   },
   "classification": {

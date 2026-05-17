@@ -10,7 +10,12 @@ const CUSTOMERS_QUERY = `#graphql
   }
 `;
 
-const CACHE_TTL_MS = 20 * 60 * 1000; // 20 minutes
+// 5 minutes — multi-instance staleness ceiling. The previous 20-minute TTL
+// meant that after the merchant added a new customer, replica B could
+// mis-classify their first email as "probably_non_client" for up to 20 min.
+// 5 min keeps the Shopify Admin API load manageable while reducing the
+// window meaningfully.
+const CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_CACHE_SIZE = 200;
 
 type CacheEntry = { emails: Set<string>; fetchedAt: number };

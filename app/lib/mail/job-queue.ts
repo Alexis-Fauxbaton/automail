@@ -23,7 +23,13 @@
 import prisma from "../../db.server";
 import { Prisma } from "@prisma/client";
 
-export type SyncJobKind = "sync" | "backfill" | "resync" | "recompute" | "reclassify";
+export type SyncJobKind =
+  | "sync"
+  | "backfill"
+  | "resync"
+  | "recompute"
+  | "reclassify"
+  | "analyze_thread";
 
 export interface BackfillParams {
   afterDateIso: string;
@@ -96,27 +102,46 @@ export async function claimNextJob(
       ? Prisma.sql`AND shop NOT IN (${Prisma.join(excludeShops)})`
       : Prisma.empty;
 
-  const rows = await prisma.$queryRaw<ClaimedJobRow[]>`
-    UPDATE "SyncJob"
-    SET status = 'running',
-        "startedAt" = NOW(),
-        "nextRetryAt" = NULL,
-        attempts = attempts + 1
-    WHERE id = (
-      SELECT id FROM "SyncJob"
-      WHERE status = 'pending'
-        AND attempts < ${MAX_ATTEMPTS}
-        AND ("nextRetryAt" IS NULL OR "nextRetryAt" <= NOW())
-        AND shop NOT IN (
-          SELECT DISTINCT shop FROM "SyncJob" WHERE status = 'running'
+  // The subquery check `shop NOT IN (running shops)` runs BEFORE the row
+  // lock, so two workers can both claim a job for the same shop within a
+  // millisecond. The partial unique index added in migration
+  // 20260517143242 enforces "one running per shop" at the DB level: the
+  // second UPDATE fails with P2002 and we retry once, by which time the
+  // first claim is visible.
+  let rows: ClaimedJobRow[] = [];
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      rows = await prisma.$queryRaw<ClaimedJobRow[]>`
+        UPDATE "SyncJob"
+        SET status = 'running',
+            "startedAt" = NOW(),
+            "nextRetryAt" = NULL,
+            attempts = attempts + 1
+        WHERE id = (
+          SELECT id FROM "SyncJob"
+          WHERE status = 'pending'
+            AND attempts < ${MAX_ATTEMPTS}
+            AND ("nextRetryAt" IS NULL OR "nextRetryAt" <= NOW())
+            AND shop NOT IN (
+              SELECT DISTINCT shop FROM "SyncJob" WHERE status = 'running'
+            )
+            ${excludeFilter}
+          ORDER BY "createdAt" ASC
+          FOR UPDATE SKIP LOCKED
+          LIMIT 1
         )
-        ${excludeFilter}
-      ORDER BY "createdAt" ASC
-      FOR UPDATE SKIP LOCKED
-      LIMIT 1
-    )
-    RETURNING id, shop, kind, params, attempts
-  `;
+        RETURNING id, shop, kind, params, attempts
+      `;
+      break;
+    } catch (err) {
+      // P2002 = unique violation on SyncJob_one_running_per_shop.
+      // Another worker won the race for this shop; try again — there
+      // may be another shop's job available.
+      const code = (err as { code?: string }).code;
+      if (code === "P2002" && attempt < 2) continue;
+      throw err;
+    }
+  }
 
   const row = rows[0];
   if (!row) return null;

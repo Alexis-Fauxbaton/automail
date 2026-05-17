@@ -26,7 +26,12 @@ interface CacheEntry {
 // received it. A short TTL caps the window in which a stale plan can be
 // honoured on a peer worker after a downgrade — important for revenue
 // integrity once the app is public.
-const CACHE_TTL_MS = 60 * 1000;
+// Reduced to 15 s for multi-instance safety: when a shop downgrades, the
+// app_subscriptions/update webhook lands on one replica and invalidates its
+// cache; peer replicas keep serving the old (higher-quota) plan until the
+// TTL elapses. 15 s caps that revenue-leak window without thrashing the
+// Shopify Admin API.
+const CACHE_TTL_MS = 15 * 1000;
 const cache = new Map<string, CacheEntry>();
 
 interface AdminClient {
@@ -59,8 +64,24 @@ export async function resolveActivePlan(input: {
     return cached.result;
   }
 
-  const response = await input.admin.graphql(QUERY);
-  const body = await response.json();
+  // Network / Shopify Billing API failures must not crash the whole app.
+  // If the call fails we fall back to the last cached value (even if expired)
+  // or to "no active plan" so the rest of the app stays usable. The cache
+  // will refresh on the next successful call or webhook invalidation.
+  let response: { json: () => Promise<any> };
+  try {
+    response = await input.admin.graphql(QUERY);
+  } catch (err) {
+    if (cached) return cached.result;
+    return { plan: 'none', subscriptionId: null, currentPeriodEnd: null };
+  }
+  let body: any;
+  try {
+    body = await response.json();
+  } catch (err) {
+    if (cached) return cached.result;
+    return { plan: 'none', subscriptionId: null, currentPeriodEnd: null };
+  }
   const subs = body?.data?.currentAppInstallation?.activeSubscriptions ?? [];
 
   const active = subs.find((s: any) => s.status === 'ACTIVE');

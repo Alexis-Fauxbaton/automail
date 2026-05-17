@@ -18,8 +18,12 @@ async function zohoFetch(
   if (params) {
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   }
+  // 15 s timeout protects against hung sockets — a single hung Zoho call
+  // would otherwise block an auto-sync worker slot for the OS default
+  // (often 120 s+) and starve other shops.
   const res = await fetch(url.toString(), {
     headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
+    signal: AbortSignal.timeout(15_000),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -123,13 +127,16 @@ export async function createZohoClient(shop: string): Promise<MailClient> {
   const accountId = conn.zohoAccountId;
   const mailboxLower = (conn.email ?? "").trim().toLowerCase();
 
-  // Cache folder IDs (fetched once per client creation)
+  // Cache folder IDs (fetched once per client creation). We do NOT cache
+  // a `null` failure result — otherwise a transient Zoho hiccup at first
+  // call freezes folders=null for the lifetime of the client and every
+  // subsequent sync looks empty. The next call re-tries.
   let cachedFolders: ZohoFolders | null = null;
   async function getFolders(token: string): Promise<ZohoFolders> {
-    if (!cachedFolders) {
-      cachedFolders = await getZohoFolders(token, accountId);
-    }
-    return cachedFolders;
+    if (cachedFolders) return cachedFolders;
+    const fresh = await getZohoFolders(token, accountId);
+    cachedFolders = fresh; // only set on success — throws propagate
+    return fresh;
   }
   async function getInbox(token: string): Promise<string> {
     return (await getFolders(token)).inbox;
@@ -440,15 +447,20 @@ async function embedZohoInlineImages(
 
   if (inlineItems.length === 0) return html;
 
-  // Step 2: download each inline image and build cid → data: URI map
+  // Step 2: download each inline image and build cid → data: URI map.
+  // Cap concurrency to 5 so a 100-image email doesn't fan out 100 parallel
+  // fetches (Zoho returns 429 quickly, and Node's socket pool gets noisy).
   const cidToDataUri = new Map<string, string>();
-  await Promise.all(inlineItems.map(async (img) => {
+  const INLINE_DOWNLOAD_CONCURRENCY = 5;
+  for (let i = 0; i < inlineItems.length; i += INLINE_DOWNLOAD_CONCURRENCY) {
+    const slice = inlineItems.slice(i, i + INLINE_DOWNLOAD_CONCURRENCY);
+    await Promise.allSettled(slice.map(async (img) => {
     try {
       const cid = img.cid.replace(/^<|>$/g, "");
       // Zoho /inline endpoint uses the raw cid (with angle brackets stripped is fine)
       const downloadUrl = `https://${domain}/api/accounts/${accountId}/folders/${folderId}/messages/${messageId}/inline?contentId=${encodeURIComponent(cid)}&fileName=${encodeURIComponent(img.attachmentName)}`;
       console.log(`[zoho/embedImages] downloading cid=${cid} url=${downloadUrl.slice(downloadUrl.indexOf("/api/"))}`);
-      const r = await fetch(downloadUrl, { headers: { Authorization: `Zoho-oauthtoken ${accessToken}` } });
+      const r = await fetch(downloadUrl, { headers: { Authorization: `Zoho-oauthtoken ${accessToken}` }, signal: AbortSignal.timeout(15_000) });
       const contentType = r.headers.get("Content-Type") ?? "";
       console.log(`[zoho/embedImages] inline download → ${r.status} type=${contentType} cid=${cid}`);
       if (!r.ok) {
@@ -477,7 +489,8 @@ async function embedZohoInlineImages(
     } catch (err) {
       console.warn(`[zoho/embedImages] download error for cid=${img.cid}:`, String(err).slice(0, 100));
     }
-  }));
+    }));
+  }
 
   console.log(`[zoho/embedImages] cidToDataUri size=${cidToDataUri.size} keys=[${Array.from(cidToDataUri.keys()).join(",")}]`);
   if (cidToDataUri.size === 0) return html;

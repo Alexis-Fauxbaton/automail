@@ -128,7 +128,10 @@ function computeQuotaStatus(used: number, limit: number, periodStart: Date): Quo
   if (!Number.isFinite(limit)) {
     return { used, limit, pct: 0, level: 'ok', periodStart };
   }
-  const pct = Math.min(used / limit, 1);
+  // Raw ratio (can exceed 1 if used > limit) so the UI can display the
+  // actual overage rather than masking it at 100%. UI components should
+  // clamp the *bar width* themselves if needed, but receive truthful data.
+  const pct = limit > 0 ? used / limit : 0;
   let level: QuotaLevel;
   if (used >= limit) level = 'exceeded';
   else if (pct >= 0.95) level = 'critical';
@@ -164,7 +167,7 @@ async function buildPaidEntitlements(input: {
 }): Promise<Entitlements> {
   const plan = PLANS[input.planId];
   const usage = await getUsage(input.shop, input.now);
-  const quotaStatus = computeQuotaStatus(usage.count, plan.draftsPerMonth, usage.periodStart);
+  const quotaStatus = computeQuotaStatus(usage.count, plan.analyzedThreadsPerMonth, usage.periodStart);
 
   return {
     shop: input.shop,

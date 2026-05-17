@@ -26,9 +26,11 @@ export interface RateLimitResult {
  * `windowMs` window. The window slides forward — when a new event arrives
  * after the window has expired, the count resets.
  *
- * The implementation does an UPSERT then a conditional UPDATE. It's not
- * lock-free but the contention is per-key, not global, and the shape is
- * simple enough to stay fast under realistic load.
+ * The whole increment-and-decide is one atomic SQL statement (`INSERT ...
+ * ON CONFLICT ... DO UPDATE`), so two concurrent calls on the same key
+ * can never both read count=N and both write count=N+1 (which would let
+ * 2 requests through when only 1 should). The CASE expression resets the
+ * window inline when it's expired.
  */
 export async function checkRateLimit({
   key,
@@ -38,44 +40,43 @@ export async function checkRateLimit({
 }: RateLimitOptions): Promise<RateLimitResult> {
   const safeKey = key.slice(0, 200);
   const safeKind = kind.slice(0, 64);
-  const now = Date.now();
 
-  // Upsert: ensure the row exists so the next UPDATE has something to hit.
-  // create with count=0 so the first UPDATE below moves us to 1.
-  await prisma.rateLimitBucket.upsert({
-    where: { key_kind: { key: safeKey, kind: safeKind } },
-    create: { key: safeKey, kind: safeKind, count: 0, windowStart: new Date(now) },
-    update: {},
-  });
+  // One atomic INSERT ... ON CONFLICT DO UPDATE.
+  // - First call: inserts (count=1, windowStart=now).
+  // - Subsequent calls within the window: count = count + 1.
+  // - Subsequent calls after windowMs elapsed: count = 1, windowStart = now.
+  // The RETURNING clause hands us the final state so we can compute the
+  // remaining budget without a second round-trip.
+  const rows = await prisma.$queryRaw<
+    Array<{ count: number; windowStart: Date }>
+  >`
+    INSERT INTO "RateLimitBucket" ("key", "kind", "count", "windowStart")
+    VALUES (${safeKey}, ${safeKind}, 1, NOW())
+    ON CONFLICT ("key", "kind") DO UPDATE SET
+      "count" = CASE
+        WHEN EXTRACT(EPOCH FROM (NOW() - "RateLimitBucket"."windowStart")) * 1000 >= ${windowMs}
+          THEN 1
+          ELSE "RateLimitBucket"."count" + 1
+      END,
+      "windowStart" = CASE
+        WHEN EXTRACT(EPOCH FROM (NOW() - "RateLimitBucket"."windowStart")) * 1000 >= ${windowMs}
+          THEN NOW()
+          ELSE "RateLimitBucket"."windowStart"
+      END
+    RETURNING "count", "windowStart";
+  `;
 
-  // Read the row, decide whether to reset, and increment.
-  const row = await prisma.rateLimitBucket.findUnique({
-    where: { key_kind: { key: safeKey, kind: safeKind } },
-  });
+  const row = rows[0];
   if (!row) {
-    // Should not happen after the upsert, but stay safe.
+    // Should not happen with INSERT ... RETURNING. Treat as allow + log.
+    console.error("[rate-limit] empty RETURNING for", { safeKey, safeKind });
     return { ok: true, remaining: limit - 1, resetMs: windowMs };
   }
 
-  const elapsed = now - row.windowStart.getTime();
-  let count: number;
-  let windowStart: Date;
-  if (elapsed >= windowMs) {
-    // Window expired — reset.
-    count = 1;
-    windowStart = new Date(now);
-  } else {
-    count = row.count + 1;
-    windowStart = row.windowStart;
-  }
-
-  await prisma.rateLimitBucket.update({
-    where: { key_kind: { key: safeKey, kind: safeKind } },
-    data: { count, windowStart },
-  });
-
+  const count = Number(row.count);
+  const windowStart = row.windowStart instanceof Date ? row.windowStart : new Date(row.windowStart);
   const ok = count <= limit;
-  const resetMs = Math.max(0, windowMs - (now - windowStart.getTime()));
+  const resetMs = Math.max(0, windowMs - (Date.now() - windowStart.getTime()));
   return { ok, remaining: Math.max(0, limit - count), resetMs };
 }
 
@@ -108,16 +109,29 @@ export async function pruneOldRateLimitBuckets(opts: {
   }
 }
 
-/** Extract the requesting client's IP from common proxy headers. */
+/**
+ * Extract the requesting client's IP from common proxy headers.
+ *
+ * `X-Forwarded-For` can be set by anyone, so we only trust it when we know
+ * we're behind a single trusted proxy hop. On Render, the platform adds
+ * exactly one hop, so the LEFTMOST entry is the real client IP — but only
+ * when the request actually came through Render's edge. If TRUSTED_PROXY
+ * is not set explicitly, we fall back to "unknown" for the rate-limit key,
+ * which means the per-IP cap becomes a per-deployment cap. That's safer
+ * than trusting a header an attacker can set.
+ */
 export function getClientIp(request: Request): string {
-  const fwd = request.headers.get("x-forwarded-for");
-  if (fwd) {
-    const first = fwd.split(",")[0]?.trim();
-    if (first) return first;
+  const trust = process.env.TRUSTED_PROXY === "true" || process.env.TRUSTED_PROXY === "1";
+  if (trust) {
+    const fwd = request.headers.get("x-forwarded-for");
+    if (fwd) {
+      const first = fwd.split(",")[0]?.trim();
+      if (first) return first;
+    }
+    const cf = request.headers.get("cf-connecting-ip");
+    if (cf) return cf.trim();
+    const real = request.headers.get("x-real-ip");
+    if (real) return real.trim();
   }
-  return (
-    request.headers.get("cf-connecting-ip") ||
-    request.headers.get("x-real-ip") ||
-    "unknown"
-  );
+  return "unknown";
 }

@@ -186,7 +186,7 @@ function PlanCard(props: {
 
   const accent = props.isCurrent ? '#16a34a' : props.recommended ? '#1f2937' : '#e2e8f0';
   const features = [
-    t('billing.plan.draftsPerMonth', { count: plan.draftsPerMonth }),
+    t('billing.plan.analyzedThreadsPerMonth', { count: plan.analyzedThreadsPerMonth }),
     t('billing.plan.maxMailboxes', { count: plan.maxMailboxes }),
     plan.advancedDashboard
       ? t('billing.plan.advancedDashboard', { count: plan.dashboardMaxRangeDays })

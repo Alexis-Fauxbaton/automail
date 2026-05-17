@@ -16,10 +16,16 @@ import prisma from "../../db.server";
 export async function ensureOutgoingAliases(shop: string): Promise<void> {
   const conn = await prisma.mailConnection.findUnique({
     where: { shop },
-    select: { provider: true, outgoingAliases: true },
+    select: { provider: true, email: true, outgoingAliases: true },
   });
   if (!conn) return;
-  if (conn.outgoingAliases && conn.outgoingAliases !== "[]") return;
+  const aliasesNeedBackfill = !conn.outgoingAliases || conn.outgoingAliases === "[]";
+  // Also run when the email column is "unknown" — older Outlook connections
+  // sometimes ended up with that placeholder when the Graph /me call returned
+  // no `mail` field. The provider-specific backfill recovers it from
+  // proxyAddresses on the next sync.
+  const emailIsUnknown = conn.provider === "outlook" && (!conn.email || conn.email === "unknown");
+  if (!aliasesNeedBackfill && !emailIsUnknown) return;
 
   switch (conn.provider) {
     case "zoho": {

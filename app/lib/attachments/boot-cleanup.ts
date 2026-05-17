@@ -17,18 +17,30 @@ export async function runBootCleanup(): Promise<void> {
   try {
     // Cross-shop intentionally: this is a global boot-time scan of the local
     // uploads/ directory. storagePaths are globally unique UUIDs so there is
-    // no cross-shop collision risk. take=5000 guards against OOM on large deploys.
-    const allAttachments = await prisma.draftAttachment.findMany({
-      where: { source: "upload" },
-      select: { id: true, storagePath: true, source: true, createdAt: true },
-      take: 5000,
-    });
-
-    const dbPaths = new Set(
-      allAttachments
-        .map((a) => a.storagePath)
-        .filter((p): p is string => p !== null),
-    );
+    // no cross-shop collision risk. Paginate with a cursor so memory stays
+    // bounded on a Render-free-tier instance (0.5 CPU + small RAM) even when
+    // the DB holds millions of rows.
+    const PAGE_SIZE = 500;
+    type Row = { id: string; storagePath: string | null; source: string; createdAt: Date };
+    const allAttachments: Row[] = [];
+    const dbPaths = new Set<string>();
+    let cursor: string | undefined;
+    for (;;) {
+      const page = await prisma.draftAttachment.findMany({
+        where: { source: "upload" },
+        select: { id: true, storagePath: true, source: true, createdAt: true },
+        orderBy: { id: "asc" },
+        take: PAGE_SIZE,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      });
+      if (page.length === 0) break;
+      for (const a of page) {
+        allAttachments.push(a);
+        if (a.storagePath) dbPaths.add(a.storagePath);
+      }
+      cursor = page[page.length - 1].id;
+      if (page.length < PAGE_SIZE) break;
+    }
 
     // Orphan scan
     const onDisk = listUploadedFiles(UPLOADS_DIR);
