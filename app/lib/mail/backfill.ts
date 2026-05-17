@@ -47,6 +47,11 @@ async function runInBatches<T>(
 
 async function getMailClient(shop: string, provider: string): Promise<MailClient> {
   if (provider === "zoho") return createZohoClient(shop);
+  if (provider === "outlook") {
+    // Lazy import to avoid coupling backfill.ts to the Graph SDK at module load.
+    const { createOutlookClient } = await import("../outlook/mail-client");
+    return createOutlookClient(shop);
+  }
   return createGmailClient(shop);
 }
 
