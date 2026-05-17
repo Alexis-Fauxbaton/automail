@@ -49,6 +49,8 @@ import {
   handleMoveThread,
   handleEditThreadIdentifiers,
   handleUpdateClassification,
+  handleDismissAnalyzeQueue,
+  handleDismissThreadFromAnalyze,
 } from "../lib/support/inbox-actions";
 import type { ClassificationEdit } from "../lib/support/manual-classification";
 import {
@@ -166,6 +168,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           resolutionConfidence: true,
           redactedAt: true,
           redactedReason: true,
+          analyzedAt: true,
+          dismissedFromAnalyzeAt: true,
         },
       });
       threadStates = Object.fromEntries(
@@ -393,6 +397,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return handleMoveThread({ shop, canonicalThreadId, target, admin });
   }
 
+  if (intent === "dismissAnalyzeQueue") {
+    return handleDismissAnalyzeQueue({ shop });
+  }
+
+  if (intent === "dismissThreadFromAnalyze") {
+    const canonicalThreadId = String(formData.get("canonicalThreadId") ?? "");
+    return handleDismissThreadFromAnalyze({ shop, canonicalThreadId });
+  }
+
   if (intent === "editThreadIdentifiers") {
     const canonicalThreadId = String(formData.get("canonicalThreadId") ?? "");
     const norm = (v: FormDataEntryValue | null): string | null => {
@@ -462,6 +475,8 @@ interface SerializedThreadState {
   resolutionConfidence: string;
   redactedAt: string | null;
   redactedReason: string | null;
+  analyzedAt: string | null;
+  dismissedFromAnalyzeAt: string | null;
 }
 
 function serializeThreadState(t: {
@@ -476,6 +491,8 @@ function serializeThreadState(t: {
   resolutionConfidence: string;
   redactedAt?: Date | null;
   redactedReason?: string | null;
+  analyzedAt?: Date | null;
+  dismissedFromAnalyzeAt?: Date | null;
 }): SerializedThreadState {
   return {
     supportNature: t.supportNature,
@@ -489,6 +506,8 @@ function serializeThreadState(t: {
     resolutionConfidence: t.resolutionConfidence,
     redactedAt: t.redactedAt ? t.redactedAt.toISOString() : null,
     redactedReason: t.redactedReason ?? null,
+    analyzedAt: t.analyzedAt ? t.analyzedAt.toISOString() : null,
+    dismissedFromAnalyzeAt: t.dismissedFromAnalyzeAt ? t.dismissedFromAnalyzeAt.toISOString() : null,
   };
 }
 
@@ -645,6 +664,7 @@ function getClassification(email: SerializedEmail): NatureFilter {
 // actually cares about ("what do I have to do next?").
 type OpsBucket =
   | "to_process"       // support thread waiting for a human reply
+  | "to_analyze"       // support thread, Tier 3 never ran (suspended sync), waiting for explicit analysis
   | "waiting_customer" // we replied, awaiting customer
   | "waiting_merchant" // internal / data action required on our side
   | "resolved"         // closed, no reply needed, or conversation ended
@@ -666,6 +686,19 @@ function getOpsBucket(
   // explicitly close a thread even when the customer has the last word.
   if (state?.operationalState === "resolved" || state?.operationalState === "no_reply_needed") {
     return "resolved";
+  }
+  // À analyser bucket: support threads that never ran Tier 3 (typically
+  // accumulated while the shop was suspended) and haven't been dismissed
+  // by the merchant. They wait for an explicit "Analyser" click. Once Tier 3
+  // runs (analyzedAt set) the thread falls through to the regular buckets.
+  // Once dismissed, same fall-through — they show up wherever their other
+  // signals place them.
+  const isSupportStance =
+    state?.supportNature === "confirmed_support" ||
+    state?.supportNature === "probable_support" ||
+    state?.supportNature === "mixed";
+  if (isSupportStance && !state?.analyzedAt && !state?.dismissedFromAnalyzeAt) {
+    return "to_analyze";
   }
   if (threadNeedsReply(thread, connectedEmail)) return "to_process";
   const op = state?.operationalState;
@@ -1862,7 +1895,7 @@ const ThreadCard = memo(function ThreadCard({
             previousOperationalState={threadState?.previousOperationalState ?? null}
           />
         )}
-        {(bucket === "to_process" || bucket === "waiting_merchant") &&
+        {(bucket === "to_process" || bucket === "waiting_merchant" || bucket === "to_analyze") &&
           !latest.draftReply &&
           !noReplyNeeded &&
           !latest.tier1Result?.startsWith("filtered:") &&
@@ -1877,6 +1910,9 @@ const ThreadCard = memo(function ThreadCard({
               {latest.processingStatus === "error" ? t("inbox.retryAnalysis") : t("inbox.generateDraft")}
             </s-button>
           </reanalyzeFetcher.Form>
+        )}
+        {bucket === "to_analyze" && latest.canonicalThreadId && (
+          <DismissThreadFromAnalyzeButton canonicalThreadId={latest.canonicalThreadId} />
         )}
       </div>
 
@@ -2830,6 +2866,104 @@ function ThreadDetailPanel({
 }
 
 // ---------------------------------------------------------------------------
+// "À analyser" tab helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Banner-style header for the À analyser tab: short explanation + a "Vider la
+ * file" button that bulk-dismisses every thread currently waiting for Tier 3.
+ * Submits intent=dismissAnalyzeQueue via a native form so we get React Router
+ * revalidation for free; the action sets dismissedFromAnalyzeAt=now on all
+ * matching threads.
+ */
+function ClearAnalyzeQueueButton({ count }: { count: number }) {
+  const { t } = useTranslation();
+  const fetcher = useFetcher();
+  const isSubmitting = fetcher.state === "submitting" || fetcher.state === "loading";
+
+  const onClick = (e: React.MouseEvent) => {
+    const ok = window.confirm(t("inbox.clearAnalyzeQueueConfirm", { count }));
+    if (!ok) e.preventDefault();
+  };
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        padding: "10px 14px",
+        background: "#fff7ed",
+        border: "1px solid #fed7aa",
+        color: "#9a3412",
+        borderRadius: 8,
+        fontSize: 13.5,
+        lineHeight: 1.4,
+      }}
+    >
+      <span style={{ flex: 1, fontWeight: 500 }}>
+        {t("inbox.toAnalyzeHint", { count })}
+      </span>
+      <fetcher.Form method="post">
+        <input type="hidden" name="_action" value="dismissAnalyzeQueue" />
+        <button
+          type="submit"
+          onClick={onClick}
+          disabled={isSubmitting}
+          style={{
+            background: "#9a3412",
+            color: "white",
+            border: "none",
+            borderRadius: 6,
+            padding: "6px 12px",
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: isSubmitting ? "wait" : "pointer",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {isSubmitting ? "…" : t("inbox.clearAnalyzeQueue")}
+        </button>
+      </fetcher.Form>
+    </div>
+  );
+}
+
+/**
+ * Per-thread "Retirer de la file" button shown on cards in the À analyser tab.
+ * Idempotent server-side; submits intent=dismissThreadFromAnalyze with the
+ * canonical thread id.
+ */
+function DismissThreadFromAnalyzeButton({ canonicalThreadId }: { canonicalThreadId: string }) {
+  const { t } = useTranslation();
+  const fetcher = useFetcher();
+  const isSubmitting = fetcher.state === "submitting" || fetcher.state === "loading";
+  return (
+    <fetcher.Form method="post">
+      <input type="hidden" name="_action" value="dismissThreadFromAnalyze" />
+      <input type="hidden" name="canonicalThreadId" value={canonicalThreadId} />
+      <button
+        type="submit"
+        disabled={isSubmitting}
+        style={{
+          background: "transparent",
+          color: "#475569",
+          border: "1px solid #cbd5e1",
+          borderRadius: 6,
+          padding: "6px 10px",
+          fontSize: 12,
+          fontWeight: 500,
+          cursor: isSubmitting ? "wait" : "pointer",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {isSubmitting ? "…" : t("inbox.dismissFromAnalyzeQueue")}
+      </button>
+    </fetcher.Form>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
@@ -2999,6 +3133,7 @@ export default function InboxPage() {
     all: threadMeta.length,
     to_handle: threadMeta.filter((m) => m.bucket === "to_process" || m.bucket === "waiting_merchant").length,
     to_process: threadMeta.filter((m) => m.bucket === "to_process").length,
+    to_analyze: threadMeta.filter((m) => m.bucket === "to_analyze").length,
     waiting_customer: threadMeta.filter((m) => m.bucket === "waiting_customer").length,
     waiting_merchant: threadMeta.filter((m) => m.bucket === "waiting_merchant").length,
     resolved: threadMeta.filter((m) => m.bucket === "resolved").length,
@@ -3192,10 +3327,17 @@ export default function InboxPage() {
 
           <div className="ui-inbox-section">
             <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-              {/* Primary tabs */}
+              {/* Primary tabs.
+                  "À analyser" appears between "À traiter" and "Attente client"
+                  only when there are unanalyzed support threads (typically
+                  accumulated while the shop was suspended). Hidden otherwise
+                  to keep the UI quiet on healthy plans. */}
               <SegmentedTabs
                 tabs={[
                   { key: "to_handle", label: t("inbox.bucketToHandle"), count: bucketCounts.to_handle },
+                  ...(bucketCounts.to_analyze > 0
+                    ? [{ key: "to_analyze" as const, label: t("inbox.bucketToAnalyze"), count: bucketCounts.to_analyze }]
+                    : []),
                   { key: "waiting_customer", label: t("inbox.bucketWaitingCustomer"), count: bucketCounts.waiting_customer },
                   { key: "resolved", label: t("inbox.bucketResolved"), count: bucketCounts.resolved },
                   { key: "other", label: t("inbox.bucketOther"), count: bucketCounts.other },
@@ -3204,6 +3346,11 @@ export default function InboxPage() {
                 active={activeBucket}
                 onChange={(k) => setActiveBucket(k)}
               />
+
+              {/* Bulk "Vider la file" button — only shown in À analyser tab */}
+              {activeBucket === "to_analyze" && bucketCounts.to_analyze > 0 && (
+                <ClearAnalyzeQueueButton count={bucketCounts.to_analyze} />
+              )}
 
               {/* Secondary filters */}
               <FiltersBar

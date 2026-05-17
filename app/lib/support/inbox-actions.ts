@@ -122,6 +122,41 @@ export async function handleReclassify(params: { shop: string }) {
   return { syncStarted: true, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
 }
 
+/**
+ * Bulk-dismiss every thread currently visible in the "À analyser" tab.
+ * Sets `dismissedFromAnalyzeAt = now` on threads matching the same filter
+ * used by the inbox loader (support stance + analyzedAt null + not resolved).
+ * Idempotent: re-dismissing an already-dismissed thread is a no-op (whereIs
+ * `dismissedFromAnalyzeAt: null`).
+ */
+export async function handleDismissAnalyzeQueue(params: { shop: string }) {
+  const { shop } = params;
+  const result = await prisma.thread.updateMany({
+    where: {
+      shop,
+      analyzedAt: null,
+      dismissedFromAnalyzeAt: null,
+      supportNature: { in: ["confirmed_support", "probable_support", "mixed"] },
+      operationalState: { notIn: ["resolved", "no_reply_needed"] },
+    },
+    data: { dismissedFromAnalyzeAt: new Date() },
+  });
+  return { dismissedCount: result.count, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
+}
+
+/** Dismiss a single thread from the "À analyser" queue. */
+export async function handleDismissThreadFromAnalyze(params: { shop: string; canonicalThreadId: string }) {
+  const { shop, canonicalThreadId } = params;
+  if (!canonicalThreadId) {
+    return { dismissedCount: 0, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
+  }
+  const result = await prisma.thread.updateMany({
+    where: { id: canonicalThreadId, shop, dismissedFromAnalyzeAt: null },
+    data: { dismissedFromAnalyzeAt: new Date() },
+  });
+  return { dismissedCount: result.count, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
+}
+
 export async function handleSync(params: { shop: string; admin: AdminGraphqlClient }) {
   const { shop, admin } = params;
   // Mirror auto-sync's per-conversation billing semantics: when the shop is

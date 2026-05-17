@@ -153,6 +153,13 @@ model Thread {
   // one billing increment per thread regardless of how many times Tier 3
   // re-runs (new messages, refresh-stale, user-triggered re-analyse).
   analyzedAt     DateTime?
+  // Merchant explicitly dismissed this thread from the "À analyser" queue
+  // (the list of support threads waiting for a Tier 3 run that accumulate
+  // when the shop is suspended). Used to hide the thread from that queue
+  // without touching billing or operational state. Set by the bulk "Vider"
+  // action on the À analyser tab. Cleared automatically when analyzedAt is
+  // populated (Tier 3 ran).
+  dismissedFromAnalyzeAt DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
