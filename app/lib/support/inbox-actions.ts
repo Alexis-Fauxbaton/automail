@@ -230,41 +230,42 @@ export async function handleReanalyze(params: {
 }) {
   const { shop, admin, emailId, skipDraft } = params;
 
-  // skipDraft=true → analysis only, no quota consumed (refresh stale, error retry).
-  // skipDraft=false → analysis + draft generated → 1 unit consumed, must be gated.
-  if (!skipDraft) {
-    const ent = await resolveEntitlements({ shop, admin });
-
-    // Per-conversation billing: if this thread was already analyzed,
-    // re-analysis is free (markThreadAnalyzedIfFirst is idempotent — the
-    // second call returns counted=false). Don't block the user with a
-    // quota error in that case.
-    const emailForGate = await prisma.incomingEmail.findUnique({
-      where: { id: emailId },
-      select: { canonicalThreadId: true },
+  // Gate on entitlements regardless of skipDraft. Both branches run Tier 3
+  // (intent + Shopify + tracking) which is the billable unit, and the call
+  // to markThreadAnalyzedIfFirst inside reanalyzeEmail will increment the
+  // counter for a never-analyzed thread. Under suspension we must refuse
+  // any Tier 3, including error-retry paths that set skipDraft=1.
+  //
+  // Exception: if the thread was already analyzed in this billing period
+  // (Thread.analyzedAt set), re-analyse is free (markThreadAnalyzedIfFirst
+  // returns counted=false). Allow it so merchants on suspended accounts
+  // can still refresh a previously-paid analysis.
+  const ent = await resolveEntitlements({ shop, admin });
+  const emailForGate = await prisma.incomingEmail.findUnique({
+    where: { id: emailId },
+    select: { canonicalThreadId: true },
+  });
+  let alreadyAnalyzed = false;
+  if (emailForGate?.canonicalThreadId) {
+    const tRow = await prisma.thread.findUnique({
+      where: { id: emailForGate.canonicalThreadId },
+      select: { analyzedAt: true },
     });
-    let alreadyAnalyzed = false;
-    if (emailForGate?.canonicalThreadId) {
-      const tRow = await prisma.thread.findUnique({
-        where: { id: emailForGate.canonicalThreadId },
-        select: { analyzedAt: true },
-      });
-      alreadyAnalyzed = tRow?.analyzedAt !== null && tRow?.analyzedAt !== undefined;
-    }
+    alreadyAnalyzed = tRow?.analyzedAt !== null && tRow?.analyzedAt !== undefined;
+  }
+  if (!alreadyAnalyzed && !ent.canGenerateDraft) {
+    return {
+      reanalyzed: null,
+      report: null,
+      disconnected: false,
+      refined: null,
+      quotaExceeded: true,
+      quotaStatus: { used: ent.quotaStatus.used, limit: ent.quotaStatus.limit },
+    };
+  }
 
-    if (!alreadyAnalyzed && !ent.canGenerateDraft) {
-      return {
-        reanalyzed: null,
-        report: null,
-        disconnected: false,
-        refined: null,
-        quotaExceeded: true,
-        quotaStatus: { used: ent.quotaStatus.used, limit: ent.quotaStatus.limit },
-      };
-    }
-
-    // Quota was already pre-checked via `ent.canGenerateDraft`. The
-    // actual increment happens inside reanalyzeEmail → Tier 3 success →
+  if (!skipDraft) {
+    // The actual increment happens inside reanalyzeEmail → Tier 3 success →
     // markThreadAnalyzedIfFirst (idempotent per thread).
     let analysis: Awaited<ReturnType<typeof reanalyzeEmail>>;
     try {
@@ -284,7 +285,8 @@ export async function handleReanalyze(params: {
     };
   }
 
-  // skipDraft=true path: analysis only, no quota gating.
+  // skipDraft=true path: analysis only (no draft generated). Still gated
+  // above; we just suppress the draftReply field on the response.
   const analysis = await reanalyzeEmail(emailId, admin, shop, { skipDraft: true });
   if (analysis) {
     (analysis as { draftReply?: string }).draftReply = undefined;
