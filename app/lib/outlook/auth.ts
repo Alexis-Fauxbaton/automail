@@ -172,6 +172,13 @@ async function refreshAccessToken(refreshToken: string): Promise<{
 }> {
   const { clientId, clientSecret } = getClientConfig();
 
+  // Note: we deliberately omit `scope` on refresh. Microsoft rejects the
+  // refresh with AADSTS70000 ("scopes requested are unauthorized or
+  // expired") if the requested scope set is broader than what the user
+  // originally consented to. Older connections were authorized with
+  // `Mail.Read offline_access` only; we later added `User.Read`. Without
+  // the scope parameter, MS returns a token with the originally-granted
+  // scopes, which is exactly what we want.
   const res = await fetch(TOKEN_ENDPOINT, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -180,13 +187,20 @@ async function refreshAccessToken(refreshToken: string): Promise<{
       refresh_token: refreshToken,
       client_id: clientId,
       client_secret: clientSecret,
-      scope: SCOPES,
     }).toString(),
   });
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({})) as { error?: string; error_description?: string };
     console.error(`[outlook/auth] token refresh error (${res.status}): ${err.error ?? "unknown"}`);
+    // Microsoft Graph returns "invalid_grant" when the user revokes the
+    // app from their account (Microsoft Account → Security & privacy →
+    // app permissions). Surface a typed marker so callers prompt the
+    // merchant to reconnect.
+    if (err.error === "invalid_grant" || err.error === "interaction_required") {
+      const { MailboxRevokedError } = await import("../gmail/auth");
+      throw new MailboxRevokedError("outlook", "unknown");
+    }
     throw new Error(`Microsoft token refresh failed (${res.status})`);
   }
 
@@ -328,6 +342,11 @@ export interface OutlookTokens {
   accessToken: string;
 }
 
+// Per-shop in-flight refresh promises. Prevents the thundering-herd /
+// clock-skew loop where N concurrent callers all see the token as
+// "about to expire" and all hit Microsoft simultaneously.
+const _outlookRefreshInFlight = new Map<string, Promise<OutlookTokens>>();
+
 export async function getAuthenticatedClient(shop: string): Promise<OutlookTokens> {
   const conn = await prisma.mailConnection.findUnique({ where: { shop } });
   if (!conn) throw new Error("No Outlook connection for this shop");
@@ -337,15 +356,26 @@ export async function getAuthenticatedClient(shop: string): Promise<OutlookToken
     return { accessToken: decrypt(conn.accessToken) };
   }
 
-  const refreshed = await refreshAccessToken(decrypt(conn.refreshToken));
-  await prisma.mailConnection.update({
-    where: { shop },
-    data: {
-      accessToken: encrypt(refreshed.accessToken),
-      refreshToken: encrypt(refreshed.refreshToken),
-      tokenExpiry: refreshed.expiry,
-    },
-  });
+  // Coalesce concurrent refreshes for the same shop.
+  const existing = _outlookRefreshInFlight.get(shop);
+  if (existing) return existing;
 
-  return { accessToken: refreshed.accessToken };
+  const p = (async () => {
+    try {
+      const refreshed = await refreshAccessToken(decrypt(conn.refreshToken));
+      await prisma.mailConnection.update({
+        where: { shop },
+        data: {
+          accessToken: encrypt(refreshed.accessToken),
+          refreshToken: encrypt(refreshed.refreshToken),
+          tokenExpiry: refreshed.expiry,
+        },
+      });
+      return { accessToken: refreshed.accessToken };
+    } finally {
+      _outlookRefreshInFlight.delete(shop);
+    }
+  })();
+  _outlookRefreshInFlight.set(shop, p);
+  return p;
 }
