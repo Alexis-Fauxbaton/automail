@@ -592,6 +592,16 @@ export async function getReopenedThreads(
 // Baseline helpers (rolling average over prior windows)
 // ---------------------------------------------------------------------------
 
+// Per-range window math used by every baseline helper. Hoisted to one place
+// so adding a new range only changes one map and the two helpers stay in
+// lock-step.
+const RANGE_WINDOW_CONFIG: Record<string, { durationMs: number; windowCount: number }> = {
+  "24h": { durationMs: 24 * 60 * 60 * 1000, windowCount: 4 },
+  "7d":  { durationMs: 7 * 24 * 60 * 60 * 1000, windowCount: 4 },
+  "30d": { durationMs: 30 * 24 * 60 * 60 * 1000, windowCount: 3 },
+};
+const DEFAULT_RANGE_WINDOW = RANGE_WINDOW_CONFIG["30d"];
+
 async function _baselineEventCount(
   shop: string,
   range: string,
@@ -600,11 +610,8 @@ async function _baselineEventCount(
 ): Promise<number | null> {
   if (range === "90d" || range === "custom") return null;
 
-  const durationMs =
-    range === "24h" ? 24 * 60 * 60 * 1000
-    : range === "7d" ? 7 * 24 * 60 * 60 * 1000
-    : 30 * 24 * 60 * 60 * 1000;
-  const windowCount = range === "24h" ? 4 : range === "7d" ? 4 : 3;
+  const cfg = RANGE_WINDOW_CONFIG[range] ?? DEFAULT_RANGE_WINDOW;
+  const { durationMs, windowCount } = cfg;
 
   const counts = await Promise.all(
     Array.from({ length: windowCount }, (_, i) => {
@@ -717,11 +724,8 @@ export async function getAlerts(
   // Delay degraded: current median first-response >= 2× baseline AND >= 8h.
   // Baseline = median over the prior windows (same window strategy as other baselines).
   if (range !== "90d" && range !== "custom") {
-    const durationMs =
-      range === "24h" ? 24 * 60 * 60 * 1000
-      : range === "7d" ? 7 * 24 * 60 * 60 * 1000
-      : 30 * 24 * 60 * 60 * 1000;
-    const windowCount = range === "24h" ? 4 : range === "7d" ? 4 : 3;
+    const cfg = RANGE_WINDOW_CONFIG[range] ?? DEFAULT_RANGE_WINDOW;
+    const { durationMs, windowCount } = cfg;
 
     const currentSamples = await _fetchResponseTimesMs(shop, start, end);
     const currentMed = _percentile(currentSamples, 0.5);

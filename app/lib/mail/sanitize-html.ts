@@ -17,7 +17,7 @@ export function buildCidMap(
     const entry = { id: att.id, mimeType: att.mimeType, inlineData: att.inlineData };
     const clean = att.contentId.replace(/^<|>$/g, "");
     map.set(clean, entry);
-    map.set(att.contentId, entry);
+    if (clean !== att.contentId) map.set(att.contentId, entry);
   }
   return map;
 }

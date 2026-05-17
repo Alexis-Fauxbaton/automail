@@ -109,16 +109,29 @@ export async function pruneOldRateLimitBuckets(opts: {
   }
 }
 
-/** Extract the requesting client's IP from common proxy headers. */
+/**
+ * Extract the requesting client's IP from common proxy headers.
+ *
+ * `X-Forwarded-For` can be set by anyone, so we only trust it when we know
+ * we're behind a single trusted proxy hop. On Render, the platform adds
+ * exactly one hop, so the LEFTMOST entry is the real client IP — but only
+ * when the request actually came through Render's edge. If TRUSTED_PROXY
+ * is not set explicitly, we fall back to "unknown" for the rate-limit key,
+ * which means the per-IP cap becomes a per-deployment cap. That's safer
+ * than trusting a header an attacker can set.
+ */
 export function getClientIp(request: Request): string {
-  const fwd = request.headers.get("x-forwarded-for");
-  if (fwd) {
-    const first = fwd.split(",")[0]?.trim();
-    if (first) return first;
+  const trust = process.env.TRUSTED_PROXY === "true" || process.env.TRUSTED_PROXY === "1";
+  if (trust) {
+    const fwd = request.headers.get("x-forwarded-for");
+    if (fwd) {
+      const first = fwd.split(",")[0]?.trim();
+      if (first) return first;
+    }
+    const cf = request.headers.get("cf-connecting-ip");
+    if (cf) return cf.trim();
+    const real = request.headers.get("x-real-ip");
+    if (real) return real.trim();
   }
-  return (
-    request.headers.get("cf-connecting-ip") ||
-    request.headers.get("x-real-ip") ||
-    "unknown"
-  );
+  return "unknown";
 }

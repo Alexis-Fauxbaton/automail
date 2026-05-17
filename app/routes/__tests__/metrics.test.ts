@@ -55,7 +55,9 @@ describe("/metrics route", () => {
     expect(res.headers.get("content-type") ?? "").toContain("text/plain");
     const body = await res.text();
     expect(body).toContain("# TYPE test_counter counter");
-    expect(body).toContain('test_counter{shop="demo"} 3');
+    // `shop` labels are HMAC-hashed at render time so scrapers cannot
+    // enumerate the merchant list.
+    expect(body).toMatch(/test_counter\{shop="shop_[a-f0-9]{8}"\} 3/);
   });
 
   it("also accepts ?token= for scrapers that can't set headers", async () => {
