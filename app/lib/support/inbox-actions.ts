@@ -123,7 +123,16 @@ export async function handleResync(params: { shop: string }) {
   });
   await prisma.mailConnection.update({
     where: { shop },
-    data: { historyId: null, lastSyncAt: null, onboardingBackfillDoneAt: null },
+    data: {
+      historyId: null,
+      // Outlook's incremental cursor lives in its own column. Without
+      // clearing it, getSyncCursor() on the next tick returns the pre-resync
+      // delta link, which then gets written back into historyId and 410s on
+      // the following sync — wasting a tick and an API roundtrip.
+      deltaToken: null,
+      lastSyncAt: null,
+      onboardingBackfillDoneAt: null,
+    },
   });
   await enqueueJob(shop, "resync");
   return { syncStarted: true, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
