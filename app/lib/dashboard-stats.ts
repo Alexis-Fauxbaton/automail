@@ -136,9 +136,18 @@ export type DashboardKpis = {
 // ---------------------------------------------------------------------------
 
 export async function getCurrentThreadStates(shop: string): Promise<ThreadStateCounts> {
+  // `messages: { some: {} }` exclut les Thread fantômes : un resync supprime
+  // les IncomingEmail mais conserve les Thread (pour préserver
+  // operationalState manuel, drafts, manualOverrides). Les threads dont
+  // tous les mails ont été purgés et jamais re-rattachés n'ont plus de
+  // conversation à compter.
   const rows = await prisma.thread.groupBy({
     by: ["operationalState"],
-    where: { shop, supportNature: { not: "non_support" } },
+    where: {
+      shop,
+      supportNature: { not: "non_support" },
+      messages: { some: {} },
+    },
     _count: { _all: true },
   });
 
