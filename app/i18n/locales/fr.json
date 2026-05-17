@@ -293,6 +293,7 @@
     "clearAnalyzeQueueConfirm_one": "Retirer {{count}} fil de la file « À analyser » ? Vous pourrez toujours le retrouver dans l'onglet « Tout ».",
     "clearAnalyzeQueueConfirm_other": "Retirer {{count}} fils de la file « À analyser » ? Vous pourrez toujours les retrouver dans l'onglet « Tout ».",
     "dismissFromAnalyzeQueue": "Retirer de la file",
+    "analyze": "Analyser",
     "reopen": "Rouvrir",
     "markResolved": "Marquer comme résolu",
     "parsedIdentifiers": "Identifiants détectés",

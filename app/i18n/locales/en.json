@@ -293,6 +293,7 @@
     "clearAnalyzeQueueConfirm_one": "Remove {{count}} thread from the \"To analyze\" queue? You can still find it under \"All\".",
     "clearAnalyzeQueueConfirm_other": "Remove {{count}} threads from the \"To analyze\" queue? You can still find them under \"All\".",
     "dismissFromAnalyzeQueue": "Remove from queue",
+    "analyze": "Analyze",
     "reopen": "Reopen",
     "markResolved": "Mark as resolved",
     "parsedIdentifiers": "Parsed identifiers",

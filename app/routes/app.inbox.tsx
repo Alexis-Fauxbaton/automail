@@ -1765,6 +1765,8 @@ const ThreadCard = memo(function ThreadCard({
 
         {bucket === "to_process" ? (
           <span className="ui-pill ui-pill--warning ui-pill--clickable" onClick={(e) => { e.stopPropagation(); onBucketClick("to_handle"); }}>{t("inbox.stateWaitingMerchant")}</span>
+        ) : bucket === "to_analyze" ? (
+          <span className="ui-pill ui-pill--clickable" onClick={(e) => { e.stopPropagation(); onBucketClick("to_analyze"); }}>{t("inbox.bucketToAnalyze")}</span>
         ) : bucket === "waiting_merchant" ? (
           <span className="ui-pill ui-pill--warning ui-pill--clickable" onClick={(e) => { e.stopPropagation(); onBucketClick("to_handle"); }}>{t("inbox.stateWaitingMerchant")}</span>
         ) : bucket === "waiting_customer" ? (
@@ -1907,7 +1909,13 @@ const ThreadCard = memo(function ThreadCard({
               <input type="hidden" name="skipDraft" value="1" />
             )}
             <s-button type="submit" variant="primary" {...(isGenerating ? { loading: true } : {})}>
-              {latest.processingStatus === "error" ? t("inbox.retryAnalysis") : t("inbox.generateDraft")}
+              {latest.processingStatus === "error"
+                ? t("inbox.retryAnalysis")
+                : bucket === "to_analyze"
+                ? t("inbox.analyze")
+                : latest.draftReply
+                ? t("inbox.regenerateDraft")
+                : t("inbox.generateDraft")}
             </s-button>
           </reanalyzeFetcher.Form>
         )}
@@ -2629,7 +2637,13 @@ function ThreadDetailPanel({
                 <input type="hidden" name="skipDraft" value="1" />
               )}
               <s-button type="submit" variant="primary" {...(isGenerating ? { loading: true } : {})}>
-                {latest.draftReply ? t("inbox.regenerateDraft") : latest.processingStatus === "error" ? t("inbox.retryAnalysis") : t("inbox.generateDraft")}
+                {latest.draftReply
+                  ? t("inbox.regenerateDraft")
+                  : latest.processingStatus === "error"
+                  ? t("inbox.retryAnalysis")
+                  : bucket === "to_analyze"
+                  ? t("inbox.analyze")
+                  : t("inbox.generateDraft")}
               </s-button>
             </reanalyzeFetcher.Form>
           )}
