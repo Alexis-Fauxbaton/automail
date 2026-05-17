@@ -160,7 +160,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const oauthError = url.searchParams.get("error");
   if (oauthError) {
     const errorDesc = url.searchParams.get("error_description") ?? "";
-    console.warn(`[mail-auth] OAuth provider error: ${oauthError} — ${errorDesc}`);
+    // Log only the error CODE — error_description may echo back secret/PII
+    // fragments from the provider. The description is still surfaced to the
+    // end user via errorPage below (acceptable: it is shown only to the
+    // person who triggered the OAuth flow).
+    console.warn(`[mail-auth] OAuth provider error: ${oauthError}`);
     if (errorDesc.includes("AADSTS65001") || oauthError === "consent_required") {
       return errorPage(locale, t.consent.title, t.consent.body);
     }

@@ -18,8 +18,12 @@ async function zohoFetch(
   if (params) {
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   }
+  // 15 s timeout protects against hung sockets — a single hung Zoho call
+  // would otherwise block an auto-sync worker slot for the OS default
+  // (often 120 s+) and starve other shops.
   const res = await fetch(url.toString(), {
     headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
+    signal: AbortSignal.timeout(15_000),
   });
   if (!res.ok) {
     const text = await res.text();

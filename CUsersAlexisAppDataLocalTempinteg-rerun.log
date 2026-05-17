@@ -1,0 +1,18 @@
+
+> test:integration
+> cross-env NODE_ENV=test vitest run --config vitest.integration.config.ts
+
+
+ RUN  v4.1.5 C:/Users/Alexis/Documents/Projets/automail
+
+ ❯ app/lib/__tests__/integration/billing-light-refresh.test.ts (2 tests | 2 failed) 10037ms
+     × refreshThreadAnalysis({reclassifyIntent: false}) on an unanalyzed thread does not increment 5021ms
+     × refreshThreadAnalysis on an already-analyzed thread does not increment 5014ms
+ ❯ app/lib/__tests__/integration/reply-draft.test.ts (3 tests | 1 failed) 6562ms
+     × crée un ReplyDraft si inexistant (REQ-INBOX-07) 5008ms
+
+ Test Files  2 failed | 32 passed (34)
+      Tests  3 failed | 147 passed (150)
+   Start at  12:47:24
+   Duration  132.22s (transform 967ms, setup 0ms, import 10.06s, tests 116.09s, environment 3ms)
+

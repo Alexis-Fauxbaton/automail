@@ -167,13 +167,30 @@ export async function handleSync(params: { shop: string; admin: AdminGraphqlClie
   // and is skipped in that case.
   const ent = await resolveEntitlements({ shop, admin });
   const tier3Allowed = !ent.isSyncSuspended;
-  const report = await processNewEmails(shop, admin, { tier3Allowed });
-  const staleRefresh = tier3Allowed
-    ? await refreshStaleAnalysesForShop(shop, admin, {
+  // The mail provider (Gmail / Outlook / Zoho) can throw — typically when the
+  // OAuth refresh token is invalidated (user revoked, app secret rotated,
+  // token TTL exceeded). processNewEmails already records the message in
+  // MailConnection.lastSyncError; we must return a structured error here
+  // instead of letting it propagate as a 500 (which would render a generic
+  // "Erreur applicative" page that swallows the whole inbox).
+  let report = null as Awaited<ReturnType<typeof processNewEmails>> | null;
+  let syncError: string | null = null;
+  try {
+    report = await processNewEmails(shop, admin, { tier3Allowed });
+  } catch (err) {
+    syncError = err instanceof Error ? err.message : String(err);
+  }
+  let staleRefresh = null as Awaited<ReturnType<typeof refreshStaleAnalysesForShop>> | null;
+  if (tier3Allowed && !syncError) {
+    try {
+      staleRefresh = await refreshStaleAnalysesForShop(shop, admin, {
         maxAgeMs: ANALYSIS_FRESHNESS_MS.autoRefresh,
-      })
-    : null;
-  return { report, syncCompleted: true, disconnected: false, reanalyzed: null, refined: null, stopped: false, staleRefresh, syncSuspended: !tier3Allowed };
+      });
+    } catch {
+      // Best-effort refresh — never block the sync response on this.
+    }
+  }
+  return { report, syncCompleted: !syncError, syncError, disconnected: false, reanalyzed: null, refined: null, stopped: false, staleRefresh, syncSuspended: !tier3Allowed };
 }
 
 export async function handleBackfill(params: { shop: string; days: number }) {

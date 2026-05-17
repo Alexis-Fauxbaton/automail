@@ -85,8 +85,10 @@ async function graphFetch<T>(
   accessToken: string,
   url: string,
 ): Promise<{ ok: boolean; status: number; data: T }> {
+  // 15 s timeout — a hung Graph call must not block a sync worker slot.
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+    signal: AbortSignal.timeout(15_000),
   });
   const data = await res.json().catch(() => ({}));
   return { ok: res.ok, status: res.status, data: data as T };

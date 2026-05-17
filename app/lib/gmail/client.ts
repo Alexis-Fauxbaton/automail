@@ -7,9 +7,19 @@ const INLINE_EMBED_LIMIT = 200 * 1024; // 200 KB
 
 export type GmailMessage = MailMessage;
 
+// Default timeout applied to every Gmail API call so a hung socket can't
+// block an auto-sync worker for the OS default (often 120 s+).
+const GMAIL_REQUEST_TIMEOUT_MS = 15_000;
+
 export async function getGmailService(shop: string) {
   const auth = await getAuthenticatedClient(shop);
-  return google.gmail({ version: "v1", auth });
+  return google.gmail({
+    version: "v1",
+    auth,
+    // googleapis honours `timeout` on the global options object and applies
+    // it to each underlying gaxios request.
+    timeout: GMAIL_REQUEST_TIMEOUT_MS,
+  });
 }
 
 /** Helper: page through Gmail messages.list for a single query string. */
