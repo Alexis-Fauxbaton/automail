@@ -62,22 +62,23 @@ describe('handleSync — Tier 3 suspension', () => {
       data: { shop: TEST_SHOP, firstInstallDate: new Date(Date.now() - 30 * 86400000) },
     });
     // No mail connection: processNewEmails throws inside _processNewEmails
-    // with "No mail connection for this shop". The fact that processNewEmails
-    // was called at all (rather than gated upstream) proves the new behavior:
-    // we now ingest+classify even under suspension. The throw is caught at
-    // the top-level catch in processNewEmails and rethrown, so we expect
-    // handleSync to surface that error.
+    // with "No mail connection for this shop". handleSync now CATCHES that
+    // throw and returns a structured `{ syncError }` field so the UI doesn't
+    // render a generic full-screen error page. Assert both: pipeline was
+    // reached (tier3Allowed=false didn't gate upstream) AND error was caught.
     const adminGraphql = vi.fn().mockResolvedValue({
       json: async () => ({ data: { currentAppInstallation: { activeSubscriptions: [] } } }),
     });
 
     const { handleSync } = await import('../../support/inbox-actions');
-    await expect(
-      handleSync({
-        shop: TEST_SHOP,
-        admin: { graphql: adminGraphql } as any,
-      }),
-    ).rejects.toThrow(/No mail connection/);
+    const result = await handleSync({
+      shop: TEST_SHOP,
+      admin: { graphql: adminGraphql } as any,
+    });
+    expect((result as any).syncSuspended).toBe(true);
+    expect((result as any).syncError).toMatch(/No mail connection/);
+    expect((result as any).syncCompleted).toBe(false);
+    expect((result as any).report).toBeNull();
   });
 
 });
