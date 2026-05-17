@@ -3052,9 +3052,9 @@ export default function InboxPage() {
   const bgSyncActive = loaderData.syncInProgress || syncStarted;
 
   // Passive revalidation — picks up emails ingested by the background auto-sync loop.
-  // Poll every 10s while a heavy job is running, otherwise every 60s.
+  // Poll every 5s while a heavy job is running, otherwise every 60s.
   useEffect(() => {
-    const interval = bgSyncActive ? 10_000 : 60_000;
+    const interval = bgSyncActive ? 5_000 : 60_000;
     const poll = setInterval(() => {
       if (revalidator.state === "idle") revalidator.revalidate();
     }, interval);
@@ -3334,7 +3334,7 @@ export default function InboxPage() {
           <s-banner tone="info">
             <s-stack direction="block" gap="small-200">
               <s-text>Synchronisation en cours…</s-text>
-              <s-text>Le traitement des emails et la mise à jour des badges peuvent prendre quelques minutes. La page se rafraîchit automatiquement toutes les 60 secondes.</s-text>
+              <s-text>Le traitement des emails et la mise à jour des badges peuvent prendre quelques minutes. La page se rafraîchit automatiquement toutes les 5 secondes.</s-text>
             </s-stack>
           </s-banner>
         </div>
