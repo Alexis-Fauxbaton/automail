@@ -29,6 +29,7 @@ import { sanitizeEmailHtml, buildCidMap } from "../lib/mail/sanitize-html";
 import { buildReplySubject } from "../lib/support/draft-subject";
 import { RichDraftEditor } from "../components/RichDraftEditor";
 import { QuotaExceededModal } from "../components/billing/QuotaExceededModal";
+import { useEntitlements } from "../lib/billing/entitlements-context";
 import prisma from "../db.server";
 import { computePriorContact } from "../lib/support/prior-contact";
 import {
@@ -951,9 +952,35 @@ function ConnectionCard({
   autoSyncIntervalMinutes: number;
 }) {
   const { t } = useTranslation();
+  const ent = useEntitlements();
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   if (!connected) {
+    // Pre-OAuth gate: if billing prevents adding a mailbox (trial expired
+    // or paid plan with mailbox quota reached) show a clear upgrade prompt
+    // instead of the connect buttons. Saves the merchant from going through
+    // the full Microsoft / Google consent flow only to hit a 0/0 wall on
+    // the callback.
+    if (!ent.canConnectMailbox) {
+      return (
+        <s-box padding="large-500" borderWidth="base" borderRadius="large-200" background="subdued">
+          <s-stack direction="block" gap="base" align="center">
+            <s-heading>{t("inbox.mailboxLimit.title")}</s-heading>
+            <s-paragraph>
+              {ent.state === "trial_expired"
+                ? t("inbox.mailboxLimit.trialExpired")
+                : t("inbox.mailboxLimit.quotaReached", {
+                    used: ent.mailboxStatus.used,
+                    limit: ent.mailboxStatus.limit,
+                  })}
+            </s-paragraph>
+            <Link to="/app/billing">
+              <s-button variant="primary">{t("billing.upgradeCta")}</s-button>
+            </Link>
+          </s-stack>
+        </s-box>
+      );
+    }
     return (
       <s-box padding="large-500" borderWidth="base" borderRadius="large-200" background="subdued">
         <s-stack direction="block" gap="base" align="center">

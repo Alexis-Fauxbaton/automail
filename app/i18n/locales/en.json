@@ -245,6 +245,11 @@
   "inbox": {
     "connectHeading": "Connect your email",
     "connectDesc": "Automatically scan your inbox for customer support emails, classify them, and generate draft replies.",
+    "mailboxLimit": {
+      "title": "Cannot connect a mailbox",
+      "trialExpired": "Your trial has ended. Upgrade to a paid plan to connect a mailbox.",
+      "quotaReached": "Limit reached: {{used}} / {{limit}} mailboxes connected. Upgrade to add more."
+    },
     "connectGmail": "Connect Gmail",
     "connectZoho": "Connect Zoho Mail",
     "connectOutlook": "Connect Outlook / Microsoft 365",

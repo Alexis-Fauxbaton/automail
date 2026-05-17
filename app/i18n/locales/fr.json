@@ -245,6 +245,11 @@
   "inbox": {
     "connectHeading": "Connectez votre messagerie",
     "connectDesc": "Analysez automatiquement votre boîte mail, classifiez les emails support et générez des brouillons de réponse.",
+    "mailboxLimit": {
+      "title": "Connexion de boîte mail indisponible",
+      "trialExpired": "Votre essai est terminé. Passez à un plan payant pour connecter une boîte mail.",
+      "quotaReached": "Limite atteinte : {{used}} / {{limit}} boîtes mail connectées. Passez à un plan supérieur pour en ajouter."
+    },
     "connectGmail": "Connecter Gmail",
     "connectZoho": "Connecter Zoho Mail",
     "connectOutlook": "Connecter Outlook / Microsoft 365",
