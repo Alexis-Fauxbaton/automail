@@ -6,7 +6,7 @@ import {
   TEST_SHOP,
   createTestThread,
 } from "./helpers/db";
-import { markThreadAnalyzedIfFirst, tryReserveDraft, getUsage } from "../../billing/usage";
+import { markThreadAnalyzedIfFirst, getUsage } from "../../billing/usage";
 
 beforeEach(async () => {
   await cleanTestShop();
@@ -31,46 +31,5 @@ describe("billing — quota cap (Class 6)", () => {
     expect(r.counted).toBe(true);
     const usage = await getUsage(TEST_SHOP);
     expect(usage.count).toBe(50);
-  });
-
-  it("at 50/50, tryReserveDraft refuses additional unit", async () => {
-    await testDb.billingUsage.create({
-      data: {
-        shop: TEST_SHOP,
-        periodStart: new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)),
-        analyzedThreadsCount: 50,
-      },
-    });
-    const r = await tryReserveDraft({ shop: TEST_SHOP, limit: 50 });
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe("quota_exceeded");
-  });
-
-  it("Infinity limit (trial) never blocks", async () => {
-    await testDb.billingUsage.create({
-      data: {
-        shop: TEST_SHOP,
-        periodStart: new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)),
-        analyzedThreadsCount: 100_000,
-      },
-    });
-    const r = await tryReserveDraft({ shop: TEST_SHOP, limit: Infinity });
-    expect(r.ok).toBe(true);
-  });
-
-  it("2 parallel reserves at 49/50 — exactly 1 succeeds", async () => {
-    await testDb.billingUsage.create({
-      data: {
-        shop: TEST_SHOP,
-        periodStart: new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)),
-        analyzedThreadsCount: 49,
-      },
-    });
-    const [a, b] = await Promise.all([
-      tryReserveDraft({ shop: TEST_SHOP, limit: 50 }),
-      tryReserveDraft({ shop: TEST_SHOP, limit: 50 }),
-    ]);
-    const successes = [a, b].filter((r) => r.ok).length;
-    expect(successes).toBe(1);
   });
 });

@@ -172,7 +172,25 @@ export async function handleReanalyze(params: {
   // skipDraft=false → analysis + draft generated → 1 unit consumed, must be gated.
   if (!skipDraft) {
     const ent = await resolveEntitlements({ shop, admin });
-    if (!ent.canGenerateDraft) {
+
+    // Per-conversation billing: if this thread was already analyzed,
+    // re-analysis is free (markThreadAnalyzedIfFirst is idempotent — the
+    // second call returns counted=false). Don't block the user with a
+    // quota error in that case.
+    const emailForGate = await prisma.incomingEmail.findUnique({
+      where: { id: emailId },
+      select: { canonicalThreadId: true },
+    });
+    let alreadyAnalyzed = false;
+    if (emailForGate?.canonicalThreadId) {
+      const tRow = await prisma.thread.findUnique({
+        where: { id: emailForGate.canonicalThreadId },
+        select: { analyzedAt: true },
+      });
+      alreadyAnalyzed = tRow?.analyzedAt !== null && tRow?.analyzedAt !== undefined;
+    }
+
+    if (!alreadyAnalyzed && !ent.canGenerateDraft) {
       return {
         reanalyzed: null,
         report: null,
