@@ -365,6 +365,7 @@
     "expand": "▼ Expand",
     "pillDraftGenerated": "Draft generated",
     "pillPartialHistory": "Partial history",
+    "pillPartialHistoryTooltip": "Some earlier messages in this conversation were not synced (thread started before your mailbox was connected, or older than the 60-day backfill window). The AI draft is based on what we have on file — review with that in mind.",
     "pillError": "Error",
     "pillRepliedElsewhere": "Already replied (other thread)",
     "pillBasedOnPrevious": "Based on previous message",

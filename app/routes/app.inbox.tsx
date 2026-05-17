@@ -1838,7 +1838,15 @@ const ThreadCard = memo(function ThreadCard({
             </>
           );
         })()}
-        {threadState?.historyStatus === "partial" && <span className="ui-pill ui-pill--warning">{t("inbox.pillPartialHistory")}</span>}
+        {threadState?.historyStatus === "partial" && (
+          <span
+            className="ui-pill ui-pill--warning"
+            title={t("inbox.pillPartialHistoryTooltip")}
+            style={{ cursor: "help" }}
+          >
+            {t("inbox.pillPartialHistory")}
+          </span>
+        )}
         {latest.processingStatus === "error" && <span className="ui-pill ui-pill--danger">{t("inbox.pillError")}</span>}
 
         {hasAnySignal && (
@@ -2587,6 +2595,15 @@ function ThreadDetailPanel({
               {t(`analysis.intent_${intent}`, { defaultValue: intent.replace(/_/g, " ") })}
             </span>
           ))}
+          {threadState?.historyStatus === "partial" && (
+            <span
+              className="ui-pill ui-pill--warning"
+              title={t("inbox.pillPartialHistoryTooltip")}
+              style={{ cursor: "help" }}
+            >
+              {t("inbox.pillPartialHistory")}
+            </span>
+          )}
           {hasAnySignal && (
             <span
               ref={signalAnchorRef}

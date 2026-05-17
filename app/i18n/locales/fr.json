@@ -365,6 +365,7 @@
     "expand": "▼ Développer",
     "pillDraftGenerated": "Brouillon généré",
     "pillPartialHistory": "Historique partiel",
+    "pillPartialHistoryTooltip": "Certains messages antérieurs de cette conversation n'ont pas été synchronisés (thread démarré avant la connexion de votre boîte, ou messages plus anciens que le backfill 60 jours). Le brouillon IA s'appuie sur ce qu'on a en base — relisez avec ça en tête.",
     "pillError": "Erreur",
     "pillRepliedElsewhere": "Déjà répondu (autre boucle)",
     "pillBasedOnPrevious": "Basé sur le message précédent",
