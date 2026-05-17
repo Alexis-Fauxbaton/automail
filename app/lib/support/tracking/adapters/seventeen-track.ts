@@ -7,7 +7,10 @@
  * API key: https://www.17track.net/en/api (free: 100 trackings/month)
  */
 
-const BASE = "https://api.17track.net/track/v2.2";
+// API version overridable via env so a 17track upgrade doesn't require a
+// code redeploy. Default kept at v2.2 (current stable as of 2026-05).
+const SEVENTEEN_TRACK_VERSION = process.env.SEVENTEEN_TRACK_API_VERSION || "v2.2";
+const BASE = `https://api.17track.net/track/${SEVENTEEN_TRACK_VERSION}`;
 
 import {
   isOpen as breakerOpen,

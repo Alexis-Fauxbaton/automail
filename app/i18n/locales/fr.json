@@ -15,7 +15,15 @@
   },
   "help": {
     "title": "Aide & support",
-    "contactHeading": "Nous contacter"
+    "contactHeading": "Nous contacter",
+    "contactBody1": "Une question, un bug ou une suggestion ? Écrivez-nous à",
+    "contactBody2": ". Nous vous répondons sous 1 jour ouvré.",
+    "quickStartHeading": "Démarrage rapide",
+    "quickStartStep1": "Connectez votre boîte mail (Gmail, Zoho ou Outlook) depuis l'onglet Inbox.",
+    "quickStartStep2": "Configurez votre signature et votre ton dans les Paramètres.",
+    "quickStartStep3": "Automail analyse les emails entrants et propose un brouillon. Vous gardez toujours la main pour valider et envoyer.",
+    "privacyHeading": "Confidentialité",
+    "privacyBody": "Notre politique de confidentialité est disponible sur"
   },
   "support": {
     "pageHeading": "Copilot support",

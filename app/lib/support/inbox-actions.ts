@@ -32,6 +32,18 @@ async function maybeRefreshAnalysis(
   if (!record || record.shop !== shop) return;
   if (record.processingStatus !== "analyzed") return;
   if (!isAnalysisStale(record.lastAnalyzedAt, ANALYSIS_FRESHNESS_MS.draftTrigger)) return;
+  // Gate on entitlements: a refresh still hits Shopify Admin + 17track, and
+  // on a suspended account we must not subsidise those calls. The merchant
+  // sees the slightly-stale analysis instead — it will refresh naturally
+  // after they upgrade.
+  try {
+    const ent = await resolveEntitlements({ shop, admin });
+    if (!ent.canGenerateDraft) return;
+  } catch {
+    // Fail-open on entitlement lookup glitches — the refresh is best-effort
+    // anyway, and blocking it on a transient Shopify outage would degrade UX
+    // for paying merchants without protecting much spend.
+  }
   try {
     // Lightweight refresh: Shopify + 17track, no LLM. The intent stays
     // intact (the customer's message hasn't changed), only the order /
@@ -490,24 +502,35 @@ export async function handleMoveThread(params: {
   // Resolved threads skip those steps during auto-sync (orchestrator's
   // skipTracking flag), so without this hook a freshly-reopened thread
   // would show stale tracking until the next refresh-stale tick (~1h).
+  //
+  // Gated on entitlements: refreshThreadAnalysis runs Tier 3 (Shopify
+  // order search + tracking + optional crawl) which costs real money on
+  // every call. Under suspension we must not subsidize those operations.
   if (isReopen) {
     try {
-      const anchor = await prisma.incomingEmail.findFirst({
-        where: { canonicalThreadId, shop, processingStatus: "analyzed" },
-        orderBy: { receivedAt: "desc" },
-        select: { id: true },
-      });
-      if (anchor) {
-        const { refreshThreadAnalysis } = await import("./refresh-thread-analysis");
-        // reSearchOrder: true — the previous analysis (taken while resolved)
-        // had `orderCandidates: []` because Shopify search was skipped. We
-        // must force a fresh search; otherwise reuseOrder would replay the
-        // empty result.
-        await refreshThreadAnalysis(anchor.id, admin, shop, {
-          reclassifyIntent: false,
-          reSearchOrder: true,
-          refreshTracking: true,
+      const ent = await resolveEntitlements({ shop, admin });
+      if (!ent.canGenerateDraft) {
+        // Suspended shop — leave the thread reopened, but skip the refresh.
+        // The tracking will catch up the next time the merchant resumes a
+        // paid period and triggers an analysis manually.
+      } else {
+        const anchor = await prisma.incomingEmail.findFirst({
+          where: { canonicalThreadId, shop, processingStatus: "analyzed" },
+          orderBy: { receivedAt: "desc" },
+          select: { id: true },
         });
+        if (anchor) {
+          const { refreshThreadAnalysis } = await import("./refresh-thread-analysis");
+          // reSearchOrder: true — the previous analysis (taken while resolved)
+          // had `orderCandidates: []` because Shopify search was skipped. We
+          // must force a fresh search; otherwise reuseOrder would replay the
+          // empty result.
+          await refreshThreadAnalysis(anchor.id, admin, shop, {
+            reclassifyIntent: false,
+            reSearchOrder: true,
+            refreshTracking: true,
+          });
+        }
       }
     } catch (err) {
       console.error("[moveThread] reopen refresh failed:", err);
@@ -590,6 +613,23 @@ export async function handleEditThreadIdentifiers(params: {
       refreshed: "no_anchor" as const,
       report: null, disconnected: false, reanalyzed: null, refined: null,
     };
+  }
+
+  // Gate: identifier edit on a suspended account persists the new values
+  // but skips the Tier 3 refresh (Shopify + 17track). Counter and metrics
+  // are tagged 'skipped_suspended' for visibility.
+  try {
+    const ent = await resolveEntitlements({ shop, admin });
+    if (!ent.canGenerateDraft) {
+      refineContextRefreshTotal.inc({ shop, outcome: "skipped_suspended" });
+      return {
+        editedThread: { canonicalThreadId },
+        refreshed: "skipped_suspended" as const,
+        report: null, disconnected: false, reanalyzed: null, refined: null,
+      };
+    }
+  } catch {
+    // Fail-open on entitlement glitch.
   }
 
   try {
@@ -700,22 +740,32 @@ export async function handleUpdateClassification(params: {
       orderChangeType === "reset";
     const isReset = orderChangeType === "reset";
     if (orderTouched) {
+      // Gate the refresh on entitlements (Shopify search + 17track cost).
+      let allowRefresh = true;
       try {
-        const { refreshThreadAnalysis } = await import("./refresh-thread-analysis");
-        // On reset: re-derive order from scratch (reSearchOrder=true) and
-        // re-classify intent if the user also asked to reset intents.
-        analysis = await refreshThreadAnalysis(
-          persisted.emailId,
-          admin,
-          shop,
-          {
-            reclassifyIntent: isReset && edit.resetIntents === true,
-            reSearchOrder: isReset,
-            refreshTracking: true,
-          },
-        ) as typeof analysis;
-      } catch (err) {
-        console.error("[updateClassification] tracking refresh failed:", err);
+        const ent = await resolveEntitlements({ shop, admin });
+        allowRefresh = ent.canGenerateDraft;
+      } catch {
+        // Fail-open.
+      }
+      if (allowRefresh) {
+        try {
+          const { refreshThreadAnalysis } = await import("./refresh-thread-analysis");
+          // On reset: re-derive order from scratch (reSearchOrder=true) and
+          // re-classify intent if the user also asked to reset intents.
+          analysis = await refreshThreadAnalysis(
+            persisted.emailId,
+            admin,
+            shop,
+            {
+              reclassifyIntent: isReset && edit.resetIntents === true,
+              reSearchOrder: isReset,
+              refreshTracking: true,
+            },
+          ) as typeof analysis;
+        } catch (err) {
+          console.error("[updateClassification] tracking refresh failed:", err);
+        }
       }
 
       const finalOrderNumber = analysis.order?.name?.replace(/^#/, "") ?? null;

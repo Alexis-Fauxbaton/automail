@@ -15,7 +15,15 @@
   },
   "help": {
     "title": "Help & support",
-    "contactHeading": "Contact us"
+    "contactHeading": "Contact us",
+    "contactBody1": "Question, bug, or feature request? Reach us at",
+    "contactBody2": ". We reply within 1 business day.",
+    "quickStartHeading": "Quick start",
+    "quickStartStep1": "Connect your mailbox (Gmail, Zoho or Outlook) from the Inbox tab.",
+    "quickStartStep2": "Configure your signature and tone in Settings.",
+    "quickStartStep3": "Automail analyzes incoming emails and drafts replies. You always keep control to review and send.",
+    "privacyHeading": "Privacy",
+    "privacyBody": "Our privacy policy is available at"
   },
   "support": {
     "pageHeading": "Support copilot",

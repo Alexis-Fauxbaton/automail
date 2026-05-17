@@ -34,6 +34,10 @@ const REQUIRED_SCOPES = [
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY,
   apiSecretKey: process.env.SHOPIFY_API_SECRET || "",
+  // Shopify deprecates each Admin API version after ~12 months. October 2025
+  // is supported until approximately October 2026. Track the announcement
+  // calendar at https://shopify.dev/docs/api/release-notes and bump this
+  // (plus shopify.app.toml.webhooks.api_version) before EOL.
   apiVersion: ApiVersion.October25,
   scopes: process.env.SCOPES?.split(",") ?? REQUIRED_SCOPES,
   appUrl: process.env.SHOPIFY_APP_URL || process.env.HOST || "",

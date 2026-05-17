@@ -12,55 +12,28 @@ const SUPPORT_EMAIL = "blmcontactpro1@gmail.com";
 
 export default function HelpPage() {
   const { t } = useTranslation();
-  const isFr = (typeof navigator !== "undefined" ? navigator.language : "en")
-    .toLowerCase()
-    .startsWith("fr");
 
   return (
     <s-page heading={t("help.title")}>
       <s-section heading={t("help.contactHeading")}>
         <s-paragraph>
-          {isFr ? (
-            <>
-              Une question, un bug, ou une suggestion ? Écrivez-nous à{" "}
-              <s-link href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</s-link>.
-              Nous répondons sous 1 jour ouvré.
-            </>
-          ) : (
-            <>
-              Question, bug, or feature request? Reach us at{" "}
-              <s-link href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</s-link>.
-              We reply within 1 business day.
-            </>
-          )}
+          {t("help.contactBody1")}{" "}
+          <s-link href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</s-link>
+          {t("help.contactBody2")}
         </s-paragraph>
       </s-section>
 
-      <s-section heading={isFr ? "Démarrage rapide" : "Quick start"}>
+      <s-section heading={t("help.quickStartHeading")}>
         <s-unordered-list>
-          <s-list-item>
-            {isFr
-              ? "Connectez votre boîte mail (Gmail, Zoho ou Outlook) depuis l'onglet Inbox."
-              : "Connect your mailbox (Gmail, Zoho or Outlook) from the Inbox tab."}
-          </s-list-item>
-          <s-list-item>
-            {isFr
-              ? "Configurez votre signature et votre ton dans Settings."
-              : "Configure your signature and tone in Settings."}
-          </s-list-item>
-          <s-list-item>
-            {isFr
-              ? "Automail analyse les emails entrants et propose un brouillon. Vous gardez toujours la main pour valider et envoyer."
-              : "Automail analyzes incoming emails and drafts replies. You always keep control to review and send."}
-          </s-list-item>
+          <s-list-item>{t("help.quickStartStep1")}</s-list-item>
+          <s-list-item>{t("help.quickStartStep2")}</s-list-item>
+          <s-list-item>{t("help.quickStartStep3")}</s-list-item>
         </s-unordered-list>
       </s-section>
 
-      <s-section heading={isFr ? "Confidentialité" : "Privacy"}>
+      <s-section heading={t("help.privacyHeading")}>
         <s-paragraph>
-          {isFr
-            ? "Notre politique de confidentialité est disponible sur "
-            : "Our privacy policy is available at "}
+          {t("help.privacyBody")}{" "}
           <s-link href="/privacy" target="_blank">
             /privacy
           </s-link>
