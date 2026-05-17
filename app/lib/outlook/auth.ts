@@ -34,7 +34,15 @@ export function getAuthUrl(shop: string): string {
     scope: SCOPES,
     response_mode: "query",
     state: signOAuthState("outlook", shop),
-    prompt: "select_account",
+    // `prompt=consent` instead of `select_account` so every authorize hit
+    // re-shows the consent screen. Necessary when our SCOPES set evolves
+    // (we added User.Read after Mail.Read offline_access): merchants whose
+    // original consent only covered the old subset would otherwise refresh
+    // silently with the narrower scopes, and proxyAddresses / userPrincipal
+    // lookups would 403 — leaving connection.email stuck at "unknown".
+    // Only impacts initial connection + explicit reconnect; daily token
+    // refresh is a server-side POST that ignores `prompt`.
+    prompt: "consent",
   });
   return `${AUTH_ENDPOINT}?${params.toString()}`;
 }
