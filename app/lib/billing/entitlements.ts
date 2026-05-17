@@ -219,19 +219,29 @@ async function buildTrialExpiredEntitlements(input: {
   now: Date;
 }): Promise<Entitlements> {
   const usage = await getUsage(input.shop, input.now);
+  // Mailbox connection is intentionally allowed on trial_expired (1 mailbox,
+  // aligned with the trial / starter plans). Reasoning:
+  //   - Connecting a mailbox is cheap (OAuth round-trip, no LLM/Shopify cost).
+  //   - Merchants who let the trial expire need to still SEE their mails
+  //     (Tier 1 + Tier 2 keep running under suspension — see classifyAndDraft).
+  //   - Tier 3 (the billable unit) stays gated via canGenerateDraft=false and
+  //     isSyncSuspended=true; new mails accumulate in À analyser until upgrade.
+  // Refusing the connection on trial_expired locks the merchant out of their
+  // own data, which doesn't recover revenue — only adds friction.
+  const STARTER_LIKE_MAILBOX_LIMIT = PLANS.starter.maxMailboxes;
   return {
     shop: input.shop,
     state: 'trial_expired',
     planId: null,
     plan: null,
     canGenerateDraft: false,
-    canConnectMailbox: false,
+    canConnectMailbox: input.mailboxCount < STARTER_LIKE_MAILBOX_LIMIT,
     canViewAdvancedDashboard: false,
     isSyncSuspended: true,
     trialDaysRemaining: 0,
     trialExpiresAt: input.trialExpiresAt,
     quotaStatus: { used: usage.count, limit: 0, pct: 0, level: 'exceeded', periodStart: usage.periodStart },
-    mailboxStatus: { used: input.mailboxCount, limit: 0 },
+    mailboxStatus: { used: input.mailboxCount, limit: STARTER_LIKE_MAILBOX_LIMIT },
     dashboardMaxRangeDays: PLANS.starter.dashboardMaxRangeDays,
   };
 }

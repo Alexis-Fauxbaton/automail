@@ -78,7 +78,7 @@ describe('resolveEntitlements — trial active, no subscription', () => {
 });
 
 describe('resolveEntitlements — trial expired, no subscription', () => {
-  it('blocks all writes', async () => {
+  it('blocks Tier 3 + dashboard, but allows connecting a first mailbox', async () => {
     const now = new Date('2026-05-08T12:00:00Z');
     await setInstallDate(TEST_SHOP, new Date(now.getTime() - 30 * DAY_MS));
 
@@ -90,8 +90,36 @@ describe('resolveEntitlements — trial expired, no subscription', () => {
 
     expect(ent.state).toBe('trial_expired');
     expect(ent.canGenerateDraft).toBe(false);
-    expect(ent.canConnectMailbox).toBe(false);
     expect(ent.canViewAdvancedDashboard).toBe(false);
+    // Mailbox connect remains allowed under trial_expired (1 mailbox cap)
+    // so merchants can still see their data and Tier 1+2 classification.
+    // Only Tier 3 / draft generation is gated.
+    expect(ent.canConnectMailbox).toBe(true);
+    expect(ent.mailboxStatus.limit).toBe(1);
+    expect(ent.isSyncSuspended).toBe(true);
+  });
+
+  it('refuses a SECOND mailbox under trial_expired', async () => {
+    const now = new Date('2026-05-08T12:00:00Z');
+    await setInstallDate(TEST_SHOP, new Date(now.getTime() - 30 * DAY_MS));
+    // Seed one mailbox already.
+    await testDb.mailConnection.create({
+      data: {
+        shop: TEST_SHOP,
+        provider: 'gmail',
+        email: 'one@example.com',
+        accessToken: 'a',
+        refreshToken: 'r',
+        tokenExpiry: new Date(now.getTime() + 3600_000),
+      },
+    });
+
+    const ent = await resolveEntitlements({
+      shop: TEST_SHOP,
+      admin: makeAdmin([]) as any,
+      now,
+    });
+    expect(ent.canConnectMailbox).toBe(false);
   });
 });
 
