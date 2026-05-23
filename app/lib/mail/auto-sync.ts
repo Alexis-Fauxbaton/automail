@@ -379,6 +379,11 @@ async function runJob(job: {
           runOnboarding: !conn?.onboardingBackfillDoneAt,
           onboardingDays: conn?.onboardingBackfillDays ?? 60,
           tier3Allowed: !isSuspended,
+          // Explicit resync: the user asked for a full re-analyse — don't
+          // let the 48h catch-up gate quietly drop everything older than
+          // 2 days. Regular auto-sync ticks keep the gate active to
+          // protect quota across resumes from a suspension.
+          bypassCatchupGate: job.kind === "resync",
         });
         break;
       }
@@ -498,9 +503,10 @@ async function runJob(job: {
  */
 async function runSyncForShop(
   shop: string,
-  opts: { runOnboarding: boolean; onboardingDays: number; tier3Allowed?: boolean },
+  opts: { runOnboarding: boolean; onboardingDays: number; tier3Allowed?: boolean; bypassCatchupGate?: boolean },
 ): Promise<void> {
   const tier3Allowed = opts.tier3Allowed ?? true;
+  const bypassCatchupGate = opts.bypassCatchupGate ?? false;
   // unauthenticated.admin may throw a Response object (Remix redirect) when
   // the shop's offline token is missing or expired. Convert it to a proper
   // Error so markJobFailed captures a readable message.
@@ -529,7 +535,7 @@ async function runSyncForShop(
       console.error(`[auto-sync] shop=${shop} onboarding backfill failed:`, err);
     }
   }
-  const report = await processNewEmails(shop, admin, { tier3Allowed });
+  const report = await processNewEmails(shop, admin, { tier3Allowed, bypassCatchupGate });
   console.log(
     `[auto-sync] shop=${shop} fetched=${report.total} support=${report.supportClient} errors=${report.errors} tier3Allowed=${tier3Allowed}`,
   );
