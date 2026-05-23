@@ -237,7 +237,7 @@ export async function saveConnection(
 ) {
   const outgoingAliases = JSON.stringify(tokens.aliases ?? []);
   await prisma.mailConnection.upsert({
-    where: { shop },
+    where: { shop_email: { shop, email: tokens.email } },
     create: {
       shop,
       provider: "outlook",
@@ -256,7 +256,6 @@ export async function saveConnection(
     // though the new connection is healthy.
     update: {
       provider: "outlook",
-      email: tokens.email,
       accessToken: encrypt(tokens.accessToken),
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
@@ -265,7 +264,6 @@ export async function saveConnection(
       lastSyncAt: null,
       historyId: null,
       deltaToken: null,
-      onboardingBackfillDoneAt: null,
       syncCancelledAt: null,
     },
   });
@@ -342,17 +340,6 @@ export async function backfillOutlookAliasesIfMissing(shop: string): Promise<voi
   } catch (err) {
     console.warn(`[outlook] backfill failed for shop=${shop}:`, err);
   }
-}
-
-export async function deleteConnection(shop: string) {
-  await prisma.$transaction(async (tx) => {
-    try {
-      await tx.mailConnection.delete({ where: { shop } });
-    } catch {
-      // Ignore "record not found"
-    }
-    await tx.incomingEmail.deleteMany({ where: { shop } });
-  });
 }
 
 export async function getConnection(shop: string) {
