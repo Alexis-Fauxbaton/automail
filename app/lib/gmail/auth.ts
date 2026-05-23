@@ -157,15 +157,19 @@ export async function backfillGmailAliasesIfMissing(shop: string): Promise<void>
   }
 }
 
-export async function deleteConnection(shop: string) {
-  await prisma.$transaction(async (tx) => {
-    try {
-      await tx.mailConnection.delete({ where: { shop } });
-    } catch {
-      // Ignore "record not found" — treat as already deleted
-    }
-    await tx.incomingEmail.deleteMany({ where: { shop } });
+export async function deleteConnection(params: {
+  shop: string;
+  mailConnectionId: string;
+}) {
+  const { shop, mailConnectionId } = params;
+  console.warn(
+    `[audit] deleteConnection shop=${shop} mailConnectionId=${mailConnectionId} action=cascade-delete`,
+  );
+  await prisma.mailConnection.delete({
+    where: { id: mailConnectionId, shop },
   });
+  // Cascade onDelete handles Thread, IncomingEmail, ThreadProviderId,
+  // ThreadStateHistory, ReplyDraft. Single statement, single transaction.
 }
 
 export async function getConnection(shop: string) {
