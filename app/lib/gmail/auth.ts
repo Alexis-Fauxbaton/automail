@@ -97,7 +97,7 @@ export async function saveConnection(
 ) {
   const outgoingAliases = JSON.stringify(tokens.aliases ?? []);
   await prisma.mailConnection.upsert({
-    where: { shop },
+    where: { shop_email: { shop, email: tokens.email } },
     create: {
       shop,
       provider: "gmail",
@@ -110,9 +110,10 @@ export async function saveConnection(
     // Reconnect: wipe sync-state fields so the new connection starts clean.
     // Stale historyId / lastSyncError from a previous (possibly invalidated)
     // session would otherwise be replayed against the new tokens.
+    // NOTE: onboardingBackfillDoneAt is intentionally NOT reset — preserves
+    // backfill state across reconnects for the same (shop, email) pair.
     update: {
       provider: "gmail",
-      email: tokens.email,
       accessToken: encrypt(tokens.accessToken),
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
@@ -121,7 +122,6 @@ export async function saveConnection(
       lastSyncAt: null,
       historyId: null,
       deltaToken: null,
-      onboardingBackfillDoneAt: null,
       syncCancelledAt: null,
     },
   });
