@@ -131,21 +131,16 @@ describe("gmail/auth", () => {
   });
 
   describe("deleteConnection", () => {
-    it("runs in a transaction and deletes for the correct shop", async () => {
+    it("deletes the connection scoped to shop and mailConnectionId", async () => {
       const shop = "my-shop.myshopify.com";
+      const mailConnectionId = "conn-abc-123";
 
-      const txDelete = vi.fn();
-      const txDeleteMany = vi.fn();
+      const mockDelete = vi.fn().mockResolvedValue(undefined);
+      (prisma.mailConnection.delete as unknown as MockFn).mockImplementationOnce(mockDelete);
 
-      (prisma.$transaction as unknown as MockFn).mockImplementationOnce(
-        async (cb: (tx: unknown) => Promise<void>) =>
-          cb({ mailConnection: { delete: txDelete }, incomingEmail: { deleteMany: txDeleteMany } }),
-      );
+      await deleteConnection({ shop, mailConnectionId });
 
-      await deleteConnection(shop);
-
-      expect(txDelete).toHaveBeenCalledWith({ where: { shop } });
-      expect(txDeleteMany).toHaveBeenCalledWith({ where: { shop } });
+      expect(mockDelete).toHaveBeenCalledWith({ where: { id: mailConnectionId, shop } });
     });
   });
 });

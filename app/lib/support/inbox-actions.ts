@@ -60,8 +60,11 @@ async function maybeRefreshAnalysis(
   }
 }
 
-export async function handleDisconnect(params: { shop: string }) {
-  await deleteConnection(params.shop);
+export async function handleDisconnect(params: {
+  shop: string;
+  mailConnectionId: string;
+}) {
+  await deleteConnection({ shop: params.shop, mailConnectionId: params.mailConnectionId });
   return { disconnected: true, report: null, reanalyzed: null, refined: null, stopped: false };
 }
 

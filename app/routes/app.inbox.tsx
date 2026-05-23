@@ -273,6 +273,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   return {
     connected: !!connection,
+    connectionId: connection?.id ?? null,
     provider: (connection?.provider ?? null) as MailProvider | null,
     connectedEmail: connection?.email ?? null,
     lastSyncAt: connection?.lastSyncAt?.toISOString() ?? null,
@@ -328,7 +329,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = String(formData.get("_action") ?? "");
 
   if (intent === "disconnect") {
-    return handleDisconnect({ shop });
+    const mailConnectionId = String(formData.get("mailConnectionId") ?? "");
+    if (!mailConnectionId)
+      return { error: "missing_mailConnectionId", report: null, disconnected: false, reanalyzed: null, refined: null };
+    return await handleDisconnect({ shop, mailConnectionId });
   }
 
   if (intent === "stop") {
@@ -930,6 +934,7 @@ function getThreadClassification(thread: EmailThread): NatureFilter {
 
 function ConnectionCard({
   connected,
+  connectionId,
   provider,
   connectedEmail,
   lastSyncAt,
@@ -941,6 +946,7 @@ function ConnectionCard({
   autoSyncIntervalMinutes,
 }: {
   connected: boolean;
+  connectionId: string | null;
   provider: MailProvider | null;
   connectedEmail: string | null;
   lastSyncAt: string | null;
@@ -1091,6 +1097,7 @@ function ConnectionCard({
             </Form>
             <Form method="post">
               <input type="hidden" name="_action" value="disconnect" />
+              <input type="hidden" name="mailConnectionId" value={connectionId ?? ""} />
               <s-button tone="critical" variant="plain" type="submit">
                 {t("inbox.disconnect")}
               </s-button>
@@ -3316,6 +3323,7 @@ export default function InboxPage() {
       <div className="ui-inbox-section">
         <ConnectionCard
           connected={loaderData.connected}
+          connectionId={loaderData.connectionId}
           provider={loaderData.provider}
           connectedEmail={loaderData.connectedEmail}
           lastSyncAt={loaderData.lastSyncAt}
