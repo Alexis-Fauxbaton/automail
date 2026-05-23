@@ -87,9 +87,11 @@ model MailConnection {
   incomingEmails IncomingEmail[]
   syncJobs       SyncJob[]
 
-  @@unique([shop, email, provider])   // same email can coexist on different providers
-                                       // (covers provider migration: Gmail → Outlook for the
-                                       //  same address before disconnecting the old one)
+  @@unique([shop, email])   // one connection per (shop, email). A provider migration
+                            // (Gmail → Outlook for the same address) requires disconnecting
+                            // the old provider before connecting the new one. Relaxing this
+                            // to (shop, email, provider) is trivial later (DROP INDEX +
+                            // CREATE INDEX) if a real merchant ever complains.
   @@index([shop])
 }
 
@@ -186,7 +188,7 @@ await saveConnection({ shop, email: userEmail, provider, tokens });
 
 ```ts
 await prisma.mailConnection.upsert({
-  where: { shop_email_provider: { shop, email, provider } },
+  where: { shop_email: { shop, email } },
   create: { shop, email, provider, ...tokens },
   update: { ...tokens, lastSyncError: null, historyId: null, deltaToken: null, ... },
 });
