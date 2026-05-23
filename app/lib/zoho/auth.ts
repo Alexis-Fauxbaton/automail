@@ -127,7 +127,7 @@ export async function saveZohoConnection(
   const allowList = buildAllowList(tokens.email, tokens.aliases);
   const outgoingAliases = JSON.stringify(allowList);
   await prisma.mailConnection.upsert({
-    where: { shop },
+    where: { shop_email: { shop, email: tokens.email } },
     create: {
       shop,
       provider: "zoho",
@@ -135,25 +135,25 @@ export async function saveZohoConnection(
       accessToken: encrypt(tokens.accessToken),
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
-      zohoAccountId: tokens.accountId,
       outgoingAliases,
+      zohoAccountId: tokens.accountId,
     },
     // Reconnect: wipe sync-state fields so the new connection starts clean.
-    // Stale historyId / lastSyncError / onboardingBackfillDoneAt from a
-    // prior session would otherwise be replayed against the new tokens.
+    // Stale historyId / lastSyncError from a prior session would otherwise
+    // be replayed against the new tokens.
+    // NOTE: onboardingBackfillDoneAt is intentionally NOT reset — preserves
+    // backfill state across reconnects for the same (shop, email) pair.
     update: {
       provider: "zoho",
-      email: tokens.email,
       accessToken: encrypt(tokens.accessToken),
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
-      zohoAccountId: tokens.accountId,
       outgoingAliases,
+      zohoAccountId: tokens.accountId,
       lastSyncError: null,
       lastSyncAt: null,
       historyId: null,
       deltaToken: null,
-      onboardingBackfillDoneAt: null,
       syncCancelledAt: null,
     },
   });
