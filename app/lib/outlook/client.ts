@@ -1,8 +1,40 @@
 import { getAuthenticatedClient } from "./auth";
 import { cleanHtml } from "../mail/html-utils";
 import type { MailMessage, MailAttachment } from "../mail/types";
+import { createSemaphore, type Semaphore } from "../util/semaphore";
 
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
+
+// Microsoft Graph's MailboxConcurrency limit caps each mailbox at 4 in-flight
+// requests. We stay safely under that with 3 so that an unexpected sibling
+// call (e.g. getThreadMessages triggered from the inbox UI while the auto-sync
+// pass is running) doesn't tip us over and trigger a 429 cascade.
+// https://learn.microsoft.com/en-us/graph/throttling-limits#outlook-service-limits
+const OUTLOOK_PER_MAILBOX_CONCURRENCY = 3;
+const mailboxSemaphores = new Map<string, Semaphore>();
+function mailboxSemaphore(shop: string): Semaphore {
+  let s = mailboxSemaphores.get(shop);
+  if (!s) {
+    s = createSemaphore(OUTLOOK_PER_MAILBOX_CONCURRENCY);
+    mailboxSemaphores.set(shop, s);
+  }
+  return s;
+}
+
+const MAX_RETRY_ATTEMPTS = 4;
+const DEFAULT_BACKOFF_MS = 1000;
+const MAX_RETRY_WAIT_MS = 60_000;
+
+function parseRetryAfter(value: string | null): number | null {
+  if (!value) return null;
+  // Graph almost always returns seconds as an integer. Tolerate HTTP-date too
+  // for robustness — RFC 7231 §7.1.3 allows both.
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const date = Date.parse(value);
+  if (!Number.isNaN(date)) return Math.max(0, date - Date.now());
+  return null;
+}
 const MSG_SELECT =
   "id,conversationId,subject,receivedDateTime,from,body,internetMessageHeaders,internetMessageId,categories,inferenceClassification,hasAttachments";
 const INLINE_EMBED_LIMIT = 200 * 1024; // 200 KB
@@ -82,16 +114,46 @@ export function parseGraphMessage(raw: GraphMessage): MailMessage {
 }
 
 async function graphFetch<T>(
+  shop: string,
   accessToken: string,
   url: string,
 ): Promise<{ ok: boolean; status: number; data: T }> {
-  // 15 s timeout — a hung Graph call must not block a sync worker slot.
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
-    signal: AbortSignal.timeout(15_000),
-  });
-  const data = await res.json().catch(() => ({}));
-  return { ok: res.ok, status: res.status, data: data as T };
+  const sem = mailboxSemaphore(shop);
+  const release = await sem.acquire();
+  try {
+    // Retry loop honours 429 (MailboxConcurrency / ApplicationThrottled) and
+    // 503 (transient Graph backend). All Graph calls in this module are GETs
+    // so retries are safe. Other 4xx are returned as-is for the caller (e.g.
+    // 410 staleDeltaToken handling).
+    let attempt = 0;
+    while (true) {
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+        signal: AbortSignal.timeout(15_000),
+      });
+
+      if (res.status !== 429 && res.status !== 503) {
+        const data = await res.json().catch(() => ({}));
+        return { ok: res.ok, status: res.status, data: data as T };
+      }
+
+      attempt++;
+      if (attempt >= MAX_RETRY_ATTEMPTS) {
+        const data = await res.json().catch(() => ({}));
+        return { ok: false, status: res.status, data: data as T };
+      }
+
+      const retryAfter = parseRetryAfter(res.headers.get("retry-after"));
+      const backoff = retryAfter ?? DEFAULT_BACKOFF_MS * Math.pow(2, attempt - 1);
+      const wait = Math.min(backoff, MAX_RETRY_WAIT_MS);
+      console.warn(
+        `[outlook/graph] ${res.status} for shop=${shop} attempt=${attempt} backoff=${wait}ms`,
+      );
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  } finally {
+    release();
+  }
 }
 
 export async function fetchDeltaMessages(
@@ -112,7 +174,7 @@ export async function fetchDeltaMessages(
       value?: GraphMessage[];
       "@odata.nextLink"?: string;
       "@odata.deltaLink"?: string;
-    }>(accessToken, url);
+    }>(shop, accessToken, url);
 
     if (!res.ok) {
       if (res.status === 410) {
@@ -151,7 +213,7 @@ export async function fetchHistoricalMessages(
     const res = await graphFetch<{
       value?: GraphMessage[];
       "@odata.nextLink"?: string;
-    }>(accessToken, url);
+    }>(shop, accessToken, url);
 
     if (!res.ok) {
       throw new Error(`Graph historical fetch failed (${res.status}): ${JSON.stringify(res.data)}`);
@@ -170,7 +232,7 @@ export async function fetchHistoricalMessages(
 export async function getMessageById(shop: string, messageId: string): Promise<MailMessage> {
   const { accessToken } = await getAuthenticatedClient(shop);
   const url = `${GRAPH_BASE}/me/messages/${messageId}?$select=${MSG_SELECT}`;
-  const res = await graphFetch<GraphMessage>(accessToken, url);
+  const res = await graphFetch<GraphMessage>(shop, accessToken, url);
 
   if (!res.ok) {
     throw new Error(`Graph getMessage failed (${res.status}): ${JSON.stringify(res.data)}`);
@@ -179,18 +241,19 @@ export async function getMessageById(shop: string, messageId: string): Promise<M
   const msg = parseGraphMessage(res.data);
 
   if (res.data.hasAttachments) {
-    msg.attachments = await fetchAttachments(accessToken, messageId);
+    msg.attachments = await fetchAttachments(shop, accessToken, messageId);
   }
 
   return msg;
 }
 
 async function fetchAttachments(
+  shop: string,
   accessToken: string,
   messageId: string,
 ): Promise<MailAttachment[]> {
   const url = `${GRAPH_BASE}/me/messages/${messageId}/attachments?$select=id,name,contentType,size,contentId,isInline,contentBytes`;
-  const res = await graphFetch<{ value?: GraphAttachment[] }>(accessToken, url);
+  const res = await graphFetch<{ value?: GraphAttachment[] }>(shop, accessToken, url);
 
   if (!res.ok) return [];
 
@@ -217,7 +280,7 @@ export async function getThreadMessages(
     `${GRAPH_BASE}/me/messages?$filter=conversationId eq '${odataEscapeString(conversationId)}'` +
     `&$select=${MSG_SELECT}&$orderby=receivedDateTime asc&$top=50`;
 
-  const res = await graphFetch<{ value?: GraphMessage[] }>(accessToken, url);
+  const res = await graphFetch<{ value?: GraphMessage[] }>(shop, accessToken, url);
 
   if (!res.ok) {
     throw new Error(`Graph getThreadMessages failed (${res.status}): ${JSON.stringify(res.data)}`);
