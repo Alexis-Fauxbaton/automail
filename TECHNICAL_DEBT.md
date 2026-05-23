@@ -29,6 +29,13 @@ Reviewed by: 6-agent automated audit (security, code-quality, architecture, data
   - **Fix**: Wrap both operations in `prisma.$transaction([...])`.
   - **Effort**: small
 
+- [ ] **[ARCH-C2] `deleteConnection` and `handleResync` leave orphan `Thread` rows**
+  - **File**: [app/lib/gmail/auth.ts:160](app/lib/gmail/auth.ts#L160), [app/lib/support/inbox-actions.ts:114](app/lib/support/inbox-actions.ts#L114)
+  - **Description**: Both paths wipe `IncomingEmail` but leave `Thread` rows behind. Over disconnect/reconnect cycles (especially when switching providers, e.g. Zoho → Outlook), the `Thread` table accumulates rows pointing to dead `lastMessageId`s. Observed on a fresh test mailbox: 18 real mails → 221 Thread rows, of which 207 had zero `IncomingEmail`. The dashboard now filters them out (`messages: { some: {} }` in `getCurrentThreadStates`, fix `31a7881`), but the rows still bloat the DB.
+  - **Why deferred**: deleting Threads in `handleResync` is intentional (preserves manual `operationalState`, `preservedManualOverridesJson`, draft engagement). In `deleteConnection`, a naive `thread.deleteMany({ where: { shop } })` would wipe manual state across a disconnect/reconnect of the same mailbox. The right moment to fix is when **multi-mailbox per shop** lands: `deleteConnection` will be scoped by mailbox (not shop), and at that point we can safely also delete the Threads tied to the disconnected mailbox.
+  - **Fix**: When introducing multi-mailbox, add `mailConnectionId` (or equivalent) on `Thread`, then have `deleteConnection` also `thread.deleteMany` scoped by that key. Cascade already handles `ThreadProviderId` and `ThreadStateHistory`. GDPR tombstones (`redactedAt IS NOT NULL`) must be excluded.
+  - **Effort**: medium (couples with multi-mailbox migration)
+
 - [ ] **[PERF-C1] Unbounded sequential API call loop in backfill**
   - **File**: [app/lib/mail/backfill.ts:64](app/lib/mail/backfill.ts#L64)
   - **Description**: Sequential `await` inside `for` loop over up to 2,000 messages — ~400s of serial I/O, hits Gmail quota, occupies the job slot for the entire duration and starves other shops.
