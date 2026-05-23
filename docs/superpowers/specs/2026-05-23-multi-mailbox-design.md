@@ -55,7 +55,7 @@ Rejected use cases (not in scope):
 | 7 | Onboarding wizard unchanged (1 mailbox at install) | Multi-mailbox is post-onboarding via `/app/connections`. Keeps wizard simple for the 95% of cases that need one mailbox. |
 | 8 | Trial plan = 3 mailboxes (same as Pro) | Prospects need to experience the multi-mailbox feature during trial to be incentivised to convert to Pro. |
 | 9 | Dashboard: aggregated by default + filter dropdown (same pattern as inbox) | Consistent mental model across the two analytics surfaces. |
-| 10 | One sync job per shop (not per mailbox), env var escape hatch | Fairness across shops protected; backfill blocking for ~10 min is acceptable once at connection time. |
+| 10 | Per-mailbox sync job, up to `plan.maxMailboxes` parallel per shop | Bounded by the plan limit, parallel backfill on onboarding (~10 min instead of ~30 min for 3 mailboxes), fairness across shops still protected by `MAX_CONCURRENT` + SKIP LOCKED. Env var `JOB_LOCK_GRANULARITY=shop` as escape hatch. |
 | 11 | Pause toggle per mailbox in `/app/connections` (autoSyncEnabled) | Field already exists, enables the migration use case (keep old provider readable while moving to new one). |
 
 ## Data model
@@ -87,7 +87,9 @@ model MailConnection {
   incomingEmails IncomingEmail[]
   syncJobs       SyncJob[]
 
-  @@unique([shop, email])   // at most one connection per (shop, email)
+  @@unique([shop, email, provider])   // same email can coexist on different providers
+                                       // (covers provider migration: Gmail → Outlook for the
+                                       //  same address before disconnecting the old one)
   @@index([shop])
 }
 
@@ -125,6 +127,7 @@ model SyncJob {
 - **`shop` denormalised everywhere**: every query keeps using `where: { shop, ... }` per the multi-tenant rule in CLAUDE.md. The `mailConnectionId` becomes an additional filter where relevant.
 - **`onDelete: Cascade` on `Thread` and `IncomingEmail`**: disconnecting a mailbox deletes its threads, mails, and related rows in one transaction. This also resolves `[ARCH-C2]` (the orphan Thread bug we documented earlier).
 - **No FK from `shop` to a `Shop` model**: `shop` stays a plain String, consistent with the rest of the schema.
+- **Race window in `resolveCanonicalThread`**: the resolver currently creates a `Thread` row then upserts the `IncomingEmail`. With `Thread.mailConnectionId` non-null + Cascade FK, a concurrent `deleteConnection` between those two steps could either (a) cause `Thread.create` to fail with FK violation, or (b) leave the Thread orphaned by cascade. Mitigation: wrap resolver + email upsert in a single Prisma transaction. Catch FK-violation errors and treat them as "mailbox disconnected mid-ingest, skip this message". To be implemented carefully in the resolver refactor — flagged here so it isn't forgotten.
 
 ### Job kinds — required vs nullable `mailConnectionId`
 
@@ -144,22 +147,22 @@ model SyncJob {
 - `enqueueDuePeriodicSyncs` now scans all `MailConnection` rows (N per shop) where `autoSyncEnabled = true` and `lastSyncAt < now - interval`. Enqueues one `sync` job per mailbox due. This amplifies the existing `[DB-M5]` issue (no due-time filter in SQL) by a factor of `maxMailboxes`; pushing the filter into SQL becomes part of this scope.
 - `autoSyncEnabled`, `autoSyncIntervalMinutes`, `lastSyncAt`, `historyId`, `deltaToken`, `lastSyncError`, `syncCancelledAt` are now per-mailbox (the columns exist already; today there is just one row per shop).
 - `MailClient` factory signature changes from `getMailClient(shop, provider)` to `getMailClient(mailConnection)` — the connection carries provider, tokens, cursor, everything needed.
-- Outgoing-detection (`app/lib/mail/outgoing-detection.ts`) reads `outgoingAliases` from the connection that received the mail, not from "the" connection of the shop.
+- Outgoing-detection (`app/lib/mail/outgoing-detection.ts`) reads `outgoingAliases` from the connection that received the mail (the mailbox currently being synced), not from "the" connection of the shop. Mailbox-scoped match: a reply where the `From:` address matches the aliases of the receiving mailbox is flagged outgoing. Edge case: if a merchant forwarding setup causes a reply to land in a different mailbox than the one it was sent from, the reply won't be detected as outgoing on the receiving mailbox. This is a rare misconfiguration that would have caused similar issues in single-mailbox; we accept it and log a warning rather than try to guess.
 - Refresh stale analyses already iterates thread-by-thread, so it is per-mailbox naturally (the thread knows its mailbox).
 - Billing suspension applies to the whole shop (all mailboxes), consistent with the shop-wide `BillingUsage.analyzedThreadsCount` counter.
 
 ### Concurrency model
 
-**Stays at one job per shop**, not one per mailbox. The mailboxes of a given shop synchronise sequentially, not in parallel.
+**One job per mailbox, up to `plan.maxMailboxes` parallel jobs per shop.** The lock predicate in `claimNextJob` switches from "shop NOT IN (running shops)" to "mailboxConnectionId NOT IN (running mailboxes)" + a shop-level cap derived from the entitlements (or a simple "running jobs for this shop < plan.maxMailboxes").
 
 Rationale:
-- Fairness: with `MAX_CONCURRENT=4`, a single Pro shop with 3 mailboxes cannot occupy 3 of 4 slots and starve other shops.
-- Simplicity: the existing `claimNextJob` logic is unchanged.
-- Incremental sync is fast (~seconds per mailbox); sequential cost is negligible.
+- A Pro merchant onboarding 3 mailboxes back-to-back gets parallel backfill (~10 min total instead of ~30 min sequential). Real first-impression improvement.
+- Bounded by the plan limit: Starter can only run 1 parallel (their limit is 1 anyway), Pro/Trial up to 3. No risk that a shop occupies the whole worker pool.
+- With `MAX_CONCURRENT=4` and SKIP LOCKED, fairness across shops stays protected.
 
-Downside: when a Pro merchant connects 3 mailboxes back-to-back, the backfills run sequentially (~5–10 min each = ~30 min total instead of ~10 min parallel). Acceptable because backfill happens once at connection time.
+Implementation note: the per-shop cap requires reading the plan when claiming jobs. To avoid an extra DB roundtrip per claim, we can either (a) precompute the cap by caching the plan id on `ShopFlag` or `MailConnection`, or (b) compute the running-job count per shop in SQL inside the claim query. Decision deferred to the implementation plan.
 
-**Escape hatch**: env var `JOB_LOCK_GRANULARITY=shop` (default) or `mailbox`. Switching to `mailbox` adds the mailbox id to the anti-conflict predicate in `claimNextJob`. Implementation is a single line change in the claim query. Flip if a big shop ever needs parallel sync.
+**Escape hatch retained**: env var `JOB_LOCK_GRANULARITY=shop|mailbox` lets us fall back to "1 per shop" if mailbox-parallel ever causes contention we didn't anticipate. Default `mailbox`.
 
 ## Auth flow
 
@@ -183,7 +186,7 @@ await saveConnection({ shop, email: userEmail, provider, tokens });
 
 ```ts
 await prisma.mailConnection.upsert({
-  where: { shop_email: { shop, email } },
+  where: { shop_email_provider: { shop, email, provider } },
   create: { shop, email, provider, ...tokens },
   update: { ...tokens, lastSyncError: null, historyId: null, deltaToken: null, ... },
 });
@@ -233,6 +236,7 @@ A single shop can mix Gmail + Outlook + Zoho simultaneously. The `provider` colu
 ### Layout (option A — unified stream + badge + filter)
 
 - **Header**: title `Inbox` + indicator on the right `📥 N boîtes · K erreur →` that links to `/app/connections`. The indicator only shows when more than one mailbox is connected (no chrome added for single-mailbox shops).
+- **Error banner stays active for single-mailbox shops**: the existing `lastSyncError` banner already in the inbox is preserved verbatim. A single-mailbox shop still sees `⚠ support@brand.com n'arrive plus à se synchroniser (token expiré). [Re-connecter →]` — multi-mailbox is additive, never regressive.
 - **Filter row**: dropdown `Toutes les boîtes (count) / support@brand.com (count) / returns@brand.com (count) / ...` next to the existing status filter and search input.
 - **Thread list**: each row has a mailbox badge (colour stable per email, deterministic from `hash(email)`) + a small provider icon (G / O / Z) for visual redundancy and accessibility.
 
@@ -462,6 +466,7 @@ Multi-tenant + plan transitions = large surface to cover. Non-exhaustive list, w
 
 ### Integration tests
 
+- **Cross-mailbox isolation within the same shop** (high-priority — the real refactor risk): one shop with 3 mailboxes, assert that `where: { shop, mailConnectionId: A }` queries never return threads, emails, or counts that belong to mailbox B or C. Tested for every query path touched by the refactor (inbox loader, dashboard helpers, draft generation, refresh-stale, classification, etc.). Catches the most likely class of bug: a `where: { shop }` clause that forgot to add `mailConnectionId` and silently leaks data between mailboxes of the same shop.
 - Two shops, each with multiple mailboxes — assert no data leaks across shops (multi-tenant rule).
 - Connecting a second mailbox on a Pro shop succeeds; a third blocks on Starter.
 - Downgrade with overflow: select-mailbox screen, submitting deletes the others, Shopify Billing is called once.
