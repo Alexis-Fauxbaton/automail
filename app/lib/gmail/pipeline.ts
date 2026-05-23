@@ -36,7 +36,7 @@ import { generateLLMDraft } from "../support/llm-draft";
 import { evaluateThread } from "../support/draft-usage-heuristic";
 import { getSettings } from "../support/settings";
 import { createLogger } from "../log/logger";
-import { isWithin48hZone } from "../billing/catchup";
+import { isWithinActiveZone, ACTIVE_ZONE_HOURS } from "../billing/catchup";
 
 export interface ProcessingReport {
   total: number;
@@ -80,7 +80,7 @@ export async function processNewEmails(
   // healthy plans) get the full pipeline. Auto-sync and handleSync pass
   // `false` when the shop is suspended so Tier 3 is skipped per-shop.
   const tier3Allowed = options?.tier3Allowed ?? true;
-  // Internal shops bypass the 48h catch-up gate: they have no quota
+  // Internal shops bypass the catch-up gate: they have no quota
   // ceiling, so the gate's only purpose (protect quota across a resume
   // from suspension) doesn't apply, and having Tier 2/3 silently skipped
   // makes debugging the pipeline painful.
@@ -1018,7 +1018,8 @@ export async function classifyAndDraft(
     attachments: [],
   };
 
-  // --- Catch-up gate: skip Tier 2 + Tier 3 for emails older than 48h ---
+  // --- Catch-up gate: skip Tier 2 + Tier 3 for emails outside the
+  // active zone (see ACTIVE_ZONE_HOURS in lib/billing/catchup.ts) ---
   // When auto-sync resumes after a suspend, it pulls all messages since
   // lastSyncAt. Older messages are marked "received" and surfaced in the
   // inbox; the merchant triggers explicit analysis from the UI (1 quota unit).
@@ -1026,9 +1027,9 @@ export async function classifyAndDraft(
   // Bypassed for internal shops (no quota concerns) and for explicit
   // resyncs (the user clicked "Re-synchroniser tout" expecting everything
   // to be re-analyzed, not silently dropped on the floor).
-  const isFresh = isWithin48hZone(record.receivedAt);
+  const isFresh = isWithinActiveZone(record.receivedAt);
   if (!isFresh && !bypassCatchupGate) {
-    console.log(`[pipeline] ${shop} email=${record.id} older than 48h, skipping Tier 2/3 (catch-up)`);
+    console.log(`[pipeline] ${shop} email=${record.id} outside ${ACTIVE_ZONE_HOURS}h active zone, skipping Tier 2/3 (catch-up)`);
     await prisma.incomingEmail.update({
       where: { id: record.id },
       data: { processingStatus: "ingested" },

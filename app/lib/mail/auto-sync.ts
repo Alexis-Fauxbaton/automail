@@ -380,8 +380,8 @@ async function runJob(job: {
           onboardingDays: conn?.onboardingBackfillDays ?? 60,
           tier3Allowed: !isSuspended,
           // Explicit resync: the user asked for a full re-analyse — don't
-          // let the 48h catch-up gate quietly drop everything older than
-          // 2 days. Regular auto-sync ticks keep the gate active to
+          // let the catch-up gate quietly drop everything outside the
+          // active zone. Regular auto-sync ticks keep the gate active to
           // protect quota across resumes from a suspension.
           bypassCatchupGate: job.kind === "resync",
         });
