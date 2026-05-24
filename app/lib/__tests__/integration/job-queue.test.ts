@@ -22,6 +22,7 @@ import {
   claimNextJob,
   markJobFailed,
   reclaimZombieJobs,
+  type RunningSet,
 } from '../../mail/job-queue';
 
 /** Creates a minimal MailConnection for TEST_SHOP and returns its id. */
@@ -58,19 +59,24 @@ afterAll(async () => {
  * attempts. Returns the claimed TEST_SHOP job, or null if not found.
  *
  * In a dev DB with jobs from real shops, claimNextJob() might return other
- * shops' jobs before reaching ours. We skip them by passing their shop names
- * as excludeShops until we get TEST_SHOP's job (or give up).
+ * shops' jobs before reaching ours. We skip them by accumulating those shops
+ * in the RunningSet's perShopCount (cap=1, i.e. legacy shop-granularity for
+ * non-test shops) until we reach TEST_SHOP's job.
  */
 async function claimTestShopJob(
   maxClaims = 30,
 ): Promise<Awaited<ReturnType<typeof claimNextJob>>> {
-  const excludeShops: string[] = [];
+  const skipRunning: RunningSet = {
+    mailConnectionIds: new Set(),
+    perShopCount: new Map(),
+  };
   for (let i = 0; i < maxClaims; i++) {
-    const job = await claimNextJob(excludeShops);
+    const job = await claimNextJob(skipRunning);
     if (!job) return null;
     if (job.shop === TEST_SHOP) return job;
-    // Skip this shop in the next iteration so we reach TEST_SHOP's job.
-    if (!excludeShops.includes(job.shop)) excludeShops.push(job.shop);
+    // Simulate this shop as at-cap (1 running job) so it is excluded next time.
+    skipRunning.perShopCount.set(job.shop, 3); // 3 >= HARD_CAP_PER_SHOP
+    if (job.mailConnectionId) skipRunning.mailConnectionIds.add(job.mailConnectionId);
   }
   return null;
 }
@@ -118,11 +124,16 @@ describe('job queue — integration DB', () => {
     // Even if other shops have pending jobs, the TEST_SHOP 'backfill' job must
     // remain unclaimed because TEST_SHOP already has a running job.
     // Drain up to 30 non-TEST_SHOP jobs from the queue to verify.
-    const excludeShops: string[] = [TEST_SHOP];
+    // Simulate TEST_SHOP as at-cap and accumulate other shops as we drain.
+    const drainRunning: RunningSet = {
+      mailConnectionIds: new Set(),
+      perShopCount: new Map([[TEST_SHOP, 3]]), // TEST_SHOP at cap — excluded
+    };
     for (let i = 0; i < 30; i++) {
-      const job = await claimNextJob(excludeShops);
+      const job = await claimNextJob(drainRunning);
       if (!job) break;
-      if (!excludeShops.includes(job.shop)) excludeShops.push(job.shop);
+      drainRunning.perShopCount.set(job.shop, 3); // mark claimed shops at-cap too
+      if (job.mailConnectionId) drainRunning.mailConnectionIds.add(job.mailConnectionId);
     }
 
     // The backfill job for TEST_SHOP must still be pending (not claimed).

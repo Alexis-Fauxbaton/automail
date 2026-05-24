@@ -40,6 +40,7 @@ import {
   markJobDone,
   markJobFailed,
   reclaimZombieJobs,
+  type RunningSet,
   type SyncJobKind,
 } from "./job-queue";
 
@@ -66,7 +67,10 @@ let started = false;
 let _intervalHandle: ReturnType<typeof setInterval> | null = null;
 let inFlight = 0;
 let shuttingDown = false;
-const runningShops = new Set<string>();
+const running: RunningSet = {
+  mailConnectionIds: new Set<string>(),
+  perShopCount: new Map<string, number>(),
+};
 let isLeader = false;
 
 // Postgres advisory-lock key used for cross-process leader election. Any
@@ -267,21 +271,29 @@ export async function enqueueDuePeriodicSyncs(now: Date = new Date()): Promise<n
 
 /**
  * Claim and execute jobs until either the queue is empty or we hit the
- * concurrency limit. Each job runs on a distinct shop — `claimNextJob`
- * guarantees no two concurrent jobs for the same shop (DB-level filter).
+ * concurrency limit. Multiple mailboxes of the same shop can run in parallel
+ * (up to HARD_CAP_PER_SHOP) — `claimNextJob` enforces per-mailbox isolation
+ * and the per-shop cap via the `running` set.
  *
- * The local `runningShops` set is passed to `claimNextJob` as an extra
- * safety net that avoids a round-trip race inside the same tick.
+ * The local `running` set is passed to `claimNextJob` as an extra safety net
+ * that avoids a round-trip race when several slots drain in the same tick.
  */
 async function drainJobQueue(): Promise<void> {
   while (inFlight < MAX_CONCURRENT) {
     if (shuttingDown) return;
-    const job = await claimNextJob([...runningShops]);
+    const job = await claimNextJob(running);
     if (!job) break;
-    // Increment synchronously before firing — prevents the while loop from
-    // over-claiming slots or the same shop within the same tick.
+    // Update the running set synchronously before firing — prevents the while
+    // loop from over-claiming slots for the same mailbox or shop within the
+    // same tick. Bookkeeping is undone in runJob's finally block.
     inFlight++;
-    runningShops.add(job.shop);
+    if (job.mailConnectionId != null) {
+      running.mailConnectionIds.add(job.mailConnectionId);
+    }
+    running.perShopCount.set(
+      job.shop,
+      (running.perShopCount.get(job.shop) ?? 0) + 1,
+    );
     autoSyncInFlight.set(inFlight);
     // Fire-and-forget: each slot runs in parallel. Bookkeeping happens
     // inside runJob's finally block.
@@ -318,6 +330,7 @@ async function runJob(job: {
   id: string;
   shop: string;
   kind: SyncJobKind;
+  mailConnectionId: string | null;
   params: Record<string, unknown>;
   attempts: number;
 }): Promise<void> {
@@ -370,14 +383,18 @@ async function runJob(job: {
     switch (job.kind) {
       case "sync":
       case "resync": {
-        const conn = await prisma.mailConnection.findUnique({
-          where: { shop: job.shop },
-          select: {
-            onboardingBackfillDoneAt: true,
-            onboardingBackfillDays: true,
-          },
-        });
+        // Mailbox-scoped job — look up by mailConnectionId (unique).
+        const conn = job.mailConnectionId
+          ? await prisma.mailConnection.findUnique({
+              where: { id: job.mailConnectionId },
+              select: {
+                onboardingBackfillDoneAt: true,
+                onboardingBackfillDays: true,
+              },
+            })
+          : null;
         await runSyncForShop(job.shop, {
+          mailConnectionId: job.mailConnectionId ?? undefined,
           runOnboarding: !conn?.onboardingBackfillDoneAt,
           onboardingDays: conn?.onboardingBackfillDays ?? 60,
           tier3Allowed: !isSuspended,
@@ -399,7 +416,8 @@ async function runJob(job: {
         break;
       }
       case "recompute": {
-        const conn = await prisma.mailConnection.findUnique({
+        // Shop-wide job — no mailConnectionId. Use any mailbox for the address hint.
+        const conn = await prisma.mailConnection.findFirst({
           where: { shop: job.shop },
           select: { email: true },
         });
@@ -416,7 +434,8 @@ async function runJob(job: {
         // Used to recover threads incorrectly set to "no_reply_needed" or
         // "waiting_customer" by a faulty resync. Manually-resolved threads
         // are protected inside recomputeThreadState.
-        const conn = await prisma.mailConnection.findUnique({
+        // Shop-wide job — no mailConnectionId. Use any mailbox for the address hint.
+        const conn = await prisma.mailConnection.findFirst({
           where: { shop: job.shop },
           select: { email: true },
         });
@@ -431,10 +450,18 @@ async function runJob(job: {
       case "analyze_thread": {
         const threadId = String(job.params.threadId ?? "");
         if (!threadId) throw new Error("analyze_thread job missing threadId");
-        const conn = await prisma.mailConnection.findUnique({
-          where: { shop: job.shop },
-          select: { email: true },
-        });
+        // Look up by mailConnectionId when available; fall back to any mailbox
+        // for the address hint (analyze_thread is mailbox-scoped but the email
+        // field is only used for logging).
+        const conn = job.mailConnectionId
+          ? await prisma.mailConnection.findUnique({
+              where: { id: job.mailConnectionId },
+              select: { email: true },
+            })
+          : await prisma.mailConnection.findFirst({
+              where: { shop: job.shop },
+              select: { email: true },
+            });
         // Pick the latest analyzable email of the thread as anchor.
         const anchor = await prisma.incomingEmail.findFirst({
           where: {
@@ -488,7 +515,17 @@ async function runJob(job: {
   } finally {
     clearInterval(heartbeat);
     inFlight = Math.max(0, inFlight - 1);
-    runningShops.delete(job.shop);
+    // Undo the running-set bookkeeping that drainJobQueue set synchronously
+    // before firing this job. Must mirror the add/increment done there.
+    if (job.mailConnectionId != null) {
+      running.mailConnectionIds.delete(job.mailConnectionId);
+    }
+    const prevCount = running.perShopCount.get(job.shop) ?? 0;
+    if (prevCount <= 1) {
+      running.perShopCount.delete(job.shop);
+    } else {
+      running.perShopCount.set(job.shop, prevCount - 1);
+    }
     autoSyncInFlight.set(inFlight);
     autoSyncJobsTotal.inc({ shop: job.shop, kind: job.kind, status: finalStatus });
     autoSyncJobDurationSeconds.observe(
@@ -499,13 +536,16 @@ async function runJob(job: {
 }
 
 /**
- * Execute one sync for a shop. Caller owns concurrency bookkeeping
+ * Execute one sync for a shop/mailbox. Caller owns concurrency bookkeeping
  * (see `runJob`). Errors bubble up so the queue can mark the job
  * failed / schedule a retry.
+ *
+ * `mailConnectionId` is forwarded for future tasks that will scope
+ * `processNewEmails` to a single mailbox; currently unused downstream.
  */
 async function runSyncForShop(
   shop: string,
-  opts: { runOnboarding: boolean; onboardingDays: number; tier3Allowed?: boolean; bypassCatchupGate?: boolean },
+  opts: { mailConnectionId?: string; runOnboarding: boolean; onboardingDays: number; tier3Allowed?: boolean; bypassCatchupGate?: boolean },
 ): Promise<void> {
   const tier3Allowed = opts.tier3Allowed ?? true;
   const bypassCatchupGate = opts.bypassCatchupGate ?? false;

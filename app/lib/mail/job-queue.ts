@@ -8,13 +8,16 @@
 // Retry policy: exponential backoff — 30 s, 60 s, then permanent error.
 // Zombie recovery: auto-sync resets jobs stuck in "running" for > 30 min.
 //
-// Multi-shop isolation: the claim query uses `FOR UPDATE SKIP LOCKED` plus
-// a "shop NOT IN (shops with a running job)" filter. This guarantees:
-//   - two workers never claim the same job row,
-//   - a shop never has two concurrently running jobs (a slow shop cannot
-//     steal a slot from another shop, but it also cannot run twice),
-//   - slow shops never block fast shops — the scheduler simply picks the
-//     next pending job for a shop that has no running work.
+// Multi-mailbox concurrency (Task 3.4):
+// The claim query uses `FOR UPDATE SKIP LOCKED` plus two complementary filters:
+//   - Mailbox-scoped filter: skip jobs whose mailConnectionId is already running
+//     (so two mailboxes of the same shop can run in parallel).
+//   - Per-shop cap (HARD_CAP_PER_SHOP): skip jobs for shops that already have
+//     >= N running jobs, preventing a single shop from monopolising the pool.
+//   - Shop-wide jobs (mailConnectionId IS NULL — recompute/reclassify) are not
+//     excluded by the mailbox filter but count toward the per-shop cap.
+//   - Legacy fallback: JOB_LOCK_GRANULARITY=shop restores the old behaviour
+//     (one job per shop at a time).
 //
 // This is safe for both single-process and small horizontal deployments.
 // For large-scale horizontal scaling (many workers, many shops), move to
@@ -22,6 +25,18 @@
 
 import prisma from "../../db.server";
 import { Prisma } from "@prisma/client";
+
+/**
+ * Tracks which mailboxes and shops are currently executing jobs.
+ * Passed to `claimNextJob` so the claim SQL can avoid race conditions
+ * within the same process tick without a DB round-trip.
+ */
+export type RunningSet = {
+  /** mailConnectionIds of jobs currently in flight (null-id jobs are not tracked here). */
+  mailConnectionIds: Set<string>;
+  /** Number of in-flight jobs per shop (includes shop-wide jobs). */
+  perShopCount: Map<string, number>;
+};
 
 export type SyncJobKind =
   | "sync"
@@ -87,44 +102,69 @@ interface ClaimedJobRow {
   id: string;
   shop: string;
   kind: string;
+  mailConnectionId: string | null;
   params: string;
   attempts: number;
 }
 
 /**
- * Atomically claim the next pending job, enforcing per-shop isolation.
+ * Atomically claim the next pending job, enforcing per-mailbox isolation
+ * with a per-shop running-job cap.
  *
- * The claim query:
+ * The claim query (mailbox granularity, default):
  *   1. picks the oldest `pending` job whose backoff window has elapsed,
- *   2. for a shop that does NOT already have a `running` job,
- *   3. that is not in `excludeShops` (shops currently in-flight in this
- *      process — redundant with the DB filter but avoids a round-trip
- *      race when several slots drain in the same tick),
+ *   2. whose `mailConnectionId` is NOT already running in this process
+ *      (shop-wide jobs with mailConnectionId IS NULL are not excluded by
+ *      this filter — they only count toward the per-shop cap),
+ *   3. whose shop has NOT reached HARD_CAP_PER_SHOP running jobs,
  *   4. using `FOR UPDATE SKIP LOCKED` so concurrent claimers never
  *      fight over the same row.
+ *
+ * Legacy fallback (JOB_LOCK_GRANULARITY=shop):
+ *   Restores the original behaviour — any shop with a running job is
+ *   fully excluded (one job per shop at a time).
  *
  * Returns null if nothing is ready.
  */
 export async function claimNextJob(
-  excludeShops: readonly string[] = [],
+  running: RunningSet = { mailConnectionIds: new Set(), perShopCount: new Map() },
 ): Promise<{
   id: string;
   shop: string;
   kind: SyncJobKind;
+  mailConnectionId: string | null;
   params: Record<string, unknown>;
   attempts: number;
 } | null> {
-  const excludeFilter =
-    excludeShops.length > 0
-      ? Prisma.sql`AND shop NOT IN (${Prisma.join(excludeShops)})`
+  const lockGranularity =
+    process.env.JOB_LOCK_GRANULARITY === "shop" ? "shop" : "mailbox";
+
+  // In shop-granularity mode (legacy), every shop with any running job is
+  // excluded — same as the old behaviour.
+  // In mailbox-granularity mode (default), only shops that have reached the
+  // hard cap are excluded.
+  const shopsAtCap =
+    lockGranularity === "mailbox"
+      ? shopsThatReachedTheirCap(running.perShopCount)
+      : Array.from(running.perShopCount.keys());
+
+  const excludedMailboxIds = Array.from(running.mailConnectionIds);
+
+  // Prisma.join requires a non-empty array. Use a sentinel value that can
+  // never match a real ID when the set is empty.
+  const mailboxFilter =
+    excludedMailboxIds.length > 0
+      ? Prisma.sql`AND ("mailConnectionId" IS NULL OR "mailConnectionId" NOT IN (${Prisma.join(excludedMailboxIds)}))`
       : Prisma.empty;
 
-  // The subquery check `shop NOT IN (running shops)` runs BEFORE the row
-  // lock, so two workers can both claim a job for the same shop within a
-  // millisecond. The partial unique index added in migration
-  // 20260517143242 enforces "one running per shop" at the DB level: the
-  // second UPDATE fails with P2002 and we retry once, by which time the
-  // first claim is visible.
+  const shopCapFilter =
+    shopsAtCap.length > 0
+      ? Prisma.sql`AND shop NOT IN (${Prisma.join(shopsAtCap)})`
+      : Prisma.empty;
+
+  // NOTE: The subquery check runs BEFORE the row lock, so two workers can
+  // theoretically both claim a job for the same mailbox within a millisecond.
+  // We retry up to 3 times on P2002 (unique violation) to handle the race.
   let rows: ClaimedJobRow[] = [];
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -139,21 +179,18 @@ export async function claimNextJob(
           WHERE status = 'pending'
             AND attempts < ${MAX_ATTEMPTS}
             AND ("nextRetryAt" IS NULL OR "nextRetryAt" <= NOW())
-            AND shop NOT IN (
-              SELECT DISTINCT shop FROM "SyncJob" WHERE status = 'running'
-            )
-            ${excludeFilter}
+            ${mailboxFilter}
+            ${shopCapFilter}
           ORDER BY "createdAt" ASC
           FOR UPDATE SKIP LOCKED
           LIMIT 1
         )
-        RETURNING id, shop, kind, params, attempts
+        RETURNING id, shop, kind, "mailConnectionId", params, attempts
       `;
       break;
     } catch (err) {
-      // P2002 = unique violation on SyncJob_one_running_per_shop.
-      // Another worker won the race for this shop; try again — there
-      // may be another shop's job available.
+      // P2002 = unique violation — another worker won the race for this
+      // mailbox/shop; retry since a different job may be available.
       const code = (err as { code?: string }).code;
       if (code === "P2002" && attempt < 2) continue;
       throw err;
@@ -173,9 +210,26 @@ export async function claimNextJob(
     id: row.id,
     shop: row.shop,
     kind: row.kind as SyncJobKind,
+    mailConnectionId: row.mailConnectionId,
     params,
     attempts: row.attempts,
   };
+}
+
+/**
+ * Returns shops whose running-job count has reached or exceeded the
+ * per-shop hard cap. These shops are skipped by `claimNextJob` until a
+ * slot frees up.
+ */
+function shopsThatReachedTheirCap(perShopCount: Map<string, number>): string[] {
+  // Cap of 3 concurrent jobs per shop: enough for 3 mailboxes to sync in
+  // parallel without letting one shop monopolise the worker pool.
+  const HARD_CAP_PER_SHOP = 3;
+  const result: string[] = [];
+  for (const [shop, count] of perShopCount) {
+    if (count >= HARD_CAP_PER_SHOP) result.push(shop);
+  }
+  return result;
 }
 
 /**
