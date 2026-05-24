@@ -72,11 +72,29 @@ const _refreshedEmailIds = new Set<string>();
 // ---------------------------------------------------------------------------
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   await requireOnboardingComplete(session.shop, request);
   const shop = session.shop;
   const url = new URL(request.url);
   const mailConnectionId = url.searchParams.get("mailbox") || undefined;
+
+  // Soft-pause: detect if the shop is over its plan's mailbox limit (can happen
+  // after a scheduled downgrade kicks in) and disable auto-sync on all mailboxes.
+  // Idempotent — safe to call on every request.
+  {
+    const { resolveEntitlements } = await import("../lib/billing/entitlements");
+    const { applySoftPauseIfOverflow } = await import("../lib/billing/soft-pause");
+    const ent = await resolveEntitlements({ shop, admin });
+    if (ent.state === "paid_active" || ent.state === "trial_active") {
+      if (ent.planId) {
+        const paused = await applySoftPauseIfOverflow({ shop, activePlanId: ent.planId });
+        if (paused > 0) {
+          console.warn(`[inbox] soft-paused ${paused} mailboxes for shop=${shop} (plan=${ent.planId})`);
+        }
+      }
+    }
+  }
+
   const onboardingFlag = await getShopFlag(shop);
   const checklistState = deriveChecklistState({
     hasDraft: await hasGeneratedAnyDraft(shop),
