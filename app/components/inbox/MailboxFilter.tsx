@@ -4,10 +4,13 @@ import type { MailConnection } from "@prisma/client";
 
 export default function MailboxFilter(props: {
   connections: Pick<MailConnection, "id" | "email">[];
-  countsByMailbox: Record<string, number>;
-  totalCount: number;
+  /** When omitted or empty, per-mailbox counts are not shown. */
+  countsByMailbox?: Record<string, number>;
+  /** When omitted, the "all mailboxes" option shows no count. */
+  totalCount?: number;
 }) {
   const { connections, countsByMailbox, totalCount } = props;
+  const showCounts = countsByMailbox && Object.keys(countsByMailbox).length > 0;
   const [searchParams, setSearchParams] = useSearchParams();
   const { t } = useTranslation();
 
@@ -46,11 +49,13 @@ export default function MailboxFilter(props: {
         style={selectStyle}
       >
         <option value="">
-          {t("inbox.allMailboxes", { count: totalCount })}
+          {showCounts
+            ? t("inbox.allMailboxes", { count: totalCount ?? 0 })
+            : t("inbox.allMailboxesNoCount", { defaultValue: "Toutes les boîtes" })}
         </option>
         {connections.map((c) => (
           <option key={c.id} value={c.id}>
-            {c.email} ({countsByMailbox[c.id] ?? 0})
+            {showCounts ? `${c.email} (${countsByMailbox![c.id] ?? 0})` : c.email}
           </option>
         ))}
       </select>
