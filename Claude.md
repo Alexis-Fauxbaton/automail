@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-> Last refreshed: 2026-05-15 — covers main + the in-flight billing branch (`feature/billing-per-conversation`). Update when major architecture changes ship.
+> Last refreshed: 2026-05-24 — covers main + the in-flight billing branch (`feature/billing-per-conversation`) + multi-mailbox (shipped on feature/multi-mailbox). Update when major architecture changes ship.
 
 ## Project
 Shopify app that helps human support agents answer customer emails faster.
@@ -20,6 +20,8 @@ Today the merchant:
 - auto-sync pulls new mail every 5 min by default
 - the pipeline classifies + analyses each thread automatically
 - the merchant opens the inbox, reviews each thread, generates / refines a draft, copies to their mail client to send
+- multiple mailboxes per shop are supported (up to 3 on Pro/Trial, 1 on Starter), managed at `/app/connections`
+- the inbox aggregates threads from all connected mailboxes; each thread displays a `MailboxBadge` and the merchant can filter by mailbox via the `MailboxFilter` dropdown
 
 ## Supported support intents (canonical)
 
@@ -109,6 +111,8 @@ prisma/                        # schema + migrations
 
 UI stays thin: routes orchestrate server actions, JSX components render. Business logic lives in `app/lib/*`.
 
+**Data model note (multi-mailbox):** `MailConnection.id` is the PK (a CUID); `shop` + `email` form a unique pair. Both `Thread` and `IncomingEmail` carry a required `mailConnectionId` FK with `onDelete: Cascade`, so disconnecting a mailbox atomically removes all its threads and emails. `SyncJob.mailConnectionId` is nullable — shop-wide job kinds (`recompute`, `reclassify`) intentionally omit it.
+
 ## Auto-sync pipeline
 
 When a new message arrives in a connected mailbox, the worker runs three tiers (called Pass 1 / 2 / 3 in the code):
@@ -175,6 +179,7 @@ Assume many shops in parallel:
 - No in-memory singleton may hold shop-scoped state across shops.
 - Errors and metrics are tagged by `shop`.
 - A bug in one shop must never stall sync for other shops.
+- Every mailbox-scoped query MUST include both `shop` AND `mailConnectionId` in the WHERE clause to prevent cross-mailbox leaks within the same shop. Shop-wide aggregates (billing usage, GDPR webhooks, recompute/reclassify jobs) intentionally do not filter by mailbox.
 
 ## Tracking integration
 
@@ -286,6 +291,7 @@ Active specs and implementation plans live under [docs/superpowers/](docs/superp
 - 2026-05-07 Dashboard SAV v1 handoff
 - 2026-05-14 Refine context auto-refresh (shipped)
 - 2026-05-15 Billing model per conversation (in flight on `feature/billing-per-conversation`)
+- 2026-05-23 Multi-mailbox per shop (shipped 2026-05-24 on `feature/multi-mailbox`)
 
 Past technical debt sits in [TECHNICAL_DEBT.md](TECHNICAL_DEBT.md).
 
