@@ -35,6 +35,16 @@ export interface BackfillParams {
   afterDateIso: string;
 }
 
+export type EnqueueOptions = {
+  shop: string;
+  kind: SyncJobKind;
+  /** Required for mailbox-scoped kinds (sync/backfill/resync/analyze_thread); null for shop-wide kinds (recompute/reclassify). */
+  mailConnectionId?: string | null;
+  params?: Record<string, unknown>;
+};
+
+const MAILBOX_SCOPED_KINDS: SyncJobKind[] = ["sync", "backfill", "resync", "analyze_thread"];
+
 const MAX_ATTEMPTS = 3;
 // Exponential backoff: attempt N → wait 2^(N-1) × BASE_BACKOFF_MS (capped).
 const BASE_BACKOFF_MS = 30_000;   // 30 s
@@ -47,20 +57,27 @@ const MAX_BACKOFF_MS  = 30 * 60_000; // 30 min
  * De-dup: if a pending or running job of the same kind already exists
  * for this shop, returns the existing id instead of creating a new row.
  * That avoids a storm of "sync" buttons queueing duplicates.
+ *
+ * Mailbox-scoped kinds (sync/backfill/resync/analyze_thread) require
+ * `mailConnectionId`. Shop-wide kinds (recompute/reclassify) leave it null.
  */
-export async function enqueueJob(
-  shop: string,
-  kind: SyncJobKind,
-  params: Record<string, unknown> = {},
-): Promise<string> {
+export async function enqueueJob(opts: EnqueueOptions): Promise<string> {
+  if (MAILBOX_SCOPED_KINDS.includes(opts.kind) && !opts.mailConnectionId) {
+    throw new Error(`Job kind ${opts.kind} requires mailConnectionId`);
+  }
   const existing = await prisma.syncJob.findFirst({
-    where: { shop, kind, status: { in: ["pending", "running"] } },
+    where: { shop: opts.shop, kind: opts.kind, status: { in: ["pending", "running"] } },
     select: { id: true },
   });
   if (existing) return existing.id;
 
   const job = await prisma.syncJob.create({
-    data: { shop, kind, params: JSON.stringify(params) },
+    data: {
+      shop: opts.shop,
+      kind: opts.kind,
+      mailConnectionId: opts.mailConnectionId ?? null,
+      params: opts.params ? JSON.stringify(opts.params) : undefined,
+    },
     select: { id: true },
   });
   return job.id;

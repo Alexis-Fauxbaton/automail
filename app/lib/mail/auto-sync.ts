@@ -220,6 +220,7 @@ export async function enqueueDuePeriodicSyncs(): Promise<void> {
       ],
     },
     select: {
+      id: true,
       shop: true,
       lastSyncAt: true,
       autoSyncIntervalMinutes: true,
@@ -254,7 +255,7 @@ export async function enqueueDuePeriodicSyncs(): Promise<void> {
     if (!due) continue;
     // Entitlement check is deferred to runJob so a slow Shopify response
     // on one shop never serialises the scheduling loop for other shops.
-    await enqueueJob(c.shop, "sync").catch((err) =>
+    await enqueueJob({ shop: c.shop, kind: "sync", mailConnectionId: c.id }).catch((err) =>
       console.error(`[auto-sync] enqueue periodic for ${c.shop} failed:`, err),
     );
   }
@@ -303,7 +304,7 @@ async function enqueueRecomputeIfNeeded(): Promise<void> {
       where: { operationalState: "open", operationalStateUpdatedAt: null },
     });
     for (const { shop } of staleShops) {
-      await enqueueJob(shop, "recompute").catch((err) =>
+      await enqueueJob({ shop, kind: "recompute" }).catch((err) =>
         console.error(`[auto-sync] enqueue recompute for ${shop} failed:`, err),
       );
     }

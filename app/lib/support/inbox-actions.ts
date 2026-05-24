@@ -137,12 +137,14 @@ export async function handleResync(params: { shop: string }) {
       onboardingBackfillDoneAt: null,
     },
   });
-  await enqueueJob(shop, "resync");
+  // TODO(multi-mailbox): plumb mailConnectionId from caller instead of resolving first match
+  const resyncConn = await prisma.mailConnection.findFirst({ where: { shop }, select: { id: true } });
+  await enqueueJob({ shop, kind: "resync", mailConnectionId: resyncConn?.id });
   return { syncStarted: true, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
 }
 
 export async function handleReclassify(params: { shop: string }) {
-  await enqueueJob(params.shop, "reclassify");
+  await enqueueJob({ shop: params.shop, kind: "reclassify" });
   return { syncStarted: true, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
 }
 
@@ -220,9 +222,9 @@ export async function handleSync(params: { shop: string; admin: AdminGraphqlClie
 export async function handleBackfill(params: { shop: string; days: number }) {
   const { shop, days } = params;
   const afterDate = new Date(Date.now() - Math.max(1, days) * 24 * 3600_000);
-  await enqueueJob(shop, "backfill", {
-    afterDateIso: afterDate.toISOString(),
-  });
+  // TODO(multi-mailbox): plumb mailConnectionId from caller instead of resolving first match
+  const backfillConn = await prisma.mailConnection.findFirst({ where: { shop }, select: { id: true } });
+  await enqueueJob({ shop, kind: "backfill", mailConnectionId: backfillConn?.id, params: { afterDateIso: afterDate.toISOString() } });
   return {
     syncStarted: true,
     report: null,
@@ -502,10 +504,11 @@ export async function handleMoveThread(params: {
   if (supportNatureFlipped) {
     const threadRow = await prisma.thread.findUnique({
       where: { id: canonicalThreadId },
-      select: { analyzedAt: true },
+      // TODO(multi-mailbox): mailConnectionId will be plumbed from caller context once per-mailbox routing lands
+      select: { analyzedAt: true, mailConnectionId: true },
     });
     if (threadRow && threadRow.analyzedAt === null) {
-      await enqueueJob(shop, "analyze_thread", { threadId: canonicalThreadId }).catch((err) => {
+      await enqueueJob({ shop, kind: "analyze_thread", mailConnectionId: threadRow.mailConnectionId, params: { threadId: canonicalThreadId } }).catch((err) => {
         console.error(`[catch-up] enqueueJob analyze_thread failed for thread=${canonicalThreadId}:`, err);
       });
     }
@@ -796,14 +799,15 @@ export async function handleUpdateClassification(params: {
     // the call shape.
     const threadRow = await prisma.thread.findFirst({
       where: { id: threadId, shop },
-      select: { analyzedAt: true, supportNature: true },
+      // TODO(multi-mailbox): mailConnectionId will be plumbed from caller context once per-mailbox routing lands
+      select: { analyzedAt: true, supportNature: true, mailConnectionId: true },
     });
     const isSupportNow =
       threadRow?.supportNature === "confirmed_support" ||
       threadRow?.supportNature === "probable_support" ||
       threadRow?.supportNature === "mixed";
     if (threadRow && isSupportNow && threadRow.analyzedAt === null) {
-      await enqueueJob(shop, "analyze_thread", { threadId }).catch((err) => {
+      await enqueueJob({ shop, kind: "analyze_thread", mailConnectionId: threadRow.mailConnectionId, params: { threadId } }).catch((err) => {
         console.error(`[catch-up] enqueueJob analyze_thread failed for thread=${threadId}:`, err);
       });
     }

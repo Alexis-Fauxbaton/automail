@@ -24,6 +24,22 @@ import {
   reclaimZombieJobs,
 } from '../../mail/job-queue';
 
+/** Creates a minimal MailConnection for TEST_SHOP and returns its id. */
+async function createTestMailConnection(): Promise<string> {
+  const conn = await testDb.mailConnection.create({
+    data: {
+      shop: TEST_SHOP,
+      provider: 'gmail',
+      email: 'test@integration-test.myshopify.com',
+      accessToken: 'test-token',
+      refreshToken: 'test-refresh',
+      tokenExpiry: new Date(Date.now() + 3600_000),
+    },
+    select: { id: true },
+  });
+  return conn.id;
+}
+
 beforeEach(async () => {
   await cleanTestShop();
 });
@@ -61,7 +77,8 @@ async function claimTestShopJob(
 
 describe('job queue — integration DB', () => {
   it('enqueueJob creates a pending job', async () => {
-    const id = await enqueueJob(TEST_SHOP, 'sync');
+    const mailConnectionId = await createTestMailConnection();
+    const id = await enqueueJob({ shop: TEST_SHOP, kind: 'sync', mailConnectionId });
 
     expect(typeof id).toBe('string');
     expect(id.length).toBeGreaterThan(0);
@@ -74,7 +91,8 @@ describe('job queue — integration DB', () => {
   });
 
   it('claimNextJob marks job as running', async () => {
-    const id = await enqueueJob(TEST_SHOP, 'sync');
+    const mailConnectionId = await createTestMailConnection();
+    const id = await enqueueJob({ shop: TEST_SHOP, kind: 'sync', mailConnectionId });
 
     // Use the helper to skip any non-TEST_SHOP jobs ahead in the queue.
     const claimed = await claimTestShopJob();
@@ -87,14 +105,15 @@ describe('job queue — integration DB', () => {
   });
 
   it('per-shop isolation — second job not claimed while first is running (REQ-SYNC-14)', async () => {
+    const mailConnectionId = await createTestMailConnection();
     // Enqueue and claim first job — TEST_SHOP is now running.
-    await enqueueJob(TEST_SHOP, 'sync');
+    await enqueueJob({ shop: TEST_SHOP, kind: 'sync', mailConnectionId });
     const first = await claimTestShopJob();
     expect(first).not.toBeNull();
     expect(first!.shop).toBe(TEST_SHOP);
 
     // Enqueue a different kind to avoid deduplication.
-    const backfillId = await enqueueJob(TEST_SHOP, 'backfill');
+    const backfillId = await enqueueJob({ shop: TEST_SHOP, kind: 'backfill', mailConnectionId });
 
     // Even if other shops have pending jobs, the TEST_SHOP 'backfill' job must
     // remain unclaimed because TEST_SHOP already has a running job.
@@ -112,7 +131,8 @@ describe('job queue — integration DB', () => {
   });
 
   it('markJobFailed × 3 sets status = error (REQ-SYNC-13)', async () => {
-    const id = await enqueueJob(TEST_SHOP, 'resync');
+    const mailConnectionId = await createTestMailConnection();
+    const id = await enqueueJob({ shop: TEST_SHOP, kind: 'resync', mailConnectionId });
 
     // Attempt 1
     const claim1 = await claimTestShopJob();
@@ -153,7 +173,7 @@ describe('job queue — integration DB', () => {
   });
 
   it('reclaimZombieJobs resets stuck running job to pending (REQ-SYNC-12)', async () => {
-    const id = await enqueueJob(TEST_SHOP, 'recompute');
+    const id = await enqueueJob({ shop: TEST_SHOP, kind: 'recompute' });
 
     // Simulate a job that has been running for 35 minutes.
     const stuckAt = new Date(Date.now() - 35 * 60 * 1000);

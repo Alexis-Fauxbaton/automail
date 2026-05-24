@@ -244,8 +244,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     // + first regular sync. Without this, a freshly-connected merchant sees
     // an empty inbox for up to a minute, with no visible activity — confusing.
     try {
-      const { enqueueJob } = await import("../lib/mail/job-queue");
-      await enqueueJob(shop, "sync");
+      const [{ enqueueJob }, prisma] = await Promise.all([
+        import("../lib/mail/job-queue"),
+        import("../db.server").then((m) => m.default),
+      ]);
+      // TODO(multi-mailbox): plumb mailConnectionId from saveConnection return value instead of resolving first match
+      const conn = await prisma.mailConnection.findFirst({ where: { shop }, select: { id: true } });
+      await enqueueJob({ shop, kind: "sync", mailConnectionId: conn?.id });
     } catch (err) {
       // Non-blocking: if enqueueJob fails (e.g. transient DB blip) the
       // periodic scheduler will still queue one within ≤ 60 s.
