@@ -135,7 +135,10 @@ export type DashboardKpis = {
 // Query functions
 // ---------------------------------------------------------------------------
 
-export async function getCurrentThreadStates(shop: string): Promise<ThreadStateCounts> {
+export async function getCurrentThreadStates(
+  shop: string,
+  mailConnectionId?: string,
+): Promise<ThreadStateCounts> {
   // `messages: { some: {} }` exclut les Thread fantômes : un resync supprime
   // les IncomingEmail mais conserve les Thread (pour préserver
   // operationalState manuel, drafts, manualOverrides). Les threads dont
@@ -145,6 +148,7 @@ export async function getCurrentThreadStates(shop: string): Promise<ThreadStateC
     by: ["operationalState"],
     where: {
       shop,
+      ...(mailConnectionId ? { mailConnectionId } : {}),
       supportNature: { not: "non_support" },
       messages: { some: {} },
     },
@@ -186,7 +190,15 @@ function _percentile(values: number[], p: number): number | null {
 // Response time stats
 // ---------------------------------------------------------------------------
 
-async function _fetchResponseTimesMs(shop: string, start: Date, end: Date): Promise<number[]> {
+async function _fetchResponseTimesMs(
+  shop: string,
+  start: Date,
+  end: Date,
+  mailConnectionId?: string,
+): Promise<number[]> {
+  const filterMC = mailConnectionId
+    ? Prisma.sql`AND t."mailConnectionId" = ${mailConnectionId}`
+    : Prisma.empty;
   type Row = { response_ms: number };
   const rows = await prisma.$queryRaw<Row[]>`
     SELECT
@@ -197,6 +209,7 @@ async function _fetchResponseTimesMs(shop: string, start: Date, end: Date): Prom
       AND e."processingStatus" = 'outgoing'
       AND e."receivedAt" > t."firstMessageAt"
     WHERE t.shop = ${shop}
+      ${filterMC}
       AND t."firstMessageAt" >= ${start}
       AND t."firstMessageAt" < ${end}
       AND t."supportNature" IN ('confirmed_support', 'probable_support')
@@ -217,10 +230,11 @@ export async function getResponseTimeStats(
   end: Date,
   prevStart: Date,
   prevEnd: Date,
+  mailConnectionId?: string,
 ): Promise<ResponseTimeStats> {
   const [current, prev] = await Promise.all([
-    _fetchResponseTimesMs(shop, start, end),
-    _fetchResponseTimesMs(shop, prevStart, prevEnd),
+    _fetchResponseTimesMs(shop, start, end, mailConnectionId),
+    _fetchResponseTimesMs(shop, prevStart, prevEnd, mailConnectionId),
   ]);
   return {
     medianMs: _percentile(current, 0.5),
@@ -233,6 +247,7 @@ export async function getResponseTimeDailyBreakdown(
   shop: string,
   start: Date,
   end: Date,
+  mailConnectionId?: string,
 ): Promise<ResponseTimeDailyPoint[]> {
   // Two aggregations on different time fields:
   //  - support: emails received per day (consistent with Volume KPI)
@@ -241,6 +256,13 @@ export async function getResponseTimeDailyBreakdown(
   type EmailRow = { day: Date; count: bigint };
   type MedianRow = { day: Date; median_ms: number | null };
 
+  const filterMCEmail = mailConnectionId
+    ? Prisma.sql`AND e."mailConnectionId" = ${mailConnectionId}`
+    : Prisma.empty;
+  const filterMCThread = mailConnectionId
+    ? Prisma.sql`AND t."mailConnectionId" = ${mailConnectionId}`
+    : Prisma.empty;
+
   const [emailRows, medianRows] = await Promise.all([
     prisma.$queryRaw<EmailRow[]>`
       SELECT DATE_TRUNC('day', e."receivedAt" AT TIME ZONE ${TZ})::date AS day,
@@ -248,6 +270,7 @@ export async function getResponseTimeDailyBreakdown(
       FROM "IncomingEmail" e
       LEFT JOIN "Thread" t ON t.id = e."canonicalThreadId"
       WHERE e.shop = ${shop}
+        ${filterMCEmail}
         AND e."receivedAt" >= ${start}
         AND e."receivedAt" < ${end}
         AND e."processingStatus" != 'outgoing'
@@ -269,6 +292,7 @@ export async function getResponseTimeDailyBreakdown(
           AND e."processingStatus" = 'outgoing'
           AND e."receivedAt" > t."firstMessageAt"
         WHERE t.shop = ${shop}
+          ${filterMCThread}
           AND t."firstMessageAt" >= ${start}
           AND t."firstMessageAt" < ${end}
           AND t."supportNature" IN ('confirmed_support', 'probable_support')
@@ -410,10 +434,12 @@ export async function getDashboardKpis(
   end: Date,
   prevStart: Date,
   prevEnd: Date,
+  mailConnectionId?: string,
 ): Promise<DashboardKpis> {
   const [responseTime, draftUsage, reopened, prevReopened, volume, prevVolume] =
     await Promise.all([
-      getResponseTimeStats(shop, start, end, prevStart, prevEnd),
+      getResponseTimeStats(shop, start, end, prevStart, prevEnd, mailConnectionId),
+      // ReplyDraft has no mailConnectionId column — draft stats are not mailbox-filtered.
       getDraftUsageStats(shop, start, end, prevStart, prevEnd),
       prisma.threadStateHistory.count({
         where: {
@@ -421,6 +447,7 @@ export async function getDashboardKpis(
           fromState: "resolved",
           NOT: { toState: "resolved" },
           changedAt: { gte: start, lt: end },
+          ...(mailConnectionId ? { thread: { mailConnectionId } } : {}),
         },
       }),
       prisma.threadStateHistory.count({
@@ -429,11 +456,13 @@ export async function getDashboardKpis(
           fromState: "resolved",
           NOT: { toState: "resolved" },
           changedAt: { gte: prevStart, lt: prevEnd },
+          ...(mailConnectionId ? { thread: { mailConnectionId } } : {}),
         },
       }),
       prisma.incomingEmail.count({
         where: {
           shop,
+          ...(mailConnectionId ? { mailConnectionId } : {}),
           receivedAt: { gte: start, lt: end },
           processingStatus: { not: "outgoing" },
           OR: [
@@ -445,6 +474,7 @@ export async function getDashboardKpis(
       prisma.incomingEmail.count({
         where: {
           shop,
+          ...(mailConnectionId ? { mailConnectionId } : {}),
           receivedAt: { gte: prevStart, lt: prevEnd },
           processingStatus: { not: "outgoing" },
           OR: [
@@ -471,7 +501,11 @@ export async function getHeatmap(
   shop: string,
   start: Date,
   end: Date,
+  mailConnectionId?: string,
 ): Promise<HeatmapCell[]> {
+  const filterMC = mailConnectionId
+    ? Prisma.sql`AND e."mailConnectionId" = ${mailConnectionId}`
+    : Prisma.empty;
   type Row = { dow: number; hour: number; count: bigint };
   const rows = await prisma.$queryRaw<Row[]>`
     SELECT
@@ -481,6 +515,7 @@ export async function getHeatmap(
     FROM "IncomingEmail" e
     LEFT JOIN "Thread" t ON t.id = e."canonicalThreadId"
     WHERE e.shop = ${shop}
+      ${filterMC}
       AND e."receivedAt" >= ${start}
       AND e."receivedAt" < ${end}
       AND e."processingStatus" != 'outgoing'
@@ -507,11 +542,15 @@ export async function getTopIntentsWithPerf(
   start: Date,
   end: Date,
   limit = 5,
+  mailConnectionId?: string,
 ): Promise<IntentPerf[]> {
   // Threads with ANY support-email activity in the period (consistent with the
   // Volume KPI which counts emails received in the period — not threads created).
   // Without this, a re-opened thread with fresh activity is counted in volume
   // but excluded from top-intents, making the two views internally inconsistent.
+  const filterMC = mailConnectionId
+    ? Prisma.sql`AND t."mailConnectionId" = ${mailConnectionId}`
+    : Prisma.empty;
   type Row = { intent: string; count: bigint; median_ms: number | null };
   const rows = await prisma.$queryRaw<Row[]>`
     WITH active_threads AS (
@@ -519,6 +558,7 @@ export async function getTopIntentsWithPerf(
       FROM "Thread" t
       JOIN "IncomingEmail" e ON e."canonicalThreadId" = t.id
       WHERE t.shop = ${shop}
+        ${filterMC}
         AND t."supportNature" IN ('confirmed_support', 'probable_support')
         AND e."receivedAt" >= ${start}
         AND e."receivedAt" < ${end}
@@ -573,6 +613,7 @@ export async function getReopenedThreads(
   start: Date,
   end: Date,
   limit = 10,
+  mailConnectionId?: string,
 ): Promise<ReopenedThread[]> {
   const rows = await prisma.threadStateHistory.groupBy({
     by: ["threadId"],
@@ -581,6 +622,7 @@ export async function getReopenedThreads(
       fromState: "resolved",
       NOT: { toState: "resolved" },
       changedAt: { gte: start, lt: end },
+      ...(mailConnectionId ? { thread: { mailConnectionId } } : {}),
     },
     _count: { _all: true },
     _max: { changedAt: true },
@@ -648,19 +690,16 @@ export async function getAlerts(
   start: Date,
   end: Date,
   topIntents: IntentPerf[],
+  mailConnectionId?: string,
 ): Promise<Alert[]> {
   if (range === "90d" || range === "custom") return [];
-
-  const supportWhere = {
-    shop,
-    supportNature: { in: ["confirmed_support", "probable_support"] as string[] },
-  };
 
   // Volume = emails received (consistent with the KPI "Emails support")
   const countSupportEmails = (s: Date, e: Date) =>
     prisma.incomingEmail.count({
       where: {
         shop,
+        ...(mailConnectionId ? { mailConnectionId } : {}),
         receivedAt: { gte: s, lt: e },
         processingStatus: { not: "outgoing" },
         OR: [
@@ -680,6 +719,7 @@ export async function getAlerts(
           fromState: "resolved",
           NOT: { toState: "resolved" },
           changedAt: { gte: start, lt: end },
+          ...(mailConnectionId ? { thread: { mailConnectionId } } : {}),
         },
       }),
       _baselineEventCount(shop, range, start, (s, e) =>
@@ -689,6 +729,7 @@ export async function getAlerts(
             fromState: "resolved",
             NOT: { toState: "resolved" },
             changedAt: { gte: s, lt: e },
+            ...(mailConnectionId ? { thread: { mailConnectionId } } : {}),
           },
         }),
       ),
@@ -736,7 +777,7 @@ export async function getAlerts(
     const cfg = RANGE_WINDOW_CONFIG[range] ?? DEFAULT_RANGE_WINDOW;
     const { durationMs, windowCount } = cfg;
 
-    const currentSamples = await _fetchResponseTimesMs(shop, start, end);
+    const currentSamples = await _fetchResponseTimesMs(shop, start, end, mailConnectionId);
     const currentMed = _percentile(currentSamples, 0.5);
 
     const baselineSamples: number[] = [];
@@ -749,7 +790,7 @@ export async function getAlerts(
         e = new Date(start.getTime() - i * durationMs);
         s = new Date(e.getTime() - durationMs);
       }
-      baselineSamples.push(...(await _fetchResponseTimesMs(shop, s, e)));
+      baselineSamples.push(...(await _fetchResponseTimesMs(shop, s, e, mailConnectionId)));
     }
     const baselineMed = _percentile(baselineSamples, 0.5);
 
@@ -782,6 +823,7 @@ export async function getAlerts(
       prisma.incomingEmail.findMany({
         where: {
           shop,
+          ...(mailConnectionId ? { mailConnectionId } : {}),
           detectedIntent: item.intent,
           receivedAt: { gte: s, lt: e },
           processingStatus: { not: "outgoing" },
