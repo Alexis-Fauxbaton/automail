@@ -1,9 +1,9 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-import { getGmailService } from "../lib/gmail/client";
-import { getZohoAccessToken } from "../lib/zoho/auth";
-import { listZohoFoldersRaw } from "../lib/zoho/client";
+import { getGmailServiceByConnection } from "../lib/gmail/client";
+import { getZohoAccessTokenByConnection } from "../lib/zoho/auth";
+import { listZohoFoldersByConnection } from "../lib/zoho/client";
 
 const SAFE_INLINE_MIME_TYPES = new Set([
   "image/jpeg",
@@ -51,6 +51,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
       providerMsgId: true,
       providerAttachId: true,
       providerFolderId: true,
+      // Join through the parent email to get the mailConnectionId for routing
+      email: { select: { mailConnectionId: true } },
     },
   });
 
@@ -86,7 +88,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   try {
     if (attachment.provider === "gmail") {
-      const gmail = await getGmailService(shop);
+      const mailConnectionId = attachment.email?.mailConnectionId ?? null;
+      const gmailConn = mailConnectionId
+        ? await prisma.mailConnection.findUnique({ where: { id: mailConnectionId } })
+        : await prisma.mailConnection.findFirst({ where: { shop, provider: "gmail" } });
+      if (!gmailConn) return new Response("No Gmail connection", { status: 404 });
+      const gmail = await getGmailServiceByConnection(gmailConn);
       const res = await gmail.users.messages.attachments.get({
         userId: "me",
         messageId: attachment.providerMsgId,
@@ -109,15 +116,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }
 
     if (attachment.provider === "zoho") {
-      const conn = await prisma.mailConnection.findUnique({ where: { shop } });
+      const mailConnectionId = attachment.email?.mailConnectionId ?? null;
+      const conn = mailConnectionId
+        ? await prisma.mailConnection.findUnique({ where: { id: mailConnectionId } })
+        : await prisma.mailConnection.findFirst({ where: { shop, provider: "zoho" } });
       if (!conn?.zohoAccountId) return new Response("No Zoho connection", { status: 404 });
-      const token = await getZohoAccessToken(shop);
+      const token = await getZohoAccessTokenByConnection(conn);
       const zohoDomain = process.env.ZOHO_API_DOMAIN || "mail.zoho.com";
 
       // Resolve folderId — stored for new records; look it up for legacy ones.
       let folderId = attachment.providerFolderId;
       if (!folderId) {
-        const folders = await listZohoFoldersRaw(shop);
+        const folders = await listZohoFoldersByConnection(conn);
         const inbox = folders.find((f) => f.folderType === "Inbox");
         const sent = folders.find((f) => f.folderType === "Sent");
         folderId = inbox?.folderId ?? sent?.folderId ?? null;

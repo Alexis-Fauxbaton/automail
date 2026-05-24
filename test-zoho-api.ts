@@ -18,7 +18,7 @@ function decrypt(ciphertext: string): string {
 }
 
 async function main() {
-  const conn = await prisma.mailConnection.findUnique({
+  const conn = await prisma.mailConnection.findFirst({
     where: { shop: "test-automail.myshopify.com" },
   });
   if (!conn) {

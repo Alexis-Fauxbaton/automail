@@ -1,4 +1,4 @@
-import { getAuthenticatedClient, getAuthenticatedClientById } from "./auth";
+import { getAuthenticatedClientById } from "./auth";
 import { cleanHtml } from "../mail/html-utils";
 import type { MailMessage, MailAttachment } from "../mail/types";
 import { createSemaphore, type Semaphore } from "../util/semaphore";

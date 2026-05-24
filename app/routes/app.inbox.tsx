@@ -15,7 +15,7 @@ import {
 } from "../lib/onboarding/repo";
 import { deriveChecklistState, isChecklistDismissed } from "../lib/onboarding/state";
 import { OnboardingChecklist } from "../components/onboarding/OnboardingChecklist";
-import { getAuthUrl as getGmailAuthUrl, getConnection } from "../lib/gmail/auth";
+import { getAuthUrl as getGmailAuthUrl } from "../lib/gmail/auth";
 import { getZohoAuthUrl } from "../lib/zoho/auth";
 import { getAuthUrl as getOutlookAuthUrl } from "../lib/outlook/auth";
 import type { ProcessingReport } from "../lib/gmail/pipeline";
@@ -95,7 +95,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     state: checklistState,
     dismissed: checklistDismissed,
   };
-  const connection = await getConnection(shop);
+  // Check if ANY mailbox is connected — inbox only loads when at least one exists.
+  // In multi-mailbox, findFirst is correct: we only need a truthy/falsy answer here.
+  const connection = await prisma.mailConnection.findFirst({ where: { shop } });
 
   let emails: SerializedEmail[] = [];
   let threadStates: Record<string, SerializedThreadState> = {};
@@ -367,7 +369,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "stop") {
-    return handleStop({ shop });
+    const mailConnectionId = String(formData.get("mailConnectionId") ?? "");
+    if (!mailConnectionId)
+      return { error: "missing_mailConnectionId", report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
+    return handleStop({ shop, mailConnectionId });
   }
 
   if (intent === "resync") {

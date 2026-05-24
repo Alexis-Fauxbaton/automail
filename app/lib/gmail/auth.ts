@@ -95,9 +95,9 @@ export async function saveConnection(
     email: string;
     aliases?: string[];
   },
-) {
+): Promise<{ id: string }> {
   const outgoingAliases = JSON.stringify(tokens.aliases ?? []);
-  await prisma.mailConnection.upsert({
+  const conn = await prisma.mailConnection.upsert({
     where: { shop_email: { shop, email: tokens.email } },
     create: {
       shop,
@@ -125,36 +125,32 @@ export async function saveConnection(
       deltaToken: null,
       syncCancelledAt: null,
     },
+    select: { id: true },
   });
+  return conn;
 }
 
 /**
- * Lazy-populate aliases for shops connected before this feature shipped.
+ * Lazy-populate aliases for a specific Gmail MailConnection.
  * Idempotent and best-effort.
  */
-export async function backfillGmailAliasesIfMissing(shop: string): Promise<void> {
-  const conn = await prisma.mailConnection.findUnique({
-    where: { shop },
-    select: { provider: true, email: true, outgoingAliases: true },
-  });
-  if (!conn || conn.provider !== "gmail") return;
-  if (conn.outgoingAliases && conn.outgoingAliases !== "[]") return;
+export async function backfillGmailAliasesIfMissing(connection: MailConnection): Promise<void> {
+  if (connection.provider !== "gmail") return;
+  if (connection.outgoingAliases && connection.outgoingAliases !== "[]") return;
   try {
     const client = getOAuth2Client();
-    const fullConn = await prisma.mailConnection.findUnique({ where: { shop } });
-    if (!fullConn) return;
     client.setCredentials({
-      access_token: decrypt(fullConn.accessToken),
-      refresh_token: decrypt(fullConn.refreshToken),
+      access_token: decrypt(connection.accessToken),
+      refresh_token: decrypt(connection.refreshToken),
     });
-    const aliases = await fetchGmailSendAsAliases(client, conn.email);
+    const aliases = await fetchGmailSendAsAliases(client, connection.email);
     await prisma.mailConnection.update({
-      where: { shop },
+      where: { id: connection.id },
       data: { outgoingAliases: JSON.stringify(aliases) },
     });
-    console.log(`[gmail] backfilled ${aliases.length} outgoing aliases for shop=${shop}`);
+    console.log(`[gmail] backfilled ${aliases.length} outgoing aliases for connection=${connection.id}`);
   } catch (err) {
-    console.warn(`[gmail] alias backfill failed for shop=${shop}:`, err);
+    console.warn(`[gmail] alias backfill failed for connection=${connection.id}:`, err);
   }
 }
 
@@ -171,59 +167,6 @@ export async function deleteConnection(params: {
   });
   // Cascade onDelete handles Thread, IncomingEmail, ThreadProviderId,
   // ThreadStateHistory, ReplyDraft. Single statement, single transaction.
-}
-
-export async function getConnection(shop: string) {
-  return prisma.mailConnection.findUnique({ where: { shop } });
-}
-
-export async function getAuthenticatedClient(shop: string) {
-  const conn = await prisma.mailConnection.findUnique({ where: { shop } });
-  if (!conn) throw new Error("No Gmail connection for this shop");
-
-  const client = getOAuth2Client();
-  client.setCredentials({
-    access_token: decrypt(conn.accessToken),
-    refresh_token: decrypt(conn.refreshToken),
-    expiry_date: conn.tokenExpiry.getTime(),
-  });
-
-  // Refresh if expired (120 s buffer to match Zoho/Outlook).
-  if (conn.tokenExpiry.getTime() < Date.now() + 120_000) {
-    try {
-      const { credentials } = await client.refreshAccessToken();
-      client.setCredentials(credentials);
-      // Persist new tokens
-      await prisma.mailConnection.update({
-        where: { shop },
-        data: {
-          accessToken: encrypt(credentials.access_token!),
-          tokenExpiry: new Date(credentials.expiry_date!),
-          ...(credentials.refresh_token
-            ? { refreshToken: encrypt(credentials.refresh_token) }
-            : {}),
-        },
-      });
-    } catch (err) {
-      // googleapis raises GaxiosError with response.data.error === "invalid_grant"
-      // when the user revoked access (Google account → Security → Apps).
-      // We surface a typed marker so callers can prompt the merchant to
-      // reconnect, instead of looping forever on a dead refresh token.
-      const code = extractOAuthErrorCode(err);
-      if (code === "invalid_grant") {
-        await prisma.mailConnection
-          .update({
-            where: { shop },
-            data: { lastSyncError: "MAILBOX_REVOKED: please reconnect Gmail" },
-          })
-          .catch(() => undefined);
-        throw new MailboxRevokedError("gmail", shop);
-      }
-      throw err;
-    }
-  }
-
-  return client;
 }
 
 /**

@@ -218,24 +218,25 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   try {
+    let savedConn: { id: string };
     if (provider === "zoho") {
       const { exchangeZohoCode, saveZohoConnection } = await import(
         "../lib/zoho/auth"
       );
       const tokens = await exchangeZohoCode(code);
-      await saveZohoConnection(shop, tokens);
+      savedConn = await saveZohoConnection(shop, tokens);
     } else if (provider === "outlook") {
       const { exchangeCodeForTokens, saveConnection } = await import(
         "../lib/outlook/auth"
       );
       const tokens = await exchangeCodeForTokens(code);
-      await saveConnection(shop, tokens);
+      savedConn = await saveConnection(shop, tokens);
     } else {
       const { exchangeCodeForTokens, saveConnection } = await import(
         "../lib/gmail/auth"
       );
       const tokens = await exchangeCodeForTokens(code);
-      await saveConnection(shop, tokens);
+      savedConn = await saveConnection(shop, tokens);
     }
 
     // Kick off the first sync immediately instead of waiting up to 60 s for
@@ -244,13 +245,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     // + first regular sync. Without this, a freshly-connected merchant sees
     // an empty inbox for up to a minute, with no visible activity — confusing.
     try {
-      const [{ enqueueJob }, prisma] = await Promise.all([
-        import("../lib/mail/job-queue"),
-        import("../db.server").then((m) => m.default),
-      ]);
-      // TODO(multi-mailbox): plumb mailConnectionId from saveConnection return value instead of resolving first match
-      const conn = await prisma.mailConnection.findFirst({ where: { shop }, select: { id: true } });
-      await enqueueJob({ shop, kind: "sync", mailConnectionId: conn?.id });
+      const { enqueueJob } = await import("../lib/mail/job-queue");
+      await enqueueJob({ shop, kind: "sync", mailConnectionId: savedConn.id });
     } catch (err) {
       // Non-blocking: if enqueueJob fails (e.g. transient DB blip) the
       // periodic scheduler will still queue one within ≤ 60 s.

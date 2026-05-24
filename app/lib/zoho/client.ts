@@ -1,5 +1,5 @@
 import prisma from "../../db.server";
-import { getZohoAccessToken, getZohoAccessTokenByConnection, getZohoApiDomain } from "./auth";
+import { getZohoAccessTokenByConnection, getZohoApiDomain } from "./auth";
 import type { MailAttachment, MailMessage, MailClient } from "../mail/types";
 import type { MailConnection } from "@prisma/client";
 
@@ -52,17 +52,19 @@ interface ZohoFolders {
 /**
  * Raw list of folders (for diagnostics). Exposes name + type + id.
  */
-export async function listZohoFoldersRaw(
-  shop: string,
+/**
+ * Raw list of folders for a specific MailConnection (multi-mailbox safe).
+ */
+export async function listZohoFoldersByConnection(
+  connection: MailConnection,
 ): Promise<Array<{ folderId: string; folderName: string; folderType: string }>> {
-  const conn = await prisma.mailConnection.findUnique({ where: { shop } });
-  if (!conn || conn.provider !== "zoho" || !conn.zohoAccountId) {
-    throw new Error("No Zoho connection for this shop");
+  if (connection.provider !== "zoho" || !connection.zohoAccountId) {
+    throw new Error("No Zoho connection");
   }
-  const token = await getZohoAccessToken(shop);
+  const token = await getZohoAccessTokenByConnection(connection);
   const data = (await zohoFetch(
     token,
-    `/api/accounts/${conn.zohoAccountId}/folders`,
+    `/api/accounts/${connection.zohoAccountId}/folders`,
   )) as {
     data?: Array<{ folderId: string; folderName: string; folderType?: string }>;
   };
@@ -144,7 +146,10 @@ export async function createZohoClient(connection: MailConnection): Promise<Mail
     return (await getFolders(token)).inbox;
   }
 
-  return {
+  // Forward reference so listNewMessages can call listRecentMessages without `this`.
+  let client: MailClient;
+
+  client = {
     async listRecentMessages(opts) {
       const token = await getZohoAccessTokenByConnection(connection);
       const folders = await getFolders(token);
@@ -310,7 +315,7 @@ export async function createZohoClient(connection: MailConnection): Promise<Mail
       const nextCursorTs = Date.now() - 2 * 60_000;
 
       const afterDate = cursor ? new Date(parseInt(cursor, 10)) : undefined;
-      const messageIds = await this.listRecentMessages({
+      const messageIds = await client.listRecentMessages({
         afterDate,
         maxResults: 500,
       });
@@ -388,6 +393,7 @@ export async function createZohoClient(connection: MailConnection): Promise<Mail
       }
     },
   };
+  return client;
 }
 
 // --- Helpers ---

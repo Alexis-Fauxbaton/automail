@@ -124,10 +124,10 @@ export async function saveZohoConnection(
     accountId: string;
     aliases: string[];
   },
-) {
+): Promise<{ id: string }> {
   const allowList = buildAllowList(tokens.email, tokens.aliases);
   const outgoingAliases = JSON.stringify(allowList);
-  await prisma.mailConnection.upsert({
+  const conn = await prisma.mailConnection.upsert({
     where: { shop_email: { shop, email: tokens.email } },
     create: {
       shop,
@@ -157,7 +157,9 @@ export async function saveZohoConnection(
       deltaToken: null,
       syncCancelledAt: null,
     },
+    select: { id: true },
   });
+  return conn;
 }
 
 function buildAllowList(primary: string, aliases: string[]): string[] {
@@ -172,90 +174,25 @@ function buildAllowList(primary: string, aliases: string[]): string[] {
 }
 
 /**
- * Lazy-populate `MailConnection.outgoingAliases` for shops connected before
- * the alias-detection feature shipped (or whose row still has the default
- * empty `"[]"`). Idempotent and best-effort: any API failure is logged and
+ * Lazy-populate `MailConnection.outgoingAliases` for a specific Zoho
+ * MailConnection. Idempotent and best-effort: any API failure is logged and
  * swallowed so the caller's sync isn't blocked.
  */
-export async function backfillZohoAliasesIfMissing(shop: string): Promise<void> {
-  const conn = await prisma.mailConnection.findUnique({
-    where: { shop },
-    select: { provider: true, email: true, outgoingAliases: true },
-  });
-  if (!conn || conn.provider !== "zoho") return;
-  if (conn.outgoingAliases && conn.outgoingAliases !== "[]") return;
+export async function backfillZohoAliasesIfMissing(connection: MailConnection): Promise<void> {
+  if (connection.provider !== "zoho") return;
+  if (connection.outgoingAliases && connection.outgoingAliases !== "[]") return;
   try {
-    const accessToken = await getZohoAccessToken(shop);
+    const accessToken = await getZohoAccessTokenByConnection(connection);
     const info = await fetchZohoAccount(accessToken);
-    const allowList = buildAllowList(conn.email || info.email, info.aliases);
+    const allowList = buildAllowList(connection.email || info.email, info.aliases);
     await prisma.mailConnection.update({
-      where: { shop },
+      where: { id: connection.id },
       data: { outgoingAliases: JSON.stringify(allowList) },
     });
-    console.log(`[zoho] backfilled ${allowList.length} outgoing aliases for shop=${shop}`);
+    console.log(`[zoho] backfilled ${allowList.length} outgoing aliases for connection=${connection.id}`);
   } catch (err) {
-    console.warn(`[zoho] alias backfill failed for shop=${shop}:`, err);
+    console.warn(`[zoho] alias backfill failed for connection=${connection.id}:`, err);
   }
-}
-
-export async function refreshZohoToken(shop: string): Promise<string> {
-  const conn = await prisma.mailConnection.findUnique({ where: { shop } });
-  if (!conn || conn.provider !== "zoho") throw new Error("No Zoho connection");
-
-  const clientId = process.env.ZOHO_CLIENT_ID;
-  const clientSecret = process.env.ZOHO_CLIENT_SECRET;
-  if (!clientId || !clientSecret) throw new Error("Zoho credentials missing");
-
-  const body = new URLSearchParams({
-    grant_type: "refresh_token",
-    client_id: clientId,
-    client_secret: clientSecret,
-    refresh_token: decrypt(conn.refreshToken),
-  });
-  const res = await fetch(`https://${getZohoAccountsDomain()}/oauth/v2/token`, { method: "POST", body });
-  const data = (await res.json()) as {
-    access_token?: string;
-    expires_in?: number;
-    error?: string;
-  };
-  if (data.error || !data.access_token) {
-    // Zoho returns "invalid_code" / "invalid_client" / "access_denied" when
-    // the refresh token has been revoked from the user's Zoho account.
-    // Surface a typed marker so callers prompt the merchant to reconnect
-    // instead of looping on a dead token.
-    if (data.error === "invalid_code" || data.error === "access_denied" || data.error === "invalid_client") {
-      await prisma.mailConnection
-        .update({
-          where: { shop },
-          data: { lastSyncError: "MAILBOX_REVOKED: please reconnect Zoho Mail" },
-        })
-        .catch(() => undefined);
-      const { MailboxRevokedError } = await import("../gmail/auth");
-      throw new MailboxRevokedError("zoho", shop);
-    }
-    throw new Error(`Zoho token refresh failed: ${data.error || "no token"}`);
-  }
-
-  await prisma.mailConnection.update({
-    where: { shop },
-    data: {
-      accessToken: encrypt(data.access_token),
-      tokenExpiry: new Date(Date.now() + (data.expires_in ?? 3600) * 1000),
-    },
-  });
-
-  return data.access_token;
-}
-
-export async function getZohoAccessToken(shop: string): Promise<string> {
-  const conn = await prisma.mailConnection.findUnique({ where: { shop } });
-  if (!conn || conn.provider !== "zoho") throw new Error("No Zoho connection");
-
-  // 120 s buffer guards against clock skew and request-in-flight expiry.
-  if (conn.tokenExpiry.getTime() < Date.now() + 120_000) {
-    return refreshZohoToken(shop);
-  }
-  return decrypt(conn.accessToken);
 }
 
 /**

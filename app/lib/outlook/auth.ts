@@ -235,9 +235,9 @@ export async function saveConnection(
     email: string;
     aliases?: string[];
   },
-) {
+): Promise<{ id: string }> {
   const outgoingAliases = JSON.stringify(tokens.aliases ?? []);
-  await prisma.mailConnection.upsert({
+  const conn = await prisma.mailConnection.upsert({
     where: { shop_email: { shop, email: tokens.email } },
     create: {
       shop,
@@ -267,28 +267,26 @@ export async function saveConnection(
       deltaToken: null,
       syncCancelledAt: null,
     },
+    select: { id: true },
   });
+  return conn;
 }
 
 /**
- * Lazy-populate aliases for shops connected before this feature shipped.
+ * Lazy-populate aliases for a specific Outlook MailConnection.
  * Idempotent and best-effort.
  */
-export async function backfillOutlookAliasesIfMissing(shop: string): Promise<void> {
-  const conn = await prisma.mailConnection.findUnique({
-    where: { shop },
-    select: { provider: true, email: true, outgoingAliases: true },
-  });
-  if (!conn || conn.provider !== "outlook") return;
-  const aliasesNeedBackfill = !conn.outgoingAliases || conn.outgoingAliases === "[]";
-  const emailIsUnknown = !conn.email || conn.email === "unknown";
+export async function backfillOutlookAliasesIfMissing(connection: MailConnection): Promise<void> {
+  if (connection.provider !== "outlook") return;
+  const aliasesNeedBackfill = !connection.outgoingAliases || connection.outgoingAliases === "[]";
+  const emailIsUnknown = !connection.email || connection.email === "unknown";
   if (!aliasesNeedBackfill && !emailIsUnknown) return;
   try {
-    const { accessToken } = await getAuthenticatedClient(shop);
+    const { accessToken } = await getAuthenticatedClientByConnection(connection);
     // Recover the primary email from Graph if the connection was saved with
     // "unknown". Old connections predate the proxyAddresses fallback in
     // authenticate(); refresh them lazily on the next sync.
-    let primaryEmail = conn.email;
+    let primaryEmail = connection.email;
     if (emailIsUnknown) {
       try {
         const meRes = await fetch(GRAPH_ME, {
@@ -299,7 +297,7 @@ export async function backfillOutlookAliasesIfMissing(shop: string): Promise<voi
         }
         if (meRes.ok) {
           const meData = (await meRes.json()) as { mail?: string; userPrincipalName?: string; otherMails?: string[] };
-          console.log(`[outlook] /me recovery data for shop=${shop}: mail=${meData.mail ?? "null"} upn=${meData.userPrincipalName ?? "null"} otherMails=${JSON.stringify(meData.otherMails ?? [])}`);
+          console.log(`[outlook] /me recovery data for connection=${connection.id}: mail=${meData.mail ?? "null"} upn=${meData.userPrincipalName ?? "null"} otherMails=${JSON.stringify(meData.otherMails ?? [])}`);
           const isEmail = (s: string | undefined) => !!s && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s);
           let email = (meData.mail && isEmail(meData.mail) ? meData.mail : "")
             || (meData.userPrincipalName && isEmail(meData.userPrincipalName) ? meData.userPrincipalName : "")
@@ -320,73 +318,31 @@ export async function backfillOutlookAliasesIfMissing(shop: string): Promise<voi
           if (email) {
             primaryEmail = email.toLowerCase();
             await prisma.mailConnection.update({
-              where: { shop },
+              where: { id: connection.id },
               data: { email: primaryEmail },
             });
-            console.log(`[outlook] recovered primary email for shop=${shop} → ${primaryEmail}`);
+            console.log(`[outlook] recovered primary email for connection=${connection.id} → ${primaryEmail}`);
           }
         }
       } catch (err) {
-        console.warn(`[outlook] email recovery failed for shop=${shop}:`, err);
+        console.warn(`[outlook] email recovery failed for connection=${connection.id}:`, err);
       }
     }
     if (aliasesNeedBackfill) {
       const aliases = await fetchOutlookAliases(accessToken, primaryEmail);
       await prisma.mailConnection.update({
-        where: { shop },
+        where: { id: connection.id },
         data: { outgoingAliases: JSON.stringify(aliases) },
       });
-      console.log(`[outlook] backfilled ${aliases.length} outgoing aliases for shop=${shop}`);
+      console.log(`[outlook] backfilled ${aliases.length} outgoing aliases for connection=${connection.id}`);
     }
   } catch (err) {
-    console.warn(`[outlook] backfill failed for shop=${shop}:`, err);
+    console.warn(`[outlook] backfill failed for connection=${connection.id}:`, err);
   }
-}
-
-export async function getConnection(shop: string) {
-  return prisma.mailConnection.findUnique({ where: { shop } });
 }
 
 export interface OutlookTokens {
   accessToken: string;
-}
-
-// Per-shop in-flight refresh promises. Prevents the thundering-herd /
-// clock-skew loop where N concurrent callers all see the token as
-// "about to expire" and all hit Microsoft simultaneously.
-const _outlookRefreshInFlight = new Map<string, Promise<OutlookTokens>>();
-
-export async function getAuthenticatedClient(shop: string): Promise<OutlookTokens> {
-  const conn = await prisma.mailConnection.findUnique({ where: { shop } });
-  if (!conn) throw new Error("No Outlook connection for this shop");
-
-  // 120 s buffer protects against clock skew and request-in-flight expiry.
-  if (conn.tokenExpiry.getTime() > Date.now() + 120_000) {
-    return { accessToken: decrypt(conn.accessToken) };
-  }
-
-  // Coalesce concurrent refreshes for the same shop.
-  const existing = _outlookRefreshInFlight.get(shop);
-  if (existing) return existing;
-
-  const p = (async () => {
-    try {
-      const refreshed = await refreshAccessToken(decrypt(conn.refreshToken));
-      await prisma.mailConnection.update({
-        where: { shop },
-        data: {
-          accessToken: encrypt(refreshed.accessToken),
-          refreshToken: encrypt(refreshed.refreshToken),
-          tokenExpiry: refreshed.expiry,
-        },
-      });
-      return { accessToken: refreshed.accessToken };
-    } finally {
-      _outlookRefreshInFlight.delete(shop);
-    }
-  })();
-  _outlookRefreshInFlight.set(shop, p);
-  return p;
 }
 
 // Per-connection in-flight refresh promises, keyed by connection `id`.

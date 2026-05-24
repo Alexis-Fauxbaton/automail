@@ -4,7 +4,7 @@
  * a structured report — no side effects.
  */
 import prisma from "../../db.server";
-import { listZohoFoldersRaw } from "../zoho/client";
+import { listZohoFoldersByConnection } from "../zoho/client";
 import { getMailClient } from "../mail/types";
 
 export interface DiagnosisReport {
@@ -50,12 +50,12 @@ export async function runDiagnosis(shop: string): Promise<DiagnosisReport> {
     // For Zoho, list raw folders so we can see type + name
     if (conn.provider === "zoho") {
       try {
-        const folders = await listZohoFoldersRaw(shop);
+        const folders = await listZohoFoldersByConnection(conn);
         report.zohoFolders = folders;
         push(
           "list_folders",
           true,
-          `${folders.length} folders: ${folders.map((f) => `${f.folderName}[${f.folderType}]`).join(", ")}`,
+          `${folders.length} folders: ${folders.map((f: { folderName: string; folderType: string }) => `${f.folderName}[${f.folderType}]`).join(", ")}`,
         );
       } catch (err) {
         push(

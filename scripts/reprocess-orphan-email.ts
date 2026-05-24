@@ -38,9 +38,8 @@ if (orphan.canonicalThreadId) {
   process.exit(1);
 }
 
-const conn = await prisma.mailConnection.findUnique({
+const conn = await prisma.mailConnection.findFirst({
   where: { shop: orphan.shop },
-  select: { provider: true, email: true },
 });
 if (!conn) {
   console.error("No MailConnection for shop:", orphan.shop);
@@ -73,7 +72,7 @@ console.log(`Cleanup: ${cleanup.map((c, i) => `step${i}=${"count" in c ? c.count
 // and tier2 will run on the next regular sync.
 const customerEmails = new Set<string>();
 
-const client = await getMailClient(orphan.shop, conn.provider);
+const client = await getMailClient(conn);
 
 const report = {
   fetched: 0,
@@ -91,9 +90,10 @@ await ingestAndPrefilter(
   client,
   orphan.externalMessageId,
   customerEmails,
-  conn.email ?? "",
+  { mailboxAddress: conn.email ?? "", knownOutgoingAddresses: new Set<string>() },
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   report as any,
+  conn.id,
 );
 
 // Step 3: verify

@@ -1,6 +1,7 @@
 import { google, type gmail_v1 } from "googleapis";
-import { getAuthenticatedClient } from "./auth";
+import { getAuthenticatedClientByConnection } from "./auth";
 import type { MailAttachment, MailMessage } from "../mail/types";
+import type { MailConnection } from "@prisma/client";
 
 /** Files smaller than this are embedded as base64 in the DB (inlineData). */
 const INLINE_EMBED_LIMIT = 200 * 1024; // 200 KB
@@ -11,8 +12,12 @@ export type GmailMessage = MailMessage;
 // block an auto-sync worker for the OS default (often 120 s+).
 const GMAIL_REQUEST_TIMEOUT_MS = 15_000;
 
-export async function getGmailService(shop: string) {
-  const auth = await getAuthenticatedClient(shop);
+/**
+ * Build a Gmail service client from an already-fetched MailConnection.
+ * Multi-mailbox safe — uses the connection's `id` for token refresh, not `shop`.
+ */
+export async function getGmailServiceByConnection(connection: MailConnection) {
+  const auth = await getAuthenticatedClientByConnection(connection);
   return google.gmail({
     version: "v1",
     auth,
