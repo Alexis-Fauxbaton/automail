@@ -11,6 +11,7 @@ import {
   resolveCanonicalThread,
   refreshThreadStats,
   getTrueLatestMessage,
+  MailboxGoneError,
 } from "../mail/thread-resolver";
 import {
   extractAndCache,
@@ -227,7 +228,7 @@ async function _processNewEmails(
     await Promise.allSettled(
       batch.map(async (msgId) => {
         try {
-          await ingestAndPrefilter(shop, conn.provider, client, msgId, customerEmails, outgoingCtx, report);
+          await ingestAndPrefilter(shop, conn.provider, client, msgId, customerEmails, outgoingCtx, report, conn.id);
         } catch (err) {
           report.errors++;
           log.error({ err, msgId }, "Ingestion error");
@@ -370,6 +371,7 @@ export async function ingestAndPrefilter(
   customerEmails: Set<string>,
   outgoingCtx: OutgoingContext,
   report: ProcessingReport,
+  mailConnectionId: string,
 ) {
   const log = createLogger({ shop, mod: "gmail/pipeline", msgId });
   const msg: MailMessage = await client.getMessage(msgId);
@@ -386,17 +388,27 @@ export async function ingestAndPrefilter(
 
   // Resolve (or create) the canonical Thread BEFORE upserting the email,
   // so we can write canonicalThreadId atomically.
-  const { canonicalThreadId } = await resolveCanonicalThread({
-    shop,
-    provider,
-    providerThreadId: msg.threadId,
-    externalMessageId: msg.id,
-    subject: msg.subject,
-    receivedAt: msg.receivedAt,
-    rfcMessageId,
-    inReplyTo,
-    rfcReferences,
-  });
+  let canonicalThreadId: string;
+  try {
+    ({ canonicalThreadId } = await resolveCanonicalThread({
+      shop,
+      mailConnectionId,
+      provider,
+      providerThreadId: msg.threadId,
+      externalMessageId: msg.id,
+      subject: msg.subject,
+      receivedAt: msg.receivedAt,
+      rfcMessageId,
+      inReplyTo,
+      rfcReferences,
+    }));
+  } catch (err) {
+    if (err instanceof MailboxGoneError) {
+      console.warn(`[pipeline] skipping message — mailbox gone: ${err.mailConnectionId}`);
+      return;
+    }
+    throw err;
+  }
 
   const msgAttachments = msg.attachments;
   const hasAttachments = msgAttachments.length > 0;

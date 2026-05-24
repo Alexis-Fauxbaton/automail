@@ -19,6 +19,7 @@ import {
   resolveCanonicalThread,
   refreshThreadStats,
   attachProviderMapping,
+  MailboxGoneError,
 } from "./thread-resolver";
 import { extractAndCache, mergeThreadIdentifiers } from "../support/thread-identifiers";
 import { recomputeThreadState } from "../support/thread-state";
@@ -82,7 +83,7 @@ export async function runOnboardingBackfill(
   let ingested = 0;
   await runInBatches(fresh, 10, 50, async (msgId) => {
     try {
-      await ingestHistoricalMessage(shop, conn.provider, client, msgId, outgoingCtx);
+      await ingestHistoricalMessage(shop, conn.provider, client, msgId, outgoingCtx, conn.id);
       ingested++;
     } catch (err) {
       console.error("[backfill/onboarding] failed for", msgId, err);
@@ -123,7 +124,7 @@ export async function runManualBackfill(
   let ingested = 0;
   await runInBatches(fresh, 10, 50, async (msgId) => {
     try {
-      await ingestHistoricalMessage(shop, conn.provider, client, msgId, outgoingCtx);
+      await ingestHistoricalMessage(shop, conn.provider, client, msgId, outgoingCtx, conn.id);
       ingested++;
     } catch (err) {
       console.error("[backfill/manual] failed for", msgId, err);
@@ -174,6 +175,7 @@ export async function runOpportunisticThreadBackfill(
             client,
             m.id,
             outgoingCtx,
+            conn.id,
           );
           added++;
         } catch (err) {
@@ -209,6 +211,7 @@ export async function runOpportunisticThreadBackfill(
             client,
             m.id,
             outgoingCtx,
+            conn.id,
           );
           added++;
         } catch (err) {
@@ -248,6 +251,7 @@ async function ingestHistoricalMessage(
   client: MailClient,
   msgId: string,
   outgoingCtx: OutgoingContext,
+  mailConnectionId: string,
 ): Promise<void> {
   const existing = await prisma.incomingEmail.findUnique({
     where: { shop_externalMessageId: { shop, externalMessageId: msgId } },
@@ -262,17 +266,27 @@ async function ingestHistoricalMessage(
   const inReplyTo = (msg.headers["in-reply-to"] ?? "").replace(/^<|>$/g, "").trim();
   const rfcReferences = (msg.headers["references"] ?? "").trim();
 
-  const { canonicalThreadId } = await resolveCanonicalThread({
-    shop,
-    provider,
-    providerThreadId: msg.threadId,
-    externalMessageId: msg.id,
-    subject: msg.subject,
-    receivedAt: msg.receivedAt,
-    rfcMessageId,
-    inReplyTo,
-    rfcReferences,
-  });
+  let canonicalThreadId: string;
+  try {
+    ({ canonicalThreadId } = await resolveCanonicalThread({
+      shop,
+      mailConnectionId,
+      provider,
+      providerThreadId: msg.threadId,
+      externalMessageId: msg.id,
+      subject: msg.subject,
+      receivedAt: msg.receivedAt,
+      rfcMessageId,
+      inReplyTo,
+      rfcReferences,
+    }));
+  } catch (err) {
+    if (err instanceof MailboxGoneError) {
+      console.warn(`[backfill] skipping message — mailbox gone: ${err.mailConnectionId}`);
+      return;
+    }
+    throw err;
+  }
 
   // Run the free regex prefilter on historical messages so they get proper
   // tier1Result and classification badges in the UI. We never run tier 2 on
