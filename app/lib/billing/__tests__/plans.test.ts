@@ -27,7 +27,7 @@ describe('plans catalog', () => {
 
   it('trial plan grants pro-level access for 14 days', () => {
     expect(PLANS.trial.analyzedThreadsPerMonth).toBe(Infinity);
-    expect(PLANS.trial.maxMailboxes).toBe(1);
+    expect(PLANS.trial.maxMailboxes).toBe(3);
     expect(PLANS.trial.advancedDashboard).toBe(true);
     expect(PLANS.trial.dashboardMaxRangeDays).toBe(90);
     expect(PLANS.trial.durationDays).toBe(14);
