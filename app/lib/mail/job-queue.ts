@@ -80,8 +80,15 @@ export async function enqueueJob(opts: EnqueueOptions): Promise<string> {
   if (MAILBOX_SCOPED_KINDS.includes(opts.kind) && !opts.mailConnectionId) {
     throw new Error(`Job kind ${opts.kind} requires mailConnectionId`);
   }
+  // Dedup: for mailbox-scoped kinds, key by (shop, mailConnectionId, kind) so
+  // two different mailboxes of the same shop can each have one pending job of
+  // the same kind. Shop-wide kinds (recompute/reclassify) deduplicate by
+  // (shop, kind) only (mailConnectionId is null on those rows).
+  const statusFilter = { in: ["pending", "running"] };
   const existing = await prisma.syncJob.findFirst({
-    where: { shop: opts.shop, kind: opts.kind, status: { in: ["pending", "running"] } },
+    where: MAILBOX_SCOPED_KINDS.includes(opts.kind)
+      ? { shop: opts.shop, kind: opts.kind, mailConnectionId: opts.mailConnectionId ?? null, status: statusFilter }
+      : { shop: opts.shop, kind: opts.kind, status: statusFilter },
     select: { id: true },
   });
   if (existing) return existing.id;
