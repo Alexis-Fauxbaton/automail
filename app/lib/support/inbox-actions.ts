@@ -68,9 +68,9 @@ export async function handleDisconnect(params: {
   return { disconnected: true, report: null, reanalyzed: null, refined: null, stopped: false };
 }
 
-export async function handleStop(params: { shop: string }) {
+export async function handleStop(params: { shop: string; mailConnectionId: string }) {
   await prisma.mailConnection.update({
-    where: { shop: params.shop },
+    where: { id: params.mailConnectionId, shop: params.shop },
     data: { syncCancelledAt: new Date() },
   });
   return { stopped: true, report: null, disconnected: false, reanalyzed: null, refined: null };
@@ -393,13 +393,16 @@ export async function handleRefreshEmailHtml(params: {
   const { shop, emailId } = params;
   const record = await prisma.incomingEmail.findUnique({
     where: { id: emailId },
-    select: { shop: true, externalMessageId: true },
+    select: { shop: true, externalMessageId: true, mailConnectionId: true },
   });
   if (!record || record.shop !== shop) {
     return { report: null, disconnected: false, reanalyzed: null, refined: null };
   }
-  // TODO(multi-mailbox): plumb mailConnectionId from caller so we can select the right mailbox.
-  const conn = await prisma.mailConnection.findFirst({ where: { shop } });
+  // Use the email's mailConnectionId to resolve the correct connection.
+  // Fall back to any connection for legacy rows that predate the column.
+  const conn = record.mailConnectionId
+    ? await prisma.mailConnection.findUnique({ where: { id: record.mailConnectionId } })
+    : await prisma.mailConnection.findFirst({ where: { shop } });
   if (!conn) return { report: null, disconnected: false, reanalyzed: null, refined: null };
   try {
     const client = await getMailClient(conn);
