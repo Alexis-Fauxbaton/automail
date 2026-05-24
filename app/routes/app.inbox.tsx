@@ -75,6 +75,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   await requireOnboardingComplete(session.shop, request);
   const shop = session.shop;
+  const url = new URL(request.url);
+  const mailConnectionId = url.searchParams.get("mailbox") || undefined;
   const onboardingFlag = await getShopFlag(shop);
   const checklistState = deriveChecklistState({
     hasDraft: await hasGeneratedAnyDraft(shop),
@@ -100,7 +102,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   let priorContact: Record<string, { byOrder: boolean; recentReply: boolean }> = {};
   if (connection) {
     const rows = await prisma.incomingEmail.findMany({
-      where: { shop },
+      where: { shop, ...(mailConnectionId ? { mailConnectionId } : {}) },
       orderBy: { receivedAt: "desc" },
       take: 500,
       include: {
@@ -130,6 +132,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       const analyzedPerThread = await prisma.incomingEmail.findMany({
         where: {
           shop,
+          ...(mailConnectionId ? { mailConnectionId } : {}),
           canonicalThreadId: { in: canonicalIds },
           analysisResult: { not: null },
         },
@@ -184,7 +187,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     // canonicalIds query above because there are no IncomingEmail rows
     // pointing at them anymore).
     const tombstoneThreads = await prisma.thread.findMany({
-      where: { shop, redactedAt: { not: null } },
+      where: { shop, ...(mailConnectionId ? { mailConnectionId } : {}), redactedAt: { not: null } },
       orderBy: { redactedAt: "desc" },
       take: 200,
       select: {
@@ -271,6 +274,28 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   });
   const syncInProgress = !!activeHeavyJob;
 
+  // Per-mailbox metadata — consumed by the mailbox filter UI (Phase 8).
+  const connections = await prisma.mailConnection.findMany({
+    where: { shop },
+    select: {
+      id: true,
+      email: true,
+      provider: true,
+      autoSyncEnabled: true,
+      lastSyncError: true,
+      lastSyncAt: true,
+    },
+  });
+
+  const threadCountsRaw = await prisma.thread.groupBy({
+    by: ["mailConnectionId"],
+    where: { shop, messages: { some: {} }, supportNature: { not: "non_support" } },
+    _count: { _all: true },
+  });
+  const threadCountsByMailbox = Object.fromEntries(
+    threadCountsRaw.map((r) => [r.mailConnectionId, r._count._all]),
+  );
+
   return {
     connected: !!connection,
     connectionId: connection?.id ?? null,
@@ -288,6 +313,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     priorContact,
     syncInProgress,
     onboardingChecklist,
+    connections: connections.map((c) => ({
+      ...c,
+      lastSyncAt: c.lastSyncAt?.toISOString() ?? null,
+    })),
+    threadCountsByMailbox,
+    mailConnectionId: mailConnectionId ?? null,
   };
 };
 
