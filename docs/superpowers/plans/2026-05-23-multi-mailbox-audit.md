@@ -251,9 +251,9 @@ These use `mailConnection.findUnique({ where: { shop } })` which will **throw a 
 
 ## Resolution status
 
-- [ ] Task 4.2 — dashboard-stats.ts (SHOP-WIDE entries that need optional mailbox filter param)
-- [ ] Task 4.3 — inbox loader (`app/routes/app.inbox.tsx:103`) — AMBIGUOUS → add optional mailbox filter
-- [ ] Task 4.4 — `handleResync` (`app/lib/support/inbox-actions.ts:91,117,128,141`) — MAILBOX-SCOPED
-- [ ] Task 4.5 — `handleSync` / `handleBackfill` / `handleToggleAutoSync` / `handleStop` (`app/lib/support/inbox-actions.ts:73,226,240,356`) — MAILBOX-SCOPED
-- [ ] Task 4.6 — remaining MAILBOX-SCOPED entries: gmail/pipeline.ts, gmail/diagnose.ts, mail/backfill.ts, support/refresh-thread-analysis.ts, support/draft-usage-heuristic.ts, mail/aliases.ts, routes/api.incoming-attachment.tsx, routes/api.zoho-inline.tsx, routes/mail-auth.tsx, auth modules (gmail/outlook/zoho), zoho/client.ts, job-queue.ts dedup fix
+- [x] Task 4.2 — dashboard-stats.ts (SHOP-WIDE entries that need optional mailbox filter param) ✅ 818a493
+- [x] Task 4.3 — inbox loader (`app/routes/app.inbox.tsx:103`) — AMBIGUOUS → add optional mailbox filter ✅ 2753793
+- [x] Task 4.4 — `handleResync` (`app/lib/support/inbox-actions.ts:91,117,128,141`) — MAILBOX-SCOPED ✅ 58adc01
+- [x] Task 4.5 — `handleSync` / `handleBackfill` / `handleToggleAutoSync` (`app/lib/support/inbox-actions.ts:226,240`) — MAILBOX-SCOPED ✅ 23c8576
+- [x] Task 4.6 — remaining MAILBOX-SCOPED entries: auth modules (gmail/outlook/zoho), zoho/client.ts, gmail/client.ts, aliases.ts, diagnose.ts, api.incoming-attachment.tsx, api.zoho-inline.tsx, mail-auth.tsx, job-queue.ts dedup, inbox-actions handleStop + handleRefreshEmailHtml, backfill.ts, auto-sync.ts, refresh-thread-analysis.ts, gmail/pipeline.ts ✅ 2910279 d52b347 391e6fc e613bdb
 - [ ] Task 4.7 — verification
