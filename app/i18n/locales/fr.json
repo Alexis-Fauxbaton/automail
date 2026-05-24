@@ -389,7 +389,13 @@
     "signalRepliedElsewhere": "Risque de doublon : réponse récente ailleurs",
     "signalPriorContactOrder": "À vérifier : commande déjà discutée",
     "signalAmbiguousOrder": "Commande à confirmer ({{count}} candidates)",
-    "backToList": "Retour à la liste"
+    "backToList": "Retour à la liste",
+    "allMailboxes": "Toutes les boîtes ({{count}})",
+    "mailboxFilterLabel": "Boîte",
+    "mailboxCount_one": "{{count}} boîte",
+    "mailboxCount_other": "{{count}} boîtes",
+    "errorCount_one": "{{count}} erreur",
+    "errorCount_other": "{{count}} erreurs"
   },
   "login": {
     "heading": "Connexion",

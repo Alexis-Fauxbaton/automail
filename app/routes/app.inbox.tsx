@@ -62,6 +62,9 @@ import {
   CheckCircleIcon,
   MailIcon,
 } from "../components/ui";
+import MailboxBadge from "../components/inbox/MailboxBadge";
+import MailboxFilter from "../components/inbox/MailboxFilter";
+import MailboxIndicator from "../components/inbox/MailboxIndicator";
 
 // Tracks email IDs for which an HTML body refresh was already submitted
 // this browser session, so we don't re-fetch on every remount.
@@ -596,6 +599,7 @@ interface SerializedEmail {
   externalMessageId: string;
   threadId: string;
   canonicalThreadId: string | null;
+  mailConnectionId: string;
   fromAddress: string;
   fromName: string;
   subject: string;
@@ -634,6 +638,7 @@ function serializeEmail(row: {
   externalMessageId: string;
   threadId: string;
   canonicalThreadId: string | null;
+  mailConnectionId: string;
   fromAddress: string;
   fromName: string;
   subject: string;
@@ -687,6 +692,7 @@ function serializeEmail(row: {
     externalMessageId: row.externalMessageId,
     threadId: row.threadId,
     canonicalThreadId: row.canonicalThreadId,
+    mailConnectionId: row.mailConnectionId,
     fromAddress: row.fromAddress,
     fromName: decodeHtmlEntities(row.fromName),
     subject: decodeHtmlEntities(row.subject),
@@ -3378,7 +3384,10 @@ export default function InboxPage() {
     <div className="ui-inbox-root">
       {/* SyncSuspendedBanner moved to the app-shell top strip (app.tsx) so it
           aligns with TrialBanner / QuotaBanner on the right edge. */}
-      <div className="ui-inbox-heading"><h1>{t("nav.emailInbox")}</h1></div>
+      <div className="ui-inbox-heading" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <h1 style={{ margin: 0 }}>{t("nav.emailInbox")}</h1>
+        <MailboxIndicator connections={loaderData.connections} />
+      </div>
 
       {/* Onboarding checklist (auto-hides when dismissed or complete) */}
       <div className="ui-inbox-section">
@@ -3494,20 +3503,27 @@ export default function InboxPage() {
                 <ClearAnalyzeQueueButton count={bucketCounts.to_analyze} />
               )}
 
-              {/* Secondary filters */}
-              <FiltersBar
-                filters={filters}
-                onChange={setFilters}
-                intentOptions={availableIntents}
-                onReset={() =>
-                  setFilters({
-                    search: "",
-                    orderLinked: "any",
-                    nature: "all",
-                    intent: "",
-                  })
-                }
-              />
+              {/* Secondary filters + mailbox filter */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <FiltersBar
+                  filters={filters}
+                  onChange={setFilters}
+                  intentOptions={availableIntents}
+                  onReset={() =>
+                    setFilters({
+                      search: "",
+                      orderLinked: "any",
+                      nature: "all",
+                      intent: "",
+                    })
+                  }
+                />
+                <MailboxFilter
+                  connections={loaderData.connections}
+                  countsByMailbox={loaderData.threadCountsByMailbox}
+                  totalCount={Object.values(loaderData.threadCountsByMailbox).reduce((a, b) => a + b, 0)}
+                />
+              </div>
 
               {/* Thread list + detail split.
                   IMPORTANT: use `minmax(0, 1fr)` instead of `1fr` even in the
@@ -3535,28 +3551,41 @@ export default function InboxPage() {
                       <s-paragraph>{t("inbox.noEmailsMatch")}</s-paragraph>
                     </s-box>
                   )}
-                  {filteredThreadMeta.map(({ thread, state, previousContact }) =>
-                    state?.redactedAt ? (
+                  {filteredThreadMeta.map(({ thread, state, previousContact }) => {
+                    const mailConn = loaderData.connections.find(
+                      (c) => c.id === thread.latest.mailConnectionId,
+                    );
+                    return state?.redactedAt ? (
                       <TombstoneCard
                         key={thread.threadId}
                         redactedAt={state.redactedAt}
                         reason={state.redactedReason}
                       />
                     ) : (
-                      <ThreadCard
-                        key={thread.threadId}
-                        thread={thread}
-                        threadState={state}
-                        isSelected={expandedThreadId === thread.threadId}
-                        connectedEmail={loaderData.connectedEmail}
-                        previousContact={previousContact}
-                        onSelect={toggleExpandedThreadId}
-                        onOrderClick={handleOrderClick}
-                        onFilterClick={handleFilterClick}
-                        onBucketClick={handleBucketClick}
-                      />
-                    ),
-                  )}
+                      <div key={thread.threadId} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        {mailConn && loaderData.connections.length > 1 && (
+                          <div>
+                            <MailboxBadge
+                              email={mailConn.email}
+                              provider={mailConn.provider}
+                              paused={!mailConn.autoSyncEnabled}
+                            />
+                          </div>
+                        )}
+                        <ThreadCard
+                          thread={thread}
+                          threadState={state}
+                          isSelected={expandedThreadId === thread.threadId}
+                          connectedEmail={loaderData.connectedEmail}
+                          previousContact={previousContact}
+                          onSelect={toggleExpandedThreadId}
+                          onOrderClick={handleOrderClick}
+                          onFilterClick={handleFilterClick}
+                          onBucketClick={handleBucketClick}
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
 
                 {/* Right: thread detail panel (sticky).

@@ -74,6 +74,21 @@ async function resolveOneFulfillment(
         last17trackAttemptAt: attemptAt,
       };
     }
+    if (result && result.state === "quota_exhausted") {
+      // Our 17track plan ran out for the period. The API is healthy, retry
+      // won't help until the next billing cycle. Fall back to Shopify-only
+      // tracking and mark the attempt as "skipped" so the adaptive retry
+      // logic doesn't burn 17track quota uselessly trying again soon.
+      console.warn(`[tracking] 17track quota exhausted for ${trackingNumber}; using Shopify fallback`);
+      const base = resolveTrackingForFulfillment(fulfillment);
+      return {
+        ...base,
+        fulfillmentIndex,
+        lineItems,
+        last17trackAttempt: "skipped",
+        last17trackAttemptAt: attemptAt,
+      };
+    }
     // result === null → 17track failed (HTTP error, breaker open, no API key, or unexpected rejection).
     // Three buckets:
     //   - no/placeholder API key → "skipped" (never retry faster)

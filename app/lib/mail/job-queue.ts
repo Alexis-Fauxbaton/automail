@@ -264,6 +264,28 @@ export async function markJobDone(id: string): Promise<void> {
   });
 }
 
+/**
+ * Errors that should NOT be retried — they mean "this will never succeed
+ * without merchant intervention". Going straight to `status='error'` lets
+ * the inbox UI surface a "reconnect mailbox" CTA instead of silently
+ * retrying for hours before giving up.
+ *
+ * Detection patterns (matched against the error message):
+ *   - `MAILBOX_REVOKED` / `Mailbox revoked` → MailboxRevokedError marker
+ *   - `invalid_grant` / `invalid_client` → OAuth refresh token revoked
+ *   - HTTP 401 / 403 in the message → auth-level rejection
+ *
+ * Anything else is treated as transient (network, 5xx, timeout, throttle).
+ */
+function isPermanentFailure(message: string): boolean {
+  return (
+    /MAILBOX_REVOKED|Mailbox revoked/i.test(message) ||
+    /invalid_grant|invalid_client/i.test(message) ||
+    /\bHTTP 40[13]\b/.test(message) ||
+    /\b40[13] /.test(message)
+  );
+}
+
 export async function markJobFailed(id: string, err: unknown, knownAttempts?: number): Promise<void> {
   const message = err instanceof Error ? err.message : String(err);
   let attempts: number;
@@ -276,7 +298,11 @@ export async function markJobFailed(id: string, err: unknown, knownAttempts?: nu
     });
     attempts = job?.attempts ?? 0;
   }
-  const exhausted = attempts >= MAX_ATTEMPTS;
+  // Permanent failures (revoked token, 401/403) short-circuit retries
+  // and go straight to status='error'. The merchant sees a reconnect
+  // banner; ops doesn't waste retries on a dead credential.
+  const permanent = isPermanentFailure(message);
+  const exhausted = permanent || attempts >= MAX_ATTEMPTS;
   // Exponential backoff: attempt N → delay 2^(N-1) × BASE_BACKOFF_MS.
   const backoffMs = Math.min(
     Math.pow(2, Math.max(0, attempts - 1)) * BASE_BACKOFF_MS,

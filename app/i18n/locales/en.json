@@ -389,7 +389,13 @@
     "signalRepliedElsewhere": "Duplicate risk: recent reply elsewhere",
     "signalPriorContactOrder": "Worth checking: order discussed before",
     "signalAmbiguousOrder": "Order to confirm ({{count}} candidates)",
-    "backToList": "Back to inbox"
+    "backToList": "Back to inbox",
+    "allMailboxes": "All mailboxes ({{count}})",
+    "mailboxFilterLabel": "Mailbox",
+    "mailboxCount_one": "{{count}} mailbox",
+    "mailboxCount_other": "{{count}} mailboxes",
+    "errorCount_one": "{{count}} error",
+    "errorCount_other": "{{count}} errors"
   },
   "login": {
     "heading": "Log in",
