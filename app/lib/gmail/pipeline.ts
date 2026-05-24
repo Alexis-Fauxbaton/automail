@@ -193,7 +193,7 @@ async function _processNewEmails(
   // Load the outgoing-detection context once per pass so each ingest can
   // reliably tag merchant replies (aliases included) as `outgoing` even when
   // the provider didn't expose a SENT label.
-  const outgoingCtx = await loadOutgoingContext(shop, conn.email);
+  const outgoingCtx = await loadOutgoingContext(conn);
 
   // PRE-PASS-1: backfill closed-thread intent badges BEFORE Pass 1 mutates
   // operationalState. During a resync (historyId=null), all emails are deleted

@@ -79,7 +79,7 @@ export async function runOnboardingBackfill(
   const existingSet = new Set(existing.map((e) => e.externalMessageId));
   const fresh = messageIds.filter((id) => !existingSet.has(id));
 
-  const outgoingCtx = await loadOutgoingContext(shop, conn.email);
+  const outgoingCtx = await loadOutgoingContext(conn);
   let ingested = 0;
   await runInBatches(fresh, 10, 50, async (msgId) => {
     try {
@@ -120,7 +120,7 @@ export async function runManualBackfill(
   const existingSet = new Set(existing.map((e) => e.externalMessageId));
   const fresh = messageIds.filter((id) => !existingSet.has(id));
 
-  const outgoingCtx = await loadOutgoingContext(shop, conn.email);
+  const outgoingCtx = await loadOutgoingContext(conn);
   let ingested = 0;
   await runInBatches(fresh, 10, 50, async (msgId) => {
     try {
@@ -161,7 +161,7 @@ export async function runOpportunisticThreadBackfill(
   });
   const localSet = new Set(localIds.map((r) => r.externalMessageId));
 
-  const outgoingCtx = await loadOutgoingContext(thread.shop, conn.email);
+  const outgoingCtx = await loadOutgoingContext(conn);
   let added = 0;
   for (const mapping of thread.providerIds) {
     try {
