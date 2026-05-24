@@ -199,68 +199,69 @@ async function tick(): Promise<void> {
 }
 
 /**
- * For every shop whose `lastSyncAt` is older than its
- * `autoSyncIntervalMinutes`, enqueue one "sync" job (de-dup is handled
- * inside `enqueueJob`, so a pending/running job blocks repeats).
+ * For every mailbox whose `lastSyncAt` is older than its
+ * `autoSyncIntervalMinutes`, enqueue one "sync" job per mailbox.
+ * The due-time filter is pushed into SQL (resolves DB-M5) so no
+ * JS-side per-connection fine-grained check is needed.
+ * Entitlement check is deferred to runJob so a slow Shopify response
+ * on one shop never serialises the scheduling loop for other shops.
  */
-export async function enqueueDuePeriodicSyncs(): Promise<void> {
+export async function enqueueDuePeriodicSyncs(now: Date = new Date()): Promise<number> {
   try {
-  const now = new Date();
-  // Coarse pre-filter: only fetch connections whose lastSyncAt is null OR
-  // older than 1 minute (the minimum sync interval). This cuts fetched rows
-  // in large deployments without changing correctness — the per-connection
-  // fine-grained check below remains the authoritative gate.
-  const oneMinuteAgo = new Date(now.getTime() - 60_000);
-  const connections = await prisma.mailConnection.findMany({
-    where: {
-      autoSyncEnabled: true,
-      OR: [
-        { lastSyncAt: null },
-        { lastSyncAt: { lte: oneMinuteAgo } },
-      ],
-    },
-    select: {
-      id: true,
-      shop: true,
-      lastSyncAt: true,
-      autoSyncIntervalMinutes: true,
-      onboardingBackfillDoneAt: true,
-      onboardingBackfillDays: true,
-    },
-  });
+  // Push the due-time filter into SQL: only mailboxes whose
+  // (lastSyncAt + autoSyncIntervalMinutes minutes) <= now.
+  // NULL lastSyncAt means "never synced" → always due.
+  const dueMailboxes = await prisma.$queryRaw<
+    { id: string; shop: string }[]
+  >`
+    SELECT id, shop
+    FROM "MailConnection"
+    WHERE "autoSyncEnabled" = true
+      AND ("lastSyncAt" IS NULL OR "lastSyncAt" + ("autoSyncIntervalMinutes" * INTERVAL '1 minute') <= ${now})
+  `;
+
+  if (dueMailboxes.length === 0) return 0;
 
   // Collect shops that have an active Shopify offline session.
   // Offline sessions (isOnline: false) are the durable shop-level tokens.
-  const shopList = connections.map((c) => c.shop);
-  const activeSessions = shopList.length > 0
-    ? await prisma.session.findMany({
-        where: {
-          shop: { in: shopList },
-          isOnline: false,
-          OR: [
-            { expires: null },
-            { expires: { gt: new Date() } },
-          ],
-        },
-        select: { shop: true },
-      })
-    : [];
+  const shopList = [...new Set(dueMailboxes.map((m) => m.shop))];
+  const activeSessions = await prisma.session.findMany({
+    where: {
+      shop: { in: shopList },
+      isOnline: false,
+      OR: [
+        { expires: null },
+        { expires: { gt: new Date() } },
+      ],
+    },
+    select: { shop: true },
+  });
   const activeShops = new Set(activeSessions.map((s) => s.shop));
 
-  for (const c of connections) {
-    if (!activeShops.has(c.shop)) continue; // no valid Shopify session
-    const intervalMs = Math.max(1, c.autoSyncIntervalMinutes) * 60_000;
-    const due =
-      !c.lastSyncAt || now.getTime() - c.lastSyncAt.getTime() >= intervalMs;
-    if (!due) continue;
-    // Entitlement check is deferred to runJob so a slow Shopify response
-    // on one shop never serialises the scheduling loop for other shops.
-    await enqueueJob({ shop: c.shop, kind: "sync", mailConnectionId: c.id }).catch((err) =>
-      console.error(`[auto-sync] enqueue periodic for ${c.shop} failed:`, err),
+  let enqueued = 0;
+  for (const m of dueMailboxes) {
+    if (!activeShops.has(m.shop)) continue; // no valid Shopify session
+
+    // Per-mailbox de-dup: enqueueJob's built-in de-dup is shop-scoped,
+    // so we check per mailConnectionId to avoid blocking sibling mailboxes.
+    const existing = await prisma.syncJob.count({
+      where: {
+        mailConnectionId: m.id,
+        kind: "sync",
+        status: { in: ["pending", "running"] },
+      },
+    });
+    if (existing > 0) continue;
+
+    await enqueueJob({ shop: m.shop, kind: "sync", mailConnectionId: m.id }).catch((err) =>
+      console.error(`[auto-sync] enqueue periodic for ${m.shop}/${m.id} failed:`, err),
     );
+    enqueued++;
   }
+  return enqueued;
   } catch (err) {
     console.error("[auto-sync] enqueueDuePeriodicSyncs failed:", err);
+    return 0;
   }
 }
 
