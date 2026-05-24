@@ -194,8 +194,12 @@ export async function handleDismissThreadFromAnalyze(params: { shop: string; can
   return { dismissedCount: result.count, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
 }
 
-export async function handleSync(params: { shop: string; admin: AdminGraphqlClient }) {
-  const { shop, admin } = params;
+export async function handleSync(params: {
+  shop: string;
+  admin: AdminGraphqlClient;
+  mailConnectionId?: string; // if provided, sync only that mailbox; otherwise sync all
+}) {
+  const { shop, admin, mailConnectionId } = params;
   // Mirror auto-sync's per-conversation billing semantics: when the shop is
   // suspended (quota exceeded or trial expired) the pipeline still runs but
   // Tier 3 (intent + Shopify + tracking + draft) is skipped — Tier 1 + 2
@@ -204,6 +208,11 @@ export async function handleSync(params: { shop: string; admin: AdminGraphqlClie
   // and is skipped in that case.
   const ent = await resolveEntitlements({ shop, admin });
   const tier3Allowed = !ent.isSyncSuspended;
+
+  const connections = mailConnectionId
+    ? await prisma.mailConnection.findMany({ where: { shop, id: mailConnectionId } })
+    : await prisma.mailConnection.findMany({ where: { shop, autoSyncEnabled: true } });
+
   // The mail provider (Gmail / Outlook / Zoho) can throw — typically when the
   // OAuth refresh token is invalidated (user revoked, app secret rotated,
   // token TTL exceeded). processNewEmails already records the message in
@@ -211,12 +220,32 @@ export async function handleSync(params: { shop: string; admin: AdminGraphqlClie
   // instead of letting it propagate as a 500 (which would render a generic
   // "Erreur applicative" page that swallows the whole inbox).
   let report = null as Awaited<ReturnType<typeof processNewEmails>> | null;
-  let syncError: string | null = null;
-  try {
-    report = await processNewEmails(shop, admin, { tier3Allowed });
-  } catch (err) {
-    syncError = err instanceof Error ? err.message : String(err);
+  let syncError: string | null = connections.length === 0 ? "No mail connection for this shop" : null;
+  for (const connection of connections) {
+    try {
+      const r = await processNewEmails(shop, admin, { tier3Allowed, connection });
+      // Merge reports across mailboxes: sum numeric counters, combine errors,
+      // preserve cancelled=true if any mailbox was cancelled.
+      if (!report) {
+        report = { ...r };
+      } else {
+        report = {
+          total: report.total + r.total,
+          alreadyProcessed: report.alreadyProcessed + r.alreadyProcessed,
+          filtered: report.filtered + r.filtered,
+          supportClient: report.supportClient + r.supportClient,
+          uncertain: report.uncertain + r.uncertain,
+          nonClient: report.nonClient + r.nonClient,
+          errors: report.errors + r.errors,
+          cancelled: report.cancelled || r.cancelled,
+        };
+      }
+    } catch (err) {
+      syncError = err instanceof Error ? err.message : String(err);
+      break;
+    }
   }
+
   let staleRefresh = null as Awaited<ReturnType<typeof refreshStaleAnalysesForShop>> | null;
   if (tier3Allowed && !syncError) {
     try {
@@ -230,12 +259,14 @@ export async function handleSync(params: { shop: string; admin: AdminGraphqlClie
   return { report, syncCompleted: !syncError, syncError, disconnected: false, reanalyzed: null, refined: null, stopped: false, staleRefresh, syncSuspended: !tier3Allowed };
 }
 
-export async function handleBackfill(params: { shop: string; days: number }) {
-  const { shop, days } = params;
+export async function handleBackfill(params: {
+  shop: string;
+  mailConnectionId: string;
+  days: number;
+}) {
+  const { shop, mailConnectionId, days } = params;
   const afterDate = new Date(Date.now() - Math.max(1, days) * 24 * 3600_000);
-  // TODO(multi-mailbox): plumb mailConnectionId from caller instead of resolving first match
-  const backfillConn = await prisma.mailConnection.findFirst({ where: { shop }, select: { id: true } });
-  await enqueueJob({ shop, kind: "backfill", mailConnectionId: backfillConn?.id, params: { afterDateIso: afterDate.toISOString() } });
+  await enqueueJob({ shop, kind: "backfill", mailConnectionId, params: { afterDateIso: afterDate.toISOString() } });
   return {
     syncStarted: true,
     report: null,
@@ -246,9 +277,13 @@ export async function handleBackfill(params: { shop: string; days: number }) {
   };
 }
 
-export async function handleToggleAutoSync(params: { shop: string; enable: boolean }) {
+export async function handleToggleAutoSync(params: {
+  shop: string;
+  mailConnectionId: string;
+  enable: boolean;
+}) {
   await prisma.mailConnection.update({
-    where: { shop: params.shop },
+    where: { id: params.mailConnectionId, shop: params.shop },
     data: { autoSyncEnabled: params.enable },
   });
   return { report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };

@@ -577,7 +577,16 @@ async function runSyncForShop(
       console.error(`[auto-sync] shop=${shop} onboarding backfill failed:`, err);
     }
   }
-  const report = await processNewEmails(shop, admin, { tier3Allowed, bypassCatchupGate });
+  // Resolve the MailConnection to pass to processNewEmails. When mailConnectionId
+  // is provided (per-mailbox job), use it; otherwise fall back to the first
+  // autoSyncEnabled connection for the shop (original single-mailbox behaviour).
+  const connection = opts.mailConnectionId
+    ? await prisma.mailConnection.findUnique({ where: { id: opts.mailConnectionId } })
+    : await prisma.mailConnection.findFirst({ where: { shop, autoSyncEnabled: true } });
+  if (!connection) {
+    throw new Error(`No mail connection found for shop ${shop}`);
+  }
+  const report = await processNewEmails(shop, admin, { tier3Allowed, bypassCatchupGate, connection });
   console.log(
     `[auto-sync] shop=${shop} fetched=${report.total} support=${report.supportClient} errors=${report.errors} tier3Allowed=${tier3Allowed}`,
   );

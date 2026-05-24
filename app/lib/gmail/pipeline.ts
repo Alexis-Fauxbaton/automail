@@ -1,4 +1,5 @@
 import prisma from "../../db.server";
+import type { MailConnection } from "@prisma/client";
 import type { AdminGraphqlClient } from "../support/shopify/order-search";
 import { analyzeSupportEmail } from "../support/orchestrator";
 import type { MailAttachment, MailClient, MailMessage } from "../mail/types";
@@ -56,7 +57,7 @@ export { getMailClient };
 export async function processNewEmails(
   shop: string,
   admin: AdminGraphqlClient,
-  options?: { tier3Allowed?: boolean; bypassCatchupGate?: boolean },
+  opts: { tier3Allowed: boolean; connection: MailConnection; bypassCatchupGate?: boolean },
 ): Promise<ProcessingReport> {
   const report: ProcessingReport = {
     total: 0,
@@ -71,10 +72,7 @@ export async function processNewEmails(
 
   const syncStartedAt = new Date();
   const log = createLogger({ shop, mod: "gmail/pipeline" });
-  // Default true: pre-billing-suspension callers (tests, internal shops,
-  // healthy plans) get the full pipeline. Auto-sync and handleSync pass
-  // `false` when the shop is suspended so Tier 3 is skipped per-shop.
-  const tier3Allowed = options?.tier3Allowed ?? true;
+  const tier3Allowed = opts.tier3Allowed;
   // Internal shops bypass the catch-up gate: they have no quota
   // ceiling, so the gate's only purpose (protect quota across a resume
   // from suspension) doesn't apply, and having Tier 2/3 silently skipped
@@ -84,21 +82,21 @@ export async function processNewEmails(
     select: { isInternal: true },
   }).catch(() => null);
   const bypassCatchupGate =
-    (options?.bypassCatchupGate ?? false) || internalFlag?.isInternal === true;
+    (opts.bypassCatchupGate ?? false) || internalFlag?.isInternal === true;
 
   // Clear any previous top-level error and cancel flag at the start of a new sync.
   await prisma.mailConnection.update({
-    where: { shop },
+    where: { id: opts.connection.id },
     data: { lastSyncError: null, syncCancelledAt: null },
   }).catch(() => { /* ignore if connection gone */ });
 
   try {
-    return await _processNewEmails(shop, admin, report, syncStartedAt, tier3Allowed, bypassCatchupGate);
+    return await _processNewEmails(shop, admin, report, syncStartedAt, tier3Allowed, bypassCatchupGate, opts.connection);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error({ err }, "Top-level sync error");
     await prisma.mailConnection.update({
-      where: { shop },
+      where: { id: opts.connection.id },
       data: { lastSyncError: msg.slice(0, 500) },
     }).catch(() => {});
     throw err;
@@ -112,13 +110,9 @@ async function _processNewEmails(
   syncStartedAt: Date,
   tier3Allowed: boolean,
   bypassCatchupGate: boolean,
+  conn: MailConnection,
 ): Promise<ProcessingReport> {
   const log = createLogger({ shop, mod: "gmail/pipeline" });
-  // TODO(multi-mailbox): plumb mailConnectionId from caller so we can select the right mailbox.
-  // For now, fall back to findFirst which works for the current single-mailbox-per-shop state.
-  const conn = await prisma.mailConnection.findFirst({ where: { shop } });
-  if (!conn) throw new Error("No mail connection for this shop");
-
   const client = await getMailClient(conn);
 
   // Determine which messages to fetch
@@ -171,7 +165,7 @@ async function _processNewEmails(
   if (newMessageIds.length === 0) {
     // Still update sync cursor
     await prisma.mailConnection.update({
-      where: { shop },
+      where: { id: conn.id },
       data: {
         lastSyncAt: new Date(),
         ...(newCursor ? { historyId: newCursor } : {}),
@@ -219,7 +213,7 @@ async function _processNewEmails(
   // ---------------------------------------------------------------------
   const INGESTION_BATCH_SIZE = 10;
   for (let i = 0; i < newMessageIds.length; i += INGESTION_BATCH_SIZE) {
-    if (i > 0 && (await isCancelled(shop, syncStartedAt))) {
+    if (i > 0 && (await isCancelled(conn.id, syncStartedAt))) {
       log.info({ processed: i }, "Sync cancelled during ingestion");
       report.cancelled = true;
       break;
@@ -264,7 +258,7 @@ async function _processNewEmails(
     const threadsToClassify = await pickThreadsForClassification(shop, newMessageIds);
     const CLASSIFY_BATCH_SIZE = 5;
     for (let i = 0; i < threadsToClassify.length; i += CLASSIFY_BATCH_SIZE) {
-      if (i > 0 && (await isCancelled(shop, syncStartedAt))) {
+      if (i > 0 && (await isCancelled(conn.id, syncStartedAt))) {
         log.info({ processed: i }, "Sync cancelled during classification");
         report.cancelled = true;
         break;
@@ -300,7 +294,7 @@ async function _processNewEmails(
 
   // Update sync cursor
   await prisma.mailConnection.update({
-    where: { shop },
+    where: { id: conn.id },
     data: {
       lastSyncAt: new Date(),
       ...(newCursor ? { historyId: newCursor } : {}),
@@ -344,18 +338,18 @@ export async function persistEmailAttachments(
 const cancelledCache = new Map<string, { result: boolean; checkedAt: number }>();
 const CANCEL_CHECK_TTL_MS = 15_000;
 
-async function isCancelled(shop: string, syncStartedAt: Date): Promise<boolean> {
+async function isCancelled(connectionId: string, syncStartedAt: Date): Promise<boolean> {
   const now = Date.now();
-  const cached = cancelledCache.get(shop);
+  const cached = cancelledCache.get(connectionId);
   if (cached && now - cached.checkedAt < CANCEL_CHECK_TTL_MS) {
     return cached.result;
   }
   const fresh = await prisma.mailConnection.findUnique({
-    where: { shop },
+    where: { id: connectionId },
     select: { syncCancelledAt: true },
   });
   const result = !!(fresh?.syncCancelledAt && fresh.syncCancelledAt > syncStartedAt);
-  cancelledCache.set(shop, { result, checkedAt: now });
+  cancelledCache.set(connectionId, { result, checkedAt: now });
   return result;
 }
 

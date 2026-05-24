@@ -382,17 +382,26 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "sync") {
-    return handleSync({ shop, admin });
+    const syncMailConnectionId = formData.get("mailConnectionId") as string | null || undefined;
+    return handleSync({ shop, admin, mailConnectionId: syncMailConnectionId });
   }
 
   if (intent === "backfill") {
     const days = Number(formData.get("days") ?? "60");
-    return handleBackfill({ shop, days });
+    const backfillMailConnectionId = formData.get("mailConnectionId") as string | null;
+    if (!backfillMailConnectionId) {
+      return { error: "missing_mailConnectionId", report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
+    }
+    return handleBackfill({ shop, mailConnectionId: backfillMailConnectionId, days });
   }
 
   if (intent === "toggleAutoSync") {
     const enable = formData.get("enable") === "1";
-    return handleToggleAutoSync({ shop, enable });
+    const toggleMailConnectionId = formData.get("mailConnectionId") as string | null;
+    if (!toggleMailConnectionId) {
+      return { error: "missing_mailConnectionId", report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
+    }
+    return handleToggleAutoSync({ shop, mailConnectionId: toggleMailConnectionId, enable });
   }
 
   if (intent === "diagnose") {
@@ -1080,6 +1089,7 @@ function ConnectionCard({
           </Form>
           <Form method="post">
             <input type="hidden" name="_action" value="toggleAutoSync" />
+            <input type="hidden" name="mailConnectionId" value={connectionId ?? ""} />
             <input type="hidden" name="enable" value={autoSyncEnabled ? "0" : "1"} />
             <s-button variant="tertiary" type="submit">
               {autoSyncEnabled ? t("inbox.pauseAutoSync") : t("inbox.resumeAutoSync")}
@@ -1097,6 +1107,7 @@ function ConnectionCard({
           <s-stack direction="inline" gap="small-300">
             <Form method="post">
               <input type="hidden" name="_action" value="backfill" />
+              <input type="hidden" name="mailConnectionId" value={connectionId ?? ""} />
               <input type="hidden" name="days" value="60" />
               <s-button variant="tertiary" type="submit" {...(isSyncing ? { loading: true } : {})}>
                 {t("inbox.backfill")}
