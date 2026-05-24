@@ -4,8 +4,8 @@
  * a structured report — no side effects.
  */
 import prisma from "../../db.server";
-import { createZohoClient, listZohoFoldersRaw } from "../zoho/client";
-import { createGmailClient } from "./mail-client";
+import { listZohoFoldersRaw } from "../zoho/client";
+import { getMailClient } from "../mail/types";
 
 export interface DiagnosisReport {
   provider: string;
@@ -27,7 +27,8 @@ export async function runDiagnosis(shop: string): Promise<DiagnosisReport> {
   const push = (step: string, ok: boolean, detail: string) =>
     steps.push({ step, ok, detail });
 
-  const conn = await prisma.mailConnection.findUnique({ where: { shop } });
+  // TODO(multi-mailbox): plumb mailConnectionId from caller so we can select the right mailbox.
+  const conn = await prisma.mailConnection.findFirst({ where: { shop } });
   if (!conn) {
     return {
       provider: "none",
@@ -65,10 +66,7 @@ export async function runDiagnosis(shop: string): Promise<DiagnosisReport> {
       }
     }
 
-    const client =
-      conn.provider === "zoho"
-        ? await createZohoClient(shop)
-        : await createGmailClient(shop);
+    const client = await getMailClient(conn);
     push("create_client", true, `Created ${conn.provider} client`);
 
     const afterDate = new Date(Date.now() - 30 * 24 * 3600_000);

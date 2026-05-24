@@ -25,9 +25,9 @@ import {
   getThreadResolution,
 } from "./thread-identifiers";
 import type { MailClient } from "../mail/types";
+import { getMailClient } from "../mail/types";
 import {
   buildThreadContext,
-  getMailClient,
 } from "../gmail/pipeline";
 
 export interface RefreshThreadAnalysisOptions {
@@ -81,16 +81,16 @@ export async function refreshThreadAnalysis(
     }
   }
 
-  // Load mail connection for thread context building
-  const conn = await prisma.mailConnection.findUnique({
+  // TODO(multi-mailbox): plumb mailConnectionId from caller so we can select the right mailbox.
+  // Load mail connection for thread context building.
+  const conn = await prisma.mailConnection.findFirst({
     where: { shop },
-    select: { email: true, provider: true },
   });
 
   let client: MailClient | undefined;
   try {
     if (conn) {
-      client = await getMailClient(shop, conn.provider);
+      client = await getMailClient(conn);
     }
   } catch (err) {
     console.error("[refresh-thread-analysis] Could not create mail client:", err);

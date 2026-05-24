@@ -1,4 +1,4 @@
-import { getAuthenticatedClient } from "./auth";
+import { getAuthenticatedClient, getAuthenticatedClientById } from "./auth";
 import { cleanHtml } from "../mail/html-utils";
 import type { MailMessage, MailAttachment } from "../mail/types";
 import { createSemaphore, type Semaphore } from "../util/semaphore";
@@ -12,11 +12,12 @@ const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 // https://learn.microsoft.com/en-us/graph/throttling-limits#outlook-service-limits
 const OUTLOOK_PER_MAILBOX_CONCURRENCY = 3;
 const mailboxSemaphores = new Map<string, Semaphore>();
-function mailboxSemaphore(shop: string): Semaphore {
-  let s = mailboxSemaphores.get(shop);
+// Keyed by connectionId (after the multi-mailbox migration) or shop (legacy).
+function mailboxSemaphore(key: string): Semaphore {
+  let s = mailboxSemaphores.get(key);
   if (!s) {
     s = createSemaphore(OUTLOOK_PER_MAILBOX_CONCURRENCY);
-    mailboxSemaphores.set(shop, s);
+    mailboxSemaphores.set(key, s);
   }
   return s;
 }
@@ -114,11 +115,11 @@ export function parseGraphMessage(raw: GraphMessage): MailMessage {
 }
 
 async function graphFetch<T>(
-  shop: string,
+  connectionId: string,
   accessToken: string,
   url: string,
 ): Promise<{ ok: boolean; status: number; data: T }> {
-  const sem = mailboxSemaphore(shop);
+  const sem = mailboxSemaphore(connectionId);
   const release = await sem.acquire();
   try {
     // Retry loop honours 429 (MailboxConcurrency / ApplicationThrottled) and
@@ -147,7 +148,7 @@ async function graphFetch<T>(
       const backoff = retryAfter ?? DEFAULT_BACKOFF_MS * Math.pow(2, attempt - 1);
       const wait = Math.min(backoff, MAX_RETRY_WAIT_MS);
       console.warn(
-        `[outlook/graph] ${res.status} for shop=${shop} attempt=${attempt} backoff=${wait}ms`,
+        `[outlook/graph] ${res.status} for connectionId=${connectionId} attempt=${attempt} backoff=${wait}ms`,
       );
       await new Promise((r) => setTimeout(r, wait));
     }
@@ -157,10 +158,10 @@ async function graphFetch<T>(
 }
 
 export async function fetchDeltaMessages(
-  shop: string,
+  connectionId: string,
   deltaLink: string | null,
 ): Promise<DeltaResult> {
-  const { accessToken } = await getAuthenticatedClient(shop);
+  const { accessToken } = await getAuthenticatedClientById(connectionId);
 
   let url =
     deltaLink ??
@@ -174,7 +175,7 @@ export async function fetchDeltaMessages(
       value?: GraphMessage[];
       "@odata.nextLink"?: string;
       "@odata.deltaLink"?: string;
-    }>(shop, accessToken, url);
+    }>(connectionId, accessToken, url);
 
     if (!res.ok) {
       if (res.status === 410) {
@@ -198,10 +199,10 @@ export async function fetchDeltaMessages(
 }
 
 export async function fetchHistoricalMessages(
-  shop: string,
+  connectionId: string,
   afterDate: Date,
 ): Promise<MailMessage[]> {
-  const { accessToken } = await getAuthenticatedClient(shop);
+  const { accessToken } = await getAuthenticatedClientById(connectionId);
   const isoDate = afterDate.toISOString();
   let url =
     `${GRAPH_BASE}/me/mailFolders/inbox/messages?$filter=receivedDateTime ge ${isoDate}` +
@@ -213,7 +214,7 @@ export async function fetchHistoricalMessages(
     const res = await graphFetch<{
       value?: GraphMessage[];
       "@odata.nextLink"?: string;
-    }>(shop, accessToken, url);
+    }>(connectionId, accessToken, url);
 
     if (!res.ok) {
       throw new Error(`Graph historical fetch failed (${res.status}): ${JSON.stringify(res.data)}`);
@@ -229,10 +230,10 @@ export async function fetchHistoricalMessages(
   return messages;
 }
 
-export async function getMessageById(shop: string, messageId: string): Promise<MailMessage> {
-  const { accessToken } = await getAuthenticatedClient(shop);
+export async function getMessageById(connectionId: string, messageId: string): Promise<MailMessage> {
+  const { accessToken } = await getAuthenticatedClientById(connectionId);
   const url = `${GRAPH_BASE}/me/messages/${messageId}?$select=${MSG_SELECT}`;
-  const res = await graphFetch<GraphMessage>(shop, accessToken, url);
+  const res = await graphFetch<GraphMessage>(connectionId, accessToken, url);
 
   if (!res.ok) {
     throw new Error(`Graph getMessage failed (${res.status}): ${JSON.stringify(res.data)}`);
@@ -241,19 +242,19 @@ export async function getMessageById(shop: string, messageId: string): Promise<M
   const msg = parseGraphMessage(res.data);
 
   if (res.data.hasAttachments) {
-    msg.attachments = await fetchAttachments(shop, accessToken, messageId);
+    msg.attachments = await fetchAttachments(connectionId, accessToken, messageId);
   }
 
   return msg;
 }
 
 async function fetchAttachments(
-  shop: string,
+  connectionId: string,
   accessToken: string,
   messageId: string,
 ): Promise<MailAttachment[]> {
   const url = `${GRAPH_BASE}/me/messages/${messageId}/attachments?$select=id,name,contentType,size,contentId,isInline,contentBytes`;
-  const res = await graphFetch<{ value?: GraphAttachment[] }>(shop, accessToken, url);
+  const res = await graphFetch<{ value?: GraphAttachment[] }>(connectionId, accessToken, url);
 
   if (!res.ok) return [];
 
@@ -272,15 +273,15 @@ async function fetchAttachments(
 }
 
 export async function getThreadMessages(
-  shop: string,
+  connectionId: string,
   conversationId: string,
 ): Promise<MailMessage[]> {
-  const { accessToken } = await getAuthenticatedClient(shop);
+  const { accessToken } = await getAuthenticatedClientById(connectionId);
   const url =
     `${GRAPH_BASE}/me/messages?$filter=conversationId eq '${odataEscapeString(conversationId)}'` +
     `&$select=${MSG_SELECT}&$orderby=receivedDateTime asc&$top=50`;
 
-  const res = await graphFetch<{ value?: GraphMessage[] }>(shop, accessToken, url);
+  const res = await graphFetch<{ value?: GraphMessage[] }>(connectionId, accessToken, url);
 
   if (!res.ok) {
     throw new Error(`Graph getThreadMessages failed (${res.status}): ${JSON.stringify(res.data)}`);
@@ -289,8 +290,8 @@ export async function getThreadMessages(
   return (res.data.value ?? []).map(parseGraphMessage);
 }
 
-export async function getCurrentDeltaLink(shop: string): Promise<string | null> {
-  const result = await fetchDeltaMessages(shop, null);
+export async function getCurrentDeltaLink(connectionId: string): Promise<string | null> {
+  const result = await fetchDeltaMessages(connectionId, null);
   if (result.staleDeltaToken) return null;
   return result.nextDeltaLink;
 }

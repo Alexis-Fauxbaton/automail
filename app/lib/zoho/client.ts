@@ -1,6 +1,7 @@
 import prisma from "../../db.server";
-import { getZohoAccessToken, getZohoApiDomain } from "./auth";
+import { getZohoAccessToken, getZohoAccessTokenByConnection, getZohoApiDomain } from "./auth";
 import type { MailAttachment, MailMessage, MailClient } from "../mail/types";
+import type { MailConnection } from "@prisma/client";
 
 // Reuse cleanHtml and decodeHtmlEntities from gmail client
 import { cleanHtml, decodeHtmlEntities } from "../gmail/client";
@@ -117,15 +118,16 @@ async function getZohoFolders(
 
 /**
  * Create a ZohoMailClient implementing MailClient interface.
+ * Accepts a MailConnection directly so the factory is multi-mailbox safe
+ * (no ambiguous `findUnique({ where: { shop } })` inside).
  */
-export async function createZohoClient(shop: string): Promise<MailClient> {
-  const conn = await prisma.mailConnection.findUnique({ where: { shop } });
-  if (!conn || conn.provider !== "zoho" || !conn.zohoAccountId) {
-    throw new Error("No Zoho connection for this shop");
+export async function createZohoClient(connection: MailConnection): Promise<MailClient> {
+  if (!connection.zohoAccountId) {
+    throw new Error(`Zoho connection ${connection.id} is missing zohoAccountId`);
   }
 
-  const accountId = conn.zohoAccountId;
-  const mailboxLower = (conn.email ?? "").trim().toLowerCase();
+  const accountId = connection.zohoAccountId;
+  const mailboxLower = (connection.email ?? "").trim().toLowerCase();
 
   // Cache folder IDs (fetched once per client creation). We do NOT cache
   // a `null` failure result — otherwise a transient Zoho hiccup at first
@@ -144,7 +146,7 @@ export async function createZohoClient(shop: string): Promise<MailClient> {
 
   return {
     async listRecentMessages(opts) {
-      const token = await getZohoAccessToken(shop);
+      const token = await getZohoAccessTokenByConnection(connection);
       const folders = await getFolders(token);
 
       const idSet = new Set<string>();
@@ -206,7 +208,7 @@ export async function createZohoClient(shop: string): Promise<MailClient> {
     },
 
     async getMessage(messageId) {
-      const token = await getZohoAccessToken(shop);
+      const token = await getZohoAccessTokenByConnection(connection);
       const folders = await getFolders(token);
 
       // Folder probing is for finding which folder actually hosts the
@@ -330,7 +332,7 @@ export async function createZohoClient(shop: string): Promise<MailClient> {
       // reliably documented across plans. Best-effort: try the threads endpoint;
       // if it fails, return empty and let the pipeline fall back to DB messages.
       try {
-        const token = await getZohoAccessToken(shop);
+        const token = await getZohoAccessTokenByConnection(connection);
         const data = (await zohoFetch(
           token,
           `/api/accounts/${accountId}/messages/${threadId}/threads`,

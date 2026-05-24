@@ -14,8 +14,7 @@
 
 import prisma from "../../db.server";
 import type { MailClient } from "./types";
-import { createGmailClient } from "../gmail/mail-client";
-import { createZohoClient } from "../zoho/client";
+import { getMailClient } from "./types";
 import {
   resolveCanonicalThread,
   refreshThreadStats,
@@ -45,15 +44,7 @@ async function runInBatches<T>(
   }
 }
 
-async function getMailClient(shop: string, provider: string): Promise<MailClient> {
-  if (provider === "zoho") return createZohoClient(shop);
-  if (provider === "outlook") {
-    // Lazy import to avoid coupling backfill.ts to the Graph SDK at module load.
-    const { createOutlookClient } = await import("../outlook/mail-client");
-    return createOutlookClient(shop);
-  }
-  return createGmailClient(shop);
-}
+// getMailClient is imported from ./types (canonical multi-mailbox factory).
 
 /**
  * Onboarding backfill: on first connection, ingest raw messages from
@@ -66,13 +57,14 @@ export async function runOnboardingBackfill(
   shop: string,
   days: number,
 ): Promise<{ ingested: number; skipped: number }> {
-  const conn = await prisma.mailConnection.findUnique({ where: { shop } });
+  // TODO(multi-mailbox): plumb mailConnectionId from caller so we can select the right mailbox.
+  const conn = await prisma.mailConnection.findFirst({ where: { shop } });
   if (!conn) throw new Error("No mail connection");
   if (conn.onboardingBackfillDoneAt) {
     return { ingested: 0, skipped: 0 };
   }
 
-  const client = await getMailClient(shop, conn.provider);
+  const client = await getMailClient(conn);
   const afterDate = new Date(Date.now() - days * 24 * 3600_000);
   const messageIds = await client.listRecentMessages({
     afterDate,
@@ -114,9 +106,10 @@ export async function runManualBackfill(
   afterDate: Date,
   maxResults = 2000,
 ): Promise<{ ingested: number; skipped: number }> {
-  const conn = await prisma.mailConnection.findUnique({ where: { shop } });
+  // TODO(multi-mailbox): plumb mailConnectionId from caller so we can select the right mailbox.
+  const conn = await prisma.mailConnection.findFirst({ where: { shop } });
   if (!conn) throw new Error("No mail connection");
-  const client = await getMailClient(shop, conn.provider);
+  const client = await getMailClient(conn);
   const messageIds = await client.listRecentMessages({ afterDate, maxResults });
 
   const existing = await prisma.incomingEmail.findMany({
@@ -154,11 +147,12 @@ export async function runOpportunisticThreadBackfill(
   });
   if (!thread) return { added: 0 };
 
-  const conn = await prisma.mailConnection.findUnique({
+  // TODO(multi-mailbox): plumb mailConnectionId from caller so we can select the right mailbox.
+  const conn = await prisma.mailConnection.findFirst({
     where: { shop: thread.shop },
   });
   if (!conn) return { added: 0 };
-  const client = await getMailClient(thread.shop, conn.provider);
+  const client = await getMailClient(conn);
 
   const localIds = await prisma.incomingEmail.findMany({
     where: { canonicalThreadId, shop: thread.shop },

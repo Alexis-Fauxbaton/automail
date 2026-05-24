@@ -2,9 +2,8 @@ import prisma from "../../db.server";
 import type { AdminGraphqlClient } from "../support/shopify/order-search";
 import { analyzeSupportEmail } from "../support/orchestrator";
 import type { MailAttachment, MailClient, MailMessage } from "../mail/types";
+import { getMailClient } from "../mail/types";
 import type { ConversationMessage } from "../support/types";
-import { createGmailClient } from "./mail-client";
-import { createZohoClient } from "../zoho/client";
 import { fetchCustomerEmails } from "./customers";
 import { prefilterEmail } from "./prefilter";
 import { classifyEmail } from "./classifier";
@@ -49,14 +48,9 @@ export interface ProcessingReport {
   cancelled: boolean;
 }
 
-export async function getMailClient(shop: string, provider: string): Promise<MailClient> {
-  if (provider === "zoho") return createZohoClient(shop);
-  if (provider === "outlook") {
-    const { createOutlookClient } = await import("../outlook/mail-client");
-    return createOutlookClient(shop);
-  }
-  return createGmailClient(shop);
-}
+// Re-export canonical factory so existing imports of getMailClient from this
+// module continue to work during the Phase 3 migration.
+export { getMailClient };
 
 export async function processNewEmails(
   shop: string,
@@ -119,10 +113,12 @@ async function _processNewEmails(
   bypassCatchupGate: boolean,
 ): Promise<ProcessingReport> {
   const log = createLogger({ shop, mod: "gmail/pipeline" });
-  const conn = await prisma.mailConnection.findUnique({ where: { shop } });
+  // TODO(multi-mailbox): plumb mailConnectionId from caller so we can select the right mailbox.
+  // For now, fall back to findFirst which works for the current single-mailbox-per-shop state.
+  const conn = await prisma.mailConnection.findFirst({ where: { shop } });
   if (!conn) throw new Error("No mail connection for this shop");
 
-  const client = await getMailClient(shop, conn.provider);
+  const client = await getMailClient(conn);
 
   // Determine which messages to fetch
   let messageIds: string[];
@@ -1452,15 +1448,15 @@ export async function reanalyzeEmail(
     throw new Error("Email not found");
   }
 
-  const conn = await prisma.mailConnection.findUnique({
+  // TODO(multi-mailbox): plumb mailConnectionId from caller so we can select the right mailbox.
+  const conn = await prisma.mailConnection.findFirst({
     where: { shop },
-    select: { email: true, provider: true },
   });
 
   // Build a provider client so we can pull the FULL thread (inbox + sent)
   let client: MailClient | undefined;
   try {
-    if (conn) client = await getMailClient(shop, conn.provider);
+    if (conn) client = await getMailClient(conn);
   } catch (err) {
     log.error({ err }, "Could not create mail client for reanalyze");
   }

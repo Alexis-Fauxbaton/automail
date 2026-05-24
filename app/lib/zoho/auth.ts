@@ -1,6 +1,7 @@
 import prisma from "../../db.server";
 import { encrypt, decrypt } from "../gmail/crypto";
 import { signOAuthState } from "../mail/oauth-state";
+import type { MailConnection } from "@prisma/client";
 
 function getZohoAccountsDomain(): string {
   const apiDomain = process.env.ZOHO_API_DOMAIN || "mail.zoho.com";
@@ -255,4 +256,55 @@ export async function getZohoAccessToken(shop: string): Promise<string> {
     return refreshZohoToken(shop);
   }
   return decrypt(conn.accessToken);
+}
+
+/**
+ * Like `getZohoAccessToken` but scoped to a specific MailConnection by its
+ * PK (`id`). All DB updates use `id` so they are multi-mailbox safe.
+ */
+export async function getZohoAccessTokenByConnection(connection: MailConnection): Promise<string> {
+  // 120 s buffer guards against clock skew and request-in-flight expiry.
+  if (connection.tokenExpiry.getTime() > Date.now() + 120_000) {
+    return decrypt(connection.accessToken);
+  }
+
+  const clientId = process.env.ZOHO_CLIENT_ID;
+  const clientSecret = process.env.ZOHO_CLIENT_SECRET;
+  if (!clientId || !clientSecret) throw new Error("Zoho credentials missing");
+
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    client_id: clientId,
+    client_secret: clientSecret,
+    refresh_token: decrypt(connection.refreshToken),
+  });
+  const res = await fetch(`https://${getZohoAccountsDomain()}/oauth/v2/token`, { method: "POST", body });
+  const data = (await res.json()) as {
+    access_token?: string;
+    expires_in?: number;
+    error?: string;
+  };
+  if (data.error || !data.access_token) {
+    if (data.error === "invalid_code" || data.error === "access_denied" || data.error === "invalid_client") {
+      await prisma.mailConnection
+        .update({
+          where: { id: connection.id },
+          data: { lastSyncError: "MAILBOX_REVOKED: please reconnect Zoho Mail" },
+        })
+        .catch(() => undefined);
+      const { MailboxRevokedError } = await import("../gmail/auth");
+      throw new MailboxRevokedError("zoho", connection.shop);
+    }
+    throw new Error(`Zoho token refresh failed: ${data.error || "no token"}`);
+  }
+
+  await prisma.mailConnection.update({
+    where: { id: connection.id },
+    data: {
+      accessToken: encrypt(data.access_token),
+      tokenExpiry: new Date(Date.now() + (data.expires_in ?? 3600) * 1000),
+    },
+  });
+
+  return data.access_token;
 }

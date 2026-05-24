@@ -2,6 +2,7 @@ import { google } from "googleapis";
 import prisma from "../../db.server";
 import { encrypt, decrypt } from "./crypto";
 import { signOAuthState } from "../mail/oauth-state";
+import type { MailConnection } from "@prisma/client";
 
 function getOAuth2Client() {
   const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -217,6 +218,52 @@ export async function getAuthenticatedClient(shop: string) {
           })
           .catch(() => undefined);
         throw new MailboxRevokedError("gmail", shop);
+      }
+      throw err;
+    }
+  }
+
+  return client;
+}
+
+/**
+ * Like `getAuthenticatedClient` but scoped to a specific MailConnection by
+ * its PK (`id`). Decrypts tokens from the passed object, refreshes via
+ * `id`-scoped DB updates (multi-mailbox safe — no ambiguous `shop` lookup).
+ */
+export async function getAuthenticatedClientByConnection(connection: MailConnection) {
+  const client = getOAuth2Client();
+  client.setCredentials({
+    access_token: decrypt(connection.accessToken),
+    refresh_token: decrypt(connection.refreshToken),
+    expiry_date: connection.tokenExpiry.getTime(),
+  });
+
+  // Refresh if expired (120 s buffer to match Zoho/Outlook).
+  if (connection.tokenExpiry.getTime() < Date.now() + 120_000) {
+    try {
+      const { credentials } = await client.refreshAccessToken();
+      client.setCredentials(credentials);
+      await prisma.mailConnection.update({
+        where: { id: connection.id },
+        data: {
+          accessToken: encrypt(credentials.access_token!),
+          tokenExpiry: new Date(credentials.expiry_date!),
+          ...(credentials.refresh_token
+            ? { refreshToken: encrypt(credentials.refresh_token) }
+            : {}),
+        },
+      });
+    } catch (err) {
+      const code = extractOAuthErrorCode(err);
+      if (code === "invalid_grant") {
+        await prisma.mailConnection
+          .update({
+            where: { id: connection.id },
+            data: { lastSyncError: "MAILBOX_REVOKED: please reconnect Gmail" },
+          })
+          .catch(() => undefined);
+        throw new MailboxRevokedError("gmail", connection.shop);
       }
       throw err;
     }

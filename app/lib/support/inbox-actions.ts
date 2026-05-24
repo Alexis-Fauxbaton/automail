@@ -350,10 +350,11 @@ export async function handleRefreshEmailHtml(params: {
   if (!record || record.shop !== shop) {
     return { report: null, disconnected: false, reanalyzed: null, refined: null };
   }
-  const conn = await prisma.mailConnection.findUnique({ where: { shop } });
+  // TODO(multi-mailbox): plumb mailConnectionId from caller so we can select the right mailbox.
+  const conn = await prisma.mailConnection.findFirst({ where: { shop } });
   if (!conn) return { report: null, disconnected: false, reanalyzed: null, refined: null };
   try {
-    const client = await getMailClient(shop, conn.provider);
+    const client = await getMailClient(conn);
     const msg = await client.getMessage(record.externalMessageId);
     const msgAttachments = msg.attachments ?? [];
     console.log(`[refresh_email_html] email=${emailId} hasHtml=${!!msg.bodyHtml} attachments=${msgAttachments.length}`);

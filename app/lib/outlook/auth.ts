@@ -1,5 +1,6 @@
 import prisma from "../../db.server";
 import { encrypt, decrypt } from "../gmail/crypto";
+import type { MailConnection } from "@prisma/client";
 import { signOAuthState } from "../mail/oauth-state";
 
 const TOKEN_ENDPOINT = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
@@ -386,4 +387,53 @@ export async function getAuthenticatedClient(shop: string): Promise<OutlookToken
   })();
   _outlookRefreshInFlight.set(shop, p);
   return p;
+}
+
+// Per-connection in-flight refresh promises, keyed by connection `id`.
+// Same thundering-herd coalescing as the shop-scoped variant above, but
+// multi-mailbox safe (a single shop may have multiple Outlook mailboxes).
+const _outlookRefreshInFlightById = new Map<string, Promise<OutlookTokens>>();
+
+/**
+ * Like `getAuthenticatedClient` but scoped to a specific MailConnection by
+ * its PK (`id`). All DB updates use `id` so they are multi-mailbox safe.
+ */
+export async function getAuthenticatedClientByConnection(connection: MailConnection): Promise<OutlookTokens> {
+  // 120 s buffer protects against clock skew and request-in-flight expiry.
+  if (connection.tokenExpiry.getTime() > Date.now() + 120_000) {
+    return { accessToken: decrypt(connection.accessToken) };
+  }
+
+  // Coalesce concurrent refreshes for the same connection.
+  const existing = _outlookRefreshInFlightById.get(connection.id);
+  if (existing) return existing;
+
+  const p = (async () => {
+    try {
+      const refreshed = await refreshAccessToken(decrypt(connection.refreshToken));
+      await prisma.mailConnection.update({
+        where: { id: connection.id },
+        data: {
+          accessToken: encrypt(refreshed.accessToken),
+          refreshToken: encrypt(refreshed.refreshToken),
+          tokenExpiry: refreshed.expiry,
+        },
+      });
+      return { accessToken: refreshed.accessToken };
+    } finally {
+      _outlookRefreshInFlightById.delete(connection.id);
+    }
+  })();
+  _outlookRefreshInFlightById.set(connection.id, p);
+  return p;
+}
+
+/**
+ * Fetch a connection by its PK and delegate to `getAuthenticatedClientByConnection`.
+ * Used by `outlook/client.ts` functions that now accept `connectionId` instead of `shop`.
+ */
+export async function getAuthenticatedClientById(connectionId: string): Promise<OutlookTokens> {
+  const conn = await prisma.mailConnection.findUnique({ where: { id: connectionId } });
+  if (!conn) throw new Error(`No Outlook connection for id=${connectionId}`);
+  return getAuthenticatedClientByConnection(conn);
 }
