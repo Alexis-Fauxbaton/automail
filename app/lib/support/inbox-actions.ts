@@ -106,8 +106,35 @@ export async function handleResync(params: {
     // Continue — losing overrides is bad UX but not a blocker for resync.
   }
 
+  // Threads with a draft are "engaged" — never reset their supportNature, the
+  // merchant has acted on them.
+  const engagedThreads = await prisma.incomingEmail.findMany({
+    where: { shop, mailConnectionId, replyDraft: { isNot: null } },
+    select: { canonicalThreadId: true },
+  });
+  const engagedThreadIds = Array.from(
+    new Set(
+      engagedThreads
+        .map((e) => e.canonicalThreadId)
+        .filter((id): id is string => id !== null),
+    ),
+  );
+
   // Scoped to this mailbox only — other mailboxes' IncomingEmail rows are untouched.
   await prisma.incomingEmail.deleteMany({ where: { shop, mailConnectionId } });
+
+  // Reset supportNature for this mailbox's classified-but-not-engaged threads —
+  // re-classification will repopulate on the next ingest pass.
+  await prisma.thread.updateMany({
+    where: {
+      shop,
+      mailConnectionId,
+      supportNature: { in: ["needs_review", "probable_support", "confirmed_support", "mixed"] },
+      previousOperationalState: null,
+      id: { notIn: engagedThreadIds },
+    },
+    data: { supportNature: "unknown" },
+  });
 
   await prisma.mailConnection.update({
     where: { id: mailConnectionId },
