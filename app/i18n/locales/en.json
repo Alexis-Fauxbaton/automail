@@ -469,6 +469,17 @@
     },
     "syncSuspended": {
       "banner": "Full analysis and draft generation are paused — your quota is exhausted or your trial has ended. Mails are still received and classified as support / non-support; they accumulate in the \"To analyze\" tab until you upgrade or the monthly reset kicks in."
+    },
+    "mailboxCounter": {
+      "label": "Connected mailboxes",
+      "value": "{{used}} / {{limit}}",
+      "atLimit": "You have reached your plan limit."
+    },
+    "downgrade": {
+      "title": "Downgrade to {{targetPlanId}}",
+      "intro": "You have {{current}} connected mailboxes, but the {{targetPlanId}} plan only allows {{limit}}. Please choose the mailbox to keep.",
+      "warning": "Unselected mailboxes will be disconnected and their data deleted.",
+      "confirm": "Confirm downgrade"
     }
   },
   "classification": {

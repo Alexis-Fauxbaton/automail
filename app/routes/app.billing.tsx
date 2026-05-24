@@ -136,6 +136,18 @@ export default function BillingPage() {
         </div>
       )}
 
+      {entitlements.mailboxStatus && (
+        <div style={{ marginBottom: 20, padding: '12px 16px', borderRadius: 8, border: '1px solid #e2e8f0', background: '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 14 }}>
+          <span style={{ fontWeight: 600, color: '#0f172a' }}>{t('billing.mailboxCounter.label')}</span>
+          <span style={{ color: entitlements.mailboxStatus.used >= entitlements.mailboxStatus.limit ? '#dc2626' : '#0f172a', fontWeight: 500 }}>
+            {t('billing.mailboxCounter.value', { used: entitlements.mailboxStatus.used, limit: entitlements.mailboxStatus.limit })}
+            {entitlements.mailboxStatus.used >= entitlements.mailboxStatus.limit && (
+              <span style={{ marginLeft: 8, fontSize: 12, color: '#dc2626' }}>{t('billing.mailboxCounter.atLimit')}</span>
+            )}
+          </span>
+        </div>
+      )}
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 20, marginTop: 8 }}>
         <PlanCard
           planId="starter"

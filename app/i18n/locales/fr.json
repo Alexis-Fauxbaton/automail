@@ -469,6 +469,17 @@
     },
     "syncSuspended": {
       "banner": "L'analyse complète et la génération de brouillons sont en pause — votre quota est épuisé ou votre essai est terminé. Vos mails continuent d'être reçus et classés support / non-support ; ils s'accumulent dans l'onglet « À analyser » en attendant un upgrade ou la réinitialisation mensuelle."
+    },
+    "mailboxCounter": {
+      "label": "Boîtes connectées",
+      "value": "{{used}} / {{limit}}",
+      "atLimit": "Vous avez atteint la limite de votre plan."
+    },
+    "downgrade": {
+      "title": "Réduire votre abonnement à {{targetPlanId}}",
+      "intro": "Vous avez {{current}} boîtes connectées, mais le plan {{targetPlanId}} n'en autorise que {{limit}}. Veuillez choisir la boîte à conserver.",
+      "warning": "Les boîtes non sélectionnées seront déconnectées et leurs données supprimées.",
+      "confirm": "Confirmer la réduction"
     }
   },
   "classification": {
