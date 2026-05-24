@@ -409,7 +409,8 @@ async function runJob(job: {
       case "backfill": {
         const afterDateIso = String(job.params.afterDateIso ?? "");
         if (!afterDateIso) throw new Error("backfill job missing afterDateIso");
-        const res = await runManualBackfill(job.shop, new Date(afterDateIso));
+        if (!job.mailConnectionId) throw new Error("backfill job missing mailConnectionId");
+        const res = await runManualBackfill(job.shop, new Date(afterDateIso), job.mailConnectionId);
         console.log(
           `[auto-sync] shop=${job.shop} backfill: ingested=${res.ingested} skipped=${res.skipped}`,
         );
@@ -565,9 +566,9 @@ async function runSyncForShop(
     }
     throw err;
   }
-  if (opts.runOnboarding) {
+  if (opts.runOnboarding && opts.mailConnectionId) {
     try {
-      const res = await runOnboardingBackfill(shop, opts.onboardingDays);
+      const res = await runOnboardingBackfill(shop, opts.onboardingDays, opts.mailConnectionId);
       console.log(
         `[auto-sync] shop=${shop} onboarding backfill: ingested=${res.ingested} skipped=${res.skipped}`,
       );

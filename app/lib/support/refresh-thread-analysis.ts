@@ -81,11 +81,12 @@ export async function refreshThreadAnalysis(
     }
   }
 
-  // TODO(multi-mailbox): plumb mailConnectionId from caller so we can select the right mailbox.
-  // Load mail connection for thread context building.
-  const conn = await prisma.mailConnection.findFirst({
-    where: { shop },
-  });
+  // Use the email's mailConnectionId (set at ingest time) to resolve the
+  // correct connection. Fall back to any connection for the shop for legacy
+  // rows that predate the mailConnectionId column.
+  const conn = record.mailConnectionId
+    ? await prisma.mailConnection.findUnique({ where: { id: record.mailConnectionId } })
+    : await prisma.mailConnection.findFirst({ where: { shop } });
 
   let client: MailClient | undefined;
   try {

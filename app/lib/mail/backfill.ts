@@ -57,10 +57,10 @@ async function runInBatches<T>(
 export async function runOnboardingBackfill(
   shop: string,
   days: number,
+  mailConnectionId: string,
 ): Promise<{ ingested: number; skipped: number }> {
-  // TODO(multi-mailbox): plumb mailConnectionId from caller so we can select the right mailbox.
-  const conn = await prisma.mailConnection.findFirst({ where: { shop } });
-  if (!conn) throw new Error("No mail connection");
+  const conn = await prisma.mailConnection.findUnique({ where: { id: mailConnectionId } });
+  if (!conn || conn.shop !== shop) throw new Error("No mail connection");
   if (conn.onboardingBackfillDoneAt) {
     return { ingested: 0, skipped: 0 };
   }
@@ -73,7 +73,7 @@ export async function runOnboardingBackfill(
   });
 
   const existing = await prisma.incomingEmail.findMany({
-    where: { shop, externalMessageId: { in: messageIds } },
+    where: { shop, mailConnectionId, externalMessageId: { in: messageIds } },
     select: { externalMessageId: true },
   });
   const existingSet = new Set(existing.map((e) => e.externalMessageId));
@@ -91,7 +91,7 @@ export async function runOnboardingBackfill(
   });
 
   await prisma.mailConnection.update({
-    where: { shop },
+    where: { id: mailConnectionId },
     data: { onboardingBackfillDoneAt: new Date(), onboardingBackfillDays: days },
   });
 
@@ -105,16 +105,16 @@ export async function runOnboardingBackfill(
 export async function runManualBackfill(
   shop: string,
   afterDate: Date,
+  mailConnectionId: string,
   maxResults = 2000,
 ): Promise<{ ingested: number; skipped: number }> {
-  // TODO(multi-mailbox): plumb mailConnectionId from caller so we can select the right mailbox.
-  const conn = await prisma.mailConnection.findFirst({ where: { shop } });
-  if (!conn) throw new Error("No mail connection");
+  const conn = await prisma.mailConnection.findUnique({ where: { id: mailConnectionId } });
+  if (!conn || conn.shop !== shop) throw new Error("No mail connection");
   const client = await getMailClient(conn);
   const messageIds = await client.listRecentMessages({ afterDate, maxResults });
 
   const existing = await prisma.incomingEmail.findMany({
-    where: { shop, externalMessageId: { in: messageIds } },
+    where: { shop, mailConnectionId, externalMessageId: { in: messageIds } },
     select: { externalMessageId: true },
   });
   const existingSet = new Set(existing.map((e) => e.externalMessageId));
@@ -141,17 +141,19 @@ export async function runManualBackfill(
  */
 export async function runOpportunisticThreadBackfill(
   canonicalThreadId: string,
-): Promise<{ added: number }> {
+): Promise<{ added: 0 } | { added: number }> {
   const thread = await prisma.thread.findUnique({
     where: { id: canonicalThreadId },
     include: { providerIds: true },
   });
   if (!thread) return { added: 0 };
 
-  // TODO(multi-mailbox): plumb mailConnectionId from caller so we can select the right mailbox.
-  const conn = await prisma.mailConnection.findFirst({
-    where: { shop: thread.shop },
-  });
+  // Use thread.mailConnectionId (set when the thread was created) so we
+  // always talk to the correct mailbox. Fall back to any connection for the
+  // shop only for legacy threads that predate the mailConnectionId column.
+  const conn = thread.mailConnectionId
+    ? await prisma.mailConnection.findUnique({ where: { id: thread.mailConnectionId } })
+    : await prisma.mailConnection.findFirst({ where: { shop: thread.shop } });
   if (!conn) return { added: 0 };
   const client = await getMailClient(conn);
 

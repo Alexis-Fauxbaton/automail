@@ -174,7 +174,7 @@ async function _processNewEmails(
     // Backfill even when there are no new messages — resolved threads
     // accumulate over time and need intent badges regardless of new activity.
     try {
-      await backfillResolvedIntents(shop, admin);
+      await backfillResolvedIntents(shop, admin, { mailboxEmail: conn.email });
     } catch (err) {
       log.error({ err }, "backfillResolvedIntents failed (no-new-messages path)");
     }
@@ -199,7 +199,7 @@ async function _processNewEmails(
   // For regular syncs (few new messages) this call is nearly free: alreadyAnalyzed
   // covers almost all threads and the function returns after two cheap DB queries.
   try {
-    await backfillResolvedIntents(shop, admin);
+    await backfillResolvedIntents(shop, admin, { mailboxEmail: conn.email });
   } catch (err) {
     log.error({ err }, "pre-pass1 backfillResolvedIntents failed");
   }
@@ -255,7 +255,7 @@ async function _processNewEmails(
   // the full thread context. We avoid wasting LLM calls on stale replies.
   // ---------------------------------------------------------------------
   if (!report.cancelled) {
-    const threadsToClassify = await pickThreadsForClassification(shop, newMessageIds);
+    const threadsToClassify = await pickThreadsForClassification(shop, newMessageIds, conn.id);
     const CLASSIFY_BATCH_SIZE = 5;
     for (let i = 0; i < threadsToClassify.length; i += CLASSIFY_BATCH_SIZE) {
       if (i > 0 && (await isCancelled(conn.id, syncStartedAt))) {
@@ -287,7 +287,7 @@ async function _processNewEmails(
   // Backfill intent badges for resolved threads that lack detectedIntent.
   // Best-effort: failures must never abort the main sync.
   try {
-    await backfillResolvedIntents(shop, admin);
+    await backfillResolvedIntents(shop, admin, { mailboxEmail: conn.email });
   } catch (err) {
     log.error({ err }, "post-pass2 backfillResolvedIntents failed");
   }
@@ -584,7 +584,7 @@ export async function ingestAndPrefilter(
 export async function backfillResolvedIntents(
   shop: string,
   admin: AdminGraphqlClient,
-  opts: { maxThreads?: number } = {},
+  opts: { maxThreads?: number; mailboxEmail?: string } = {},
 ): Promise<void> {
   const log = createLogger({ shop, mod: "gmail/pipeline:backfillResolvedIntents" });
   // Step 1: collect thread IDs for both closed states.
@@ -660,10 +660,9 @@ export async function backfillResolvedIntents(
   const toProcess = needsBackfill.slice(0, opts.maxThreads ?? 200);
   log.info({ count: toProcess.length }, "thread(s) need intent backfill");
 
-  // Fetch mailbox address once — used by buildThreadContext for direction labels.
-  const connEmail = (
-    await prisma.mailConnection.findUnique({ where: { shop }, select: { email: true } })
-  )?.email ?? "";
+  // Use the caller-supplied mailbox email (from conn.email in processNewEmails)
+  // so we don't need a shop-scoped DB lookup — which would be ambiguous in multi-mailbox.
+  const connEmail = opts.mailboxEmail ?? "";
 
   const anchorSelect = {
     id: true,
@@ -913,12 +912,16 @@ export async function backfillResolvedIntents(
 async function pickThreadsForClassification(
   shop: string,
   newMessageIds: string[],
+  mailConnectionId: string,
 ): Promise<string[]> {
   if (newMessageIds.length === 0) return [];
 
   // Find which canonical threads were touched by this batch.
+  // Include mailConnectionId so a shop with two mailboxes can't cross-pollinate
+  // threads when both mailboxes happen to receive the same externalMessageId
+  // (e.g. a forwarded message stored in both inboxes).
   const newRecords = await prisma.incomingEmail.findMany({
-    where: { shop, externalMessageId: { in: newMessageIds } },
+    where: { shop, mailConnectionId, externalMessageId: { in: newMessageIds } },
     select: { canonicalThreadId: true },
   });
   const canonicalIds = Array.from(
@@ -1454,10 +1457,12 @@ export async function reanalyzeEmail(
     throw new Error("Email not found");
   }
 
-  // TODO(multi-mailbox): plumb mailConnectionId from caller so we can select the right mailbox.
-  const conn = await prisma.mailConnection.findFirst({
-    where: { shop },
-  });
+  // Use the email's mailConnectionId (set at ingest time) to resolve the
+  // correct connection. Fall back to any connection for the shop for legacy
+  // rows that predate the mailConnectionId column.
+  const conn = record.mailConnectionId
+    ? await prisma.mailConnection.findUnique({ where: { id: record.mailConnectionId } })
+    : await prisma.mailConnection.findFirst({ where: { shop } });
 
   // Build a provider client so we can pull the FULL thread (inbox + sent)
   let client: MailClient | undefined;
