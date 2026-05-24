@@ -106,6 +106,7 @@ export default function App() {
             <s-link href="/app">{t("nav.home")}</s-link>
             <s-link href="/app/inbox">{t("nav.emailInbox")}</s-link>
             <s-link href="/app/dashboard">{t("nav.dashboard")}</s-link>
+            <s-link href="/app/connections">{t("nav.connections")}</s-link>
             <s-link href="/app/settings">{t("nav.settings")}</s-link>
             <s-link href="/app/billing">{t("nav.billing")}</s-link>
             <s-link href="/app/help">{t("nav.help")}</s-link>
@@ -157,6 +158,7 @@ export default function App() {
             <s-link href="/app">{t("nav.home")}</s-link>
             <s-link href="/app/inbox">{t("nav.emailInbox")}</s-link>
             <s-link href="/app/dashboard">{t("nav.dashboard")}</s-link>
+            <s-link href="/app/connections">{t("nav.connections")}</s-link>
             <s-link href="/app/settings">{t("nav.settings")}</s-link>
             <s-link href="/app/help">{t("nav.help")}</s-link>
           </s-app-nav>

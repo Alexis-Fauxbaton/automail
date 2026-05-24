@@ -11,7 +11,8 @@
     "errorTitle": "Something went wrong",
     "errorDesc": "An unexpected error occurred. Please try refreshing the page.",
     "errorContact": "If the problem persists, contact support.",
-    "errorDevTitle": "Application Error"
+    "errorDevTitle": "Application Error",
+    "connections": "Mailboxes"
   },
   "help": {
     "title": "Help & support",
@@ -521,5 +522,33 @@
       "toneAndSignature": "Set your reply tone and signature",
       "dismiss": "Dismiss"
     }
+  },
+  "connections": {
+    "eyebrow": "Mailboxes",
+    "title": "Connected mailboxes",
+    "subtitle": "{{used}} of {{limit}} mailboxes used",
+    "connectMailbox": "Connect a mailbox",
+    "emptyState": "No mailbox connected yet. Connect your first mailbox to start analysing support emails.",
+    "connectFirst": "Connect a mailbox",
+    "lastSyncAt": "Last sync: {{date}}",
+    "threadCount_one": "{{count}} conversation",
+    "threadCount_other": "{{count}} conversations",
+    "statusOk": "Active",
+    "statusPaused": "Paused",
+    "statusError": "Error",
+    "pause": "Pause",
+    "resume": "Resume",
+    "resync": "Resync",
+    "reauth": "Re-authenticate",
+    "disconnect": "Disconnect",
+    "disconnectTitle": "Disconnect mailbox",
+    "disconnectWarning": "This will permanently remove the mailbox and its {{threadCount}} conversations from Automail. This action cannot be undone.",
+    "typeEmailToConfirm": "Type {{email}} to confirm disconnection:",
+    "disconnectConfirm": "Disconnect",
+    "pickProvider": "Choose your mail provider",
+    "limitReachedTitle": "Mailbox limit reached",
+    "limitReachedBody": "You have reached the maximum number of mailboxes for your current plan. Upgrade to Pro to connect more.",
+    "upgradeCta": "Upgrade to Pro",
+    "softPauseBanner": "All {{pausedCount}} of your mailboxes have been automatically paused following a plan change. Your plan now allows {{limit}} mailbox. Resume the mailboxes you want to keep active."
   }
 }
