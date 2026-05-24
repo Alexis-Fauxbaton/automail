@@ -371,7 +371,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "resync") {
-    return handleResync({ shop });
+    const mailConnectionId = String(formData.get("mailConnectionId") ?? "");
+    if (!mailConnectionId)
+      return { error: "missing_mailConnectionId", report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
+    return await handleResync({ shop, mailConnectionId });
   }
 
   if (intent === "reclassify") {
@@ -1102,7 +1105,7 @@ function ConnectionCard({
             <Form
               method="post"
               onSubmit={(e) => {
-                // Resync wipes ALL ingested email rows for the shop. Make
+                // Resync wipes all ingested email rows for this mailbox. Make
                 // sure a misclick doesn't destroy the merchant's history.
                 if (!window.confirm(t("inbox.resyncConfirm"))) {
                   e.preventDefault();
@@ -1110,6 +1113,7 @@ function ConnectionCard({
               }}
             >
               <input type="hidden" name="_action" value="resync" />
+              <input type="hidden" name="mailConnectionId" value={connectionId ?? ""} />
               <s-button variant="tertiary" type="submit" {...(isSyncing ? { loading: true } : {})}>
                 {t("inbox.resyncAll")}
               </s-button>

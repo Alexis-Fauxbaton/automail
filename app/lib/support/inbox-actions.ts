@@ -76,8 +76,11 @@ export async function handleStop(params: { shop: string }) {
   return { stopped: true, report: null, disconnected: false, reanalyzed: null, refined: null };
 }
 
-export async function handleResync(params: { shop: string }) {
-  const { shop } = params;
+export async function handleResync(params: {
+  shop: string;
+  mailConnectionId: string;
+}) {
+  const { shop, mailConnectionId } = params;
   // Audit log — destructive operation. We capture every resync so a
   // misclick that wipes ingested email history can be traced. The log is
   // intentionally a structured `console.warn` so it ships to whatever log
@@ -85,47 +88,29 @@ export async function handleResync(params: { shop: string }) {
   // a new DB table.
   const startedAt = new Date().toISOString();
   console.warn(
-    `[audit] resync shop=${shop} startedAt=${startedAt} action=delete-all-incoming-emails`,
-  );
-  const engagedThreads = await prisma.incomingEmail.findMany({
-    where: { shop, replyDraft: { isNot: null } },
-    select: { canonicalThreadId: true },
-  });
-  const engagedThreadIds = Array.from(
-    new Set(
-      engagedThreads
-        .map((e) => e.canonicalThreadId)
-        .filter((id): id is string => id !== null),
-    ),
+    `[audit] resync shop=${shop} mailConnectionId=${mailConnectionId} startedAt=${startedAt} action=delete-incoming-emails-and-reset-cursor`,
   );
 
   // Snapshot manual overrides (intent / order picks the user explicitly
   // made) onto Thread BEFORE wiping IncomingEmail rows — they live inside
   // `analysisResult` JSON which is about to be deleted. The next analysis
-  // pass on each thread will restore them.
+  // pass on each thread will restore them. Scoped to this mailbox only.
   try {
-    const { snapshotManualOverridesForShop } = await import("./preserved-overrides");
-    const n = await snapshotManualOverridesForShop(shop);
+    const { snapshotManualOverridesForMailbox } = await import("./preserved-overrides");
+    const n = await snapshotManualOverridesForMailbox(shop, mailConnectionId);
     if (n > 0) {
-      console.log(`[resync] shop=${shop} snapshotted manualOverrides for ${n} thread(s)`);
+      console.log(`[resync] shop=${shop} mailConnectionId=${mailConnectionId} snapshotted manualOverrides for ${n} thread(s)`);
     }
   } catch (err) {
     console.error("[resync] manual-overrides snapshot failed:", err);
     // Continue — losing overrides is bad UX but not a blocker for resync.
   }
 
-  await prisma.incomingEmail.deleteMany({ where: { shop } });
-  await prisma.thread.updateMany({
-    where: {
-      shop,
-      supportNature: { in: ["needs_review", "probable_support", "confirmed_support", "mixed"] },
-      previousOperationalState: null,
-      id: { notIn: engagedThreadIds },
-    },
-    data: { supportNature: "unknown" },
-  });
+  // Scoped to this mailbox only — other mailboxes' IncomingEmail rows are untouched.
+  await prisma.incomingEmail.deleteMany({ where: { shop, mailConnectionId } });
+
   await prisma.mailConnection.update({
-    where: { shop },
+    where: { id: mailConnectionId },
     data: {
       historyId: null,
       // Outlook's incremental cursor lives in its own column. Without
@@ -137,9 +122,8 @@ export async function handleResync(params: { shop: string }) {
       onboardingBackfillDoneAt: null,
     },
   });
-  // TODO(multi-mailbox): plumb mailConnectionId from caller instead of resolving first match
-  const resyncConn = await prisma.mailConnection.findFirst({ where: { shop }, select: { id: true } });
-  await enqueueJob({ shop, kind: "resync", mailConnectionId: resyncConn?.id });
+
+  await enqueueJob({ shop, kind: "resync", mailConnectionId });
   return { syncStarted: true, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
 }
 
