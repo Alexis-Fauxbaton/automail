@@ -241,6 +241,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         externalMessageId: "",
         threadId: "",
         canonicalThreadId: t.id,
+        mailConnectionId: "",
         fromAddress: "",
         fromName: "",
         subject: "",
