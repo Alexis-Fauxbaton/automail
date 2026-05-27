@@ -3,7 +3,7 @@ import { testDb, TEST_SHOP, cleanTestShop, disconnectTestDb } from './helpers/db
 import { requireOnboardingComplete } from '../../onboarding/guard';
 import { markOnboardingComplete, markChecklistDismissed, getShopFlag, ensureShopFlag } from '../../onboarding/repo';
 
-beforeEach(cleanTestShop);
+beforeEach(() => cleanTestShop());
 afterAll(disconnectTestDb);
 
 describe('requireOnboardingComplete', () => {

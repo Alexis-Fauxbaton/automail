@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
-import { testDb, TEST_SHOP, cleanTestShop, disconnectTestDb, createTestThread } from './helpers/db';
+import { testDb, TEST_SHOP, cleanTestShop, disconnectTestDb, createTestThread, seedMailConnection } from './helpers/db';
 import { handleDismissAnalyzeQueue, handleDismissThreadFromAnalyze } from '../../support/inbox-actions';
 
 beforeEach(async () => {
@@ -46,9 +46,12 @@ describe('handleDismissAnalyzeQueue — bulk', () => {
     const OTHER_SHOP = 'other-shop.myshopify.com';
     await testDb.shopFlag.deleteMany({ where: { shop: OTHER_SHOP } });
     await testDb.thread.deleteMany({ where: { shop: OTHER_SHOP } });
+    await testDb.mailConnection.deleteMany({ where: { shop: OTHER_SHOP } });
+    const otherMc = await seedMailConnection({ shop: OTHER_SHOP });
     const otherThread = await testDb.thread.create({
       data: {
         shop: OTHER_SHOP,
+        mailConnectionId: otherMc.id,
         provider: 'gmail',
         firstMessageAt: new Date(),
         lastMessageAt: new Date(),
@@ -65,6 +68,7 @@ describe('handleDismissAnalyzeQueue — bulk', () => {
     const otherAfter = await testDb.thread.findUnique({ where: { id: otherThread.id } });
     expect(otherAfter?.dismissedFromAnalyzeAt).toBeNull();
     await testDb.thread.deleteMany({ where: { shop: OTHER_SHOP } });
+    await testDb.mailConnection.deleteMany({ where: { shop: OTHER_SHOP } });
   });
 });
 
@@ -88,9 +92,12 @@ describe('handleDismissThreadFromAnalyze — single', () => {
     const OTHER_SHOP = 'other-shop-single.myshopify.com';
     await testDb.shopFlag.deleteMany({ where: { shop: OTHER_SHOP } });
     await testDb.thread.deleteMany({ where: { shop: OTHER_SHOP } });
+    await testDb.mailConnection.deleteMany({ where: { shop: OTHER_SHOP } });
+    const otherMc = await seedMailConnection({ shop: OTHER_SHOP });
     const otherThread = await testDb.thread.create({
       data: {
         shop: OTHER_SHOP,
+        mailConnectionId: otherMc.id,
         provider: 'gmail',
         firstMessageAt: new Date(),
         lastMessageAt: new Date(),
@@ -104,6 +111,7 @@ describe('handleDismissThreadFromAnalyze — single', () => {
     const after = await testDb.thread.findUnique({ where: { id: otherThread.id } });
     expect(after?.dismissedFromAnalyzeAt).toBeNull();
     await testDb.thread.deleteMany({ where: { shop: OTHER_SHOP } });
+    await testDb.mailConnection.deleteMany({ where: { shop: OTHER_SHOP } });
   });
 
   it('returns 0 for empty threadId', async () => {

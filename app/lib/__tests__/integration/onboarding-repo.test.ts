@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
-import { testDb, TEST_SHOP, cleanTestShop, disconnectTestDb } from './helpers/db';
+import { testDb, TEST_SHOP, cleanTestShop, disconnectTestDb, createTestThread } from './helpers/db';
 import {
   getShopFlag,
   ensureShopFlag,
@@ -9,7 +9,7 @@ import {
   hasCustomizedSupportSettings,
 } from '../../onboarding/repo';
 
-beforeEach(cleanTestShop);
+beforeEach(() => cleanTestShop());
 afterAll(disconnectTestDb);
 
 describe('ensureShopFlag', () => {
@@ -53,21 +53,11 @@ describe('hasGeneratedAnyDraft', () => {
   });
 
   it('returns true when at least one ReplyDraft row exists for the shop', async () => {
-    const thread = await testDb.thread.create({
-      data: {
-        shop: TEST_SHOP,
-        provider: 'gmail',
-        lastMessageAt: new Date(),
-        firstMessageAt: new Date(),
-        operationalStateUpdatedAt: new Date(),
-        operationalState: 'open',
-        supportNature: 'unknown',
-        historyStatus: 'complete',
-      },
-    });
+    const thread = await createTestThread();
     const email = await testDb.incomingEmail.create({
       data: {
         shop: TEST_SHOP,
+        mailConnectionId: thread.mailConnectionId,
         externalMessageId: 'm1',
         canonicalThreadId: thread.id,
         fromAddress: 'a@b.c',

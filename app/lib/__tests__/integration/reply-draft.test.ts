@@ -22,12 +22,13 @@ afterAll(async () => {
   await disconnectTestDb();
 });
 
-async function createTestEmail(threadId: string, externalId: string) {
+async function createTestEmail(thread: { id: string; mailConnectionId: string }, externalId: string) {
   return testDb.incomingEmail.create({
     data: {
       shop: TEST_SHOP,
+      mailConnectionId: thread.mailConnectionId,
       externalMessageId: externalId,
-      canonicalThreadId: threadId,
+      canonicalThreadId: thread.id,
       fromAddress: 'client@example.com',
       subject: 'Test',
       bodyText: 'Corps',
@@ -40,7 +41,7 @@ async function createTestEmail(threadId: string, externalId: string) {
 describe('reply-draft — upsert et historique', () => {
   it('crée un ReplyDraft si inexistant (REQ-INBOX-07)', async () => {
     const thread = await createTestThread();
-    const email = await createTestEmail(thread.id, 'draft-test-001');
+    const email = await createTestEmail(thread, 'draft-test-001');
 
     await upsertReplyDraftBody(email.id, TEST_SHOP, 'Premier draft');
 
@@ -53,7 +54,7 @@ describe('reply-draft — upsert et historique', () => {
 
   it('bodyHistory contient les versions précédentes à chaque mise à jour (REQ-INBOX-08)', async () => {
     const thread = await createTestThread();
-    const email = await createTestEmail(thread.id, 'draft-test-002');
+    const email = await createTestEmail(thread, 'draft-test-002');
 
     await upsertReplyDraftBody(email.id, TEST_SHOP, 'Version 1');
     await upsertReplyDraftBody(email.id, TEST_SHOP, 'Version 2');
@@ -72,7 +73,7 @@ describe('reply-draft — upsert et historique', () => {
 
   it('deuxième upsert sur le même email met à jour body sans doublon (REQ-INBOX-07)', async () => {
     const thread = await createTestThread();
-    const email = await createTestEmail(thread.id, 'draft-test-003');
+    const email = await createTestEmail(thread, 'draft-test-003');
 
     await upsertReplyDraftBody(email.id, TEST_SHOP, 'Brouillon initial');
     await upsertReplyDraftBody(email.id, TEST_SHOP, 'Brouillon révisé');

@@ -9,6 +9,7 @@ import {
   createTestThread,
   disconnectTestDb,
   TEST_SHOP,
+  seedIncomingEmail,
 } from "./helpers/db";
 import {
   getPeriodBounds,
@@ -44,9 +45,12 @@ async function createIncoming(overrides: {
   detectedIntent?: string | null;
   fromAddress?: string;
 }) {
+  // Resolve mailConnectionId from the parent thread (required FK since multi-mailbox).
+  const thread = await testDb.thread.findUniqueOrThrow({ where: { id: overrides.threadId }, select: { mailConnectionId: true } });
   return testDb.incomingEmail.create({
     data: {
       shop: TEST_SHOP,
+      mailConnectionId: thread.mailConnectionId,
       externalMessageId: overrides.externalId,
       canonicalThreadId: overrides.threadId,
       fromAddress: overrides.fromAddress ?? "customer@example.com",
@@ -84,7 +88,9 @@ async function createDraft(opts: {
 describe("getCurrentThreadStates — non_support exclusion", () => {
   it("REG-1: ne compte pas les threads non_support dans 'open'", async () => {
     // 2 confirmed_support open + 3 non_support open + 1 unknown open
-    await Promise.all([
+    // getCurrentThreadStates requires messages: { some: {} } to exclude ghost
+    // threads, so each thread must have at least one IncomingEmail.
+    const threads = await Promise.all([
       createTestThread({ supportNature: "confirmed_support", operationalState: "open" }),
       createTestThread({ supportNature: "confirmed_support", operationalState: "open" }),
       createTestThread({ supportNature: "non_support", operationalState: "open" }),
@@ -92,17 +98,20 @@ describe("getCurrentThreadStates — non_support exclusion", () => {
       createTestThread({ supportNature: "non_support", operationalState: "open" }),
       createTestThread({ supportNature: "unknown", operationalState: "open" }),
     ]);
+    await Promise.all(threads.map((t) => seedIncomingEmail({ shop: TEST_SHOP, mailConnectionId: t.mailConnectionId, canonicalThreadId: t.id })));
     const states = await getCurrentThreadStates(TEST_SHOP);
     // 3 = 2 confirmed + 1 unknown (non_support excluded)
     expect(states.open).toBe(3);
   });
 
   it("REG-1bis: no_reply_needed n'inclut pas les non_support", async () => {
-    await Promise.all([
+    // getCurrentThreadStates requires messages: { some: {} } — seed one email per thread.
+    const threads = await Promise.all([
       createTestThread({ supportNature: "non_support", operationalState: "no_reply_needed" }),
       createTestThread({ supportNature: "non_support", operationalState: "no_reply_needed" }),
       createTestThread({ supportNature: "confirmed_support", operationalState: "no_reply_needed" }),
     ]);
+    await Promise.all(threads.map((t) => seedIncomingEmail({ shop: TEST_SHOP, mailConnectionId: t.mailConnectionId, canonicalThreadId: t.id })));
     const states = await getCurrentThreadStates(TEST_SHOP);
     expect(states.no_reply_needed).toBe(1);
   });

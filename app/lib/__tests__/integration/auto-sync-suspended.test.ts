@@ -73,7 +73,7 @@ describe('enqueueDuePeriodicSyncs', () => {
     const autoSync = await import('../../mail/auto-sync');
     await (autoSync as any).enqueueDuePeriodicSyncs();
 
-    expect(enqueueJob).toHaveBeenCalledWith(TEST_SHOP, 'sync');
+    expect(enqueueJob).toHaveBeenCalledWith(expect.objectContaining({ shop: TEST_SHOP, kind: 'sync' }));
   });
 
   it('still enqueues a healthy shop (trial_active)', async () => {
@@ -85,7 +85,7 @@ describe('enqueueDuePeriodicSyncs', () => {
     const autoSync = await import('../../mail/auto-sync');
     await (autoSync as any).enqueueDuePeriodicSyncs();
 
-    expect(enqueueJob).toHaveBeenCalledWith(TEST_SHOP, 'sync');
+    expect(enqueueJob).toHaveBeenCalledWith(expect.objectContaining({ shop: TEST_SHOP, kind: 'sync' }));
   });
 
   it('does not enqueue when the offline Shopify session is missing', async () => {
