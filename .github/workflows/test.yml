@@ -72,3 +72,4 @@ jobs:
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/automail_test
           DIRECT_URL: postgresql://test:test@localhost:5432/automail_test
+          GMAIL_TOKEN_SECRET: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
