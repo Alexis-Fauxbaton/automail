@@ -4,8 +4,7 @@ import {
   AppDistribution,
   shopifyApp,
 } from "@shopify/shopify-app-react-router/server";
-import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
-import prisma from "./db.server";
+import { EncryptedPrismaSessionStorage } from "./lib/shopify-session-storage";
 
 // Minimum scopes needed for a read-only support copilot.
 // Do NOT add write_* scopes unless a feature explicitly requires them —
@@ -42,8 +41,11 @@ const shopify = shopifyApp({
   scopes: process.env.SCOPES?.split(",") ?? REQUIRED_SCOPES,
   appUrl: process.env.SHOPIFY_APP_URL || process.env.HOST || "",
   authPathPrefix: "/auth",
+  // Sessions are persisted via Prisma but their accessToken / refreshToken
+  // fields are AES-256-GCM encrypted at rest (see lib/session-crypto.ts).
+  // Legacy plaintext rows are accepted and re-encrypted on the next write.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  sessionStorage: new PrismaSessionStorage(prisma) as any,
+  sessionStorage: new EncryptedPrismaSessionStorage() as any,
   distribution: AppDistribution.AppStore,
   future: {
     expiringOfflineAccessTokens: true,

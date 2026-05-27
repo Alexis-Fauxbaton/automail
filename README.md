@@ -71,6 +71,17 @@ GOOGLE_CLIENT_ID=      # Gmail OAuth
 GOOGLE_CLIENT_SECRET=
 ZOHO_CLIENT_ID=        # Zoho OAuth (optional)
 ZOHO_CLIENT_SECRET=
+GMAIL_TOKEN_SECRET=    # 64 hex chars (32 bytes); encrypts mail provider tokens. `openssl rand -hex 32`
+SHOPIFY_SESSION_SECRET=  # 64 hex chars; encrypts Shopify Session access/refresh tokens. Falls back to GMAIL_TOKEN_SECRET if unset.
+```
+
+After rolling out the encrypted session storage for the first time, run the
+one-shot migration to encrypt the legacy plaintext rows that pre-date the
+wrapper:
+
+```shell
+npx tsx scripts/encrypt-shopify-session-tokens.ts --dry-run
+npx tsx scripts/encrypt-shopify-session-tokens.ts
 ```
 
 ### Install and run
