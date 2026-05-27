@@ -954,6 +954,12 @@ function getMessageDirection(
   email: SerializedEmail,
   connectedEmail: string | null,
 ): "incoming" | "outgoing" | "unknown" {
+  // Trust the backend's processingStatus first — it's computed against the
+  // CORRECT mailbox's outgoingAliases at ingest time and works for multi-mailbox.
+  // Falling back to a fromAddress comparison against `connectedEmail` (a single
+  // primary mailbox) misclassifies replies sent from a different mailbox of the
+  // same shop as "incoming".
+  if (email.processingStatus === "outgoing") return "outgoing";
   const from = email.fromAddress.trim().toLowerCase();
   const mailbox = (connectedEmail ?? "").trim().toLowerCase();
   if (!from || !mailbox) return "unknown";
@@ -3600,13 +3606,14 @@ export default function InboxPage() {
                 </div>
 
                 {/* Right: thread detail panel (sticky).
-                    A sibling spacer below the panel extends the wrapper's
-                    *content box* (sticky's containing block), giving the
-                    panel real range to slide. Padding-bottom on the
-                    wrapper would NOT work here: sticky's CB is the parent's
-                    content box, which excludes padding, so range stays 0. */}
+                    alignSelf: stretch makes this grid cell as tall as the
+                    LEFT column (the thread list). Without it, the cell
+                    only takes the panel's intrinsic height, giving sticky
+                    zero scroll range and making the panel disappear once
+                    the list scrolls past its bottom. The previous 100vh
+                    spacer hack only worked when the list was ≤ 100vh tall. */}
                 {selectedThreadMeta && (
-                  <div>
+                  <div style={{ alignSelf: "stretch" }}>
                     <div className="ui-detail-panel">
                       <ThreadDetailPanel
                         thread={selectedThreadMeta.thread}
@@ -3617,7 +3624,6 @@ export default function InboxPage() {
                         onClose={() => setExpandedThreadId(null)}
                       />
                     </div>
-                    <div aria-hidden style={{ height: "100vh" }} />
                   </div>
                 )}
               </div>
