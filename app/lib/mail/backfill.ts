@@ -303,6 +303,7 @@ async function ingestHistoricalMessage(
   const created = await prisma.incomingEmail.create({
     data: {
       shop,
+      mailConnectionId,
       externalMessageId: msg.id,
       threadId: msg.threadId,
       canonicalThreadId,

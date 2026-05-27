@@ -231,6 +231,7 @@ async function _processNewEmails(
               where: { shop_externalMessageId: { shop, externalMessageId: msgId } },
               create: {
                 shop,
+                mailConnectionId: conn.id,
                 externalMessageId: msgId,
                 fromAddress: "",
                 subject: "",
@@ -412,6 +413,7 @@ export async function ingestAndPrefilter(
     where: { shop_externalMessageId: { shop, externalMessageId: msgId } },
     create: {
       shop,
+      mailConnectionId,
       externalMessageId: msg.id,
       threadId: msg.threadId,
       canonicalThreadId,
