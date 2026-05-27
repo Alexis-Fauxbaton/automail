@@ -53,7 +53,9 @@ export default function ConnectionCard(props: {
       <div style={{ fontSize: 13, color: "#64748b", marginBottom: 14, display: "flex", flexDirection: "column", gap: 3 }}>
         {connection.lastSyncAt && (
           <span>
-            {t("connections.lastSyncAt", { date: new Date(connection.lastSyncAt).toLocaleString() })}
+            {t("connections.lastSyncAt", {
+              date: formatDate(connection.lastSyncAt),
+            })}
           </span>
         )}
         {connection.lastSyncError && (
@@ -120,6 +122,17 @@ function providerIcon(provider: string): string {
     case "zoho": return "Z";
     default: return "?";
   }
+}
+
+// Deterministic date formatter — same output on server and client to avoid
+// React hydration mismatch (toLocaleString depends on the runtime timezone).
+function formatDate(input: Date | string): string {
+  const d = typeof input === "string" ? new Date(input) : input;
+  return new Intl.DateTimeFormat("fr-FR", {
+    dateStyle: "short",
+    timeStyle: "short",
+    timeZone: "Europe/Paris",
+  }).format(d);
 }
 
 function providerBg(provider: string): string {

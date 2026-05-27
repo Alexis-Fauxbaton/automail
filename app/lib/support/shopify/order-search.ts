@@ -1,4 +1,9 @@
 import type { ExtractedIdentifiers } from "../types";
+import {
+  partitionGraphqlErrors,
+  warnPcdOnce,
+  type ShopifyGraphqlError,
+} from "./protected-customer-data";
 
 // The admin client comes from `authenticate.admin(request)` in a route action.
 // We type it loosely to avoid coupling to a specific codegen shape.
@@ -167,6 +172,7 @@ export interface OrderSearchResult {
 export async function searchOrders(
   admin: AdminGraphqlClient,
   ids: ExtractedIdentifiers,
+  opts: { shop?: string } = {},
 ): Promise<OrderSearchResult> {
   const safe = sanitizeIdentifiers(ids);
   const priorities: Array<{
@@ -181,7 +187,7 @@ export async function searchOrders(
 
   for (const { key, query } of priorities) {
     if (!query) continue;
-    const orders = await runSearch(admin, query);
+    const orders = await runSearch(admin, query, opts.shop);
     if (orders.length > 0) {
       return { matchedBy: key, orders };
     }
@@ -193,6 +199,7 @@ export async function searchOrders(
 async function runSearch(
   admin: AdminGraphqlClient,
   query: string,
+  shop?: string,
 ): Promise<RawOrderNode[]> {
   // Backoff schedule for THROTTLED errors. Shopify's leaky-bucket allows
   // recovery within ~1s for typical query costs, but big bursts (resync of
@@ -207,14 +214,28 @@ async function runSearch(
     });
     const json = (await response.json()) as {
       data?: { orders?: { edges: Array<{ node: RawOrderNode }> } };
-      errors?: Array<{ message: string; extensions?: { code?: string } }>;
+      errors?: ShopifyGraphqlError[];
     };
 
     if (json.errors && json.errors.length > 0) {
       const throttled = json.errors.some(
         (e) => e.extensions?.code === "THROTTLED" || /throttled/i.test(e.message),
       );
-      const msg = json.errors.map((e) => e.message).join(" | ");
+      // Sort out PCD restrictions (Shopify withholds customer PII when the
+      // app isn't yet approved for protected customer data). Those errors
+      // come with a partial `data` block we can still use; only "real"
+      // errors should abort the search.
+      const { pcdErrors, realErrors } = partitionGraphqlErrors(json.errors);
+      const msg = realErrors.map((e) => e.message).join(" | ");
+      if (pcdErrors.length > 0) {
+        warnPcdOnce(shop ?? "unknown", "order-search");
+      }
+
+      if (realErrors.length === 0 && json.data?.orders) {
+        // PCD-only errors — proceed with the partial response.
+        return json.data.orders.edges.map((e) => e.node);
+      }
+
       lastError = new Error(`Shopify GraphQL error: ${msg}`);
       if (throttled && attempt < RETRY_DELAYS_MS.length) {
         // Add ±25% jitter so a burst of throttled requests doesn't all

@@ -1,14 +1,31 @@
 import type { AdminGraphqlClient } from "../support/shopify/order-search";
+import {
+  partitionGraphqlErrors,
+  warnPcdOnce,
+  type ShopifyGraphqlError,
+} from "../support/shopify/protected-customer-data";
 
 const CUSTOMERS_QUERY = `#graphql
-  query RecentCustomerEmails($first: Int!) {
-    customers(first: $first, sortKey: UPDATED_AT, reverse: true) {
+  query RecentCustomerEmails($first: Int!, $after: String) {
+    customers(first: $first, after: $after, sortKey: UPDATED_AT, reverse: true) {
       nodes {
         email
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
       }
     }
   }
 `;
+
+// Shopify caps per-query at 250 — we paginate up to MAX_CUSTOMERS so large
+// shops still get their long-tail customers recognised by the Tier 1
+// prefilter. 2 000 is a practical compromise: ~60 KB per shop in memory,
+// 8 Shopify API calls per refresh, covers the long tail without hammering
+// the Admin API on every 5-minute sync tick.
+const PAGE_SIZE = 250;
+const MAX_CUSTOMERS = 2000;
 
 // 5 minutes — multi-instance staleness ceiling. The previous 20-minute TTL
 // meant that after the merchant added a new customer, replica B could
@@ -53,13 +70,40 @@ export async function fetchCustomerEmails(
   }
 
   const emails = new Set<string>();
+  let after: string | null = null;
   try {
-    const res = await admin.graphql(CUSTOMERS_QUERY, {
-      variables: { first: 250 },
-    });
-    const data = await res.json();
-    for (const node of data?.data?.customers?.nodes ?? []) {
-      if (node.email) emails.add(node.email.toLowerCase());
+    while (emails.size < MAX_CUSTOMERS) {
+      const res = await admin.graphql(CUSTOMERS_QUERY, {
+        variables: { first: PAGE_SIZE, after },
+      });
+      const data = (await res.json()) as {
+        data?: {
+          customers?: {
+            nodes: Array<{ email: string | null }>;
+            pageInfo: { hasNextPage: boolean; endCursor: string | null };
+          };
+        };
+        errors?: ShopifyGraphqlError[];
+      };
+      if (data.errors && data.errors.length > 0) {
+        const { pcdErrors, realErrors } = partitionGraphqlErrors(data.errors);
+        if (pcdErrors.length > 0) warnPcdOnce(shop, "fetchCustomerEmails");
+        if (realErrors.length > 0) {
+          console.error(
+            "[gmail/customers] GraphQL errors:",
+            realErrors.map((e) => e.message).join(" | "),
+          );
+          break; // stop paginating on real errors — partial cache is fine
+        }
+      }
+      const page = data.data?.customers;
+      if (!page) break;
+      for (const node of page.nodes) {
+        if (node.email) emails.add(node.email.toLowerCase());
+        if (emails.size >= MAX_CUSTOMERS) break;
+      }
+      if (!page.pageInfo.hasNextPage || !page.pageInfo.endCursor) break;
+      after = page.pageInfo.endCursor;
     }
   } catch (err) {
     console.error("[gmail/customers] Failed to fetch customer emails:", err);

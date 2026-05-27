@@ -128,6 +128,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       where: { shop, ...(mailConnectionId ? { mailConnectionId } : {}) },
       orderBy: { receivedAt: "desc" },
       take: 500,
+      // bodyHtml is the heaviest column (sanitized HTML bodies routinely top
+      // 100 KB per message). The thread-detail view lazy-loads it via the
+      // existing refresh_email_html action when the user opens a thread, so
+      // omitting it from the list query saves ~30-50 MB on a fully-loaded
+      // 500-mail inbox.
+      omit: { bodyHtml: true },
       include: {
         replyDraft: { include: { attachments: true } },
         incomingAttachments: {
@@ -165,6 +171,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         // bounds this to the page size, but a future refactor that drops
         // distinct shouldn't suddenly fetch the whole table.
         take: canonicalIds.length,
+        omit: { bodyHtml: true },
         include: {
           replyDraft: { include: { attachments: true } },
           incomingAttachments: {
@@ -645,7 +652,10 @@ function serializeEmail(row: {
   subject: string;
   snippet: string;
   bodyText: string;
-  bodyHtml: string;
+  // bodyHtml is omitted from the inbox list loader (heavy column lazy-loaded
+  // by refresh_email_html on thread expand). Other callers that still
+  // include it can pass it through; missing values fall back to "".
+  bodyHtml?: string;
   receivedAt: Date;
   tier1Result: string | null;
   tier2Result: string | null;
@@ -699,7 +709,7 @@ function serializeEmail(row: {
     subject: decodeHtmlEntities(row.subject),
     snippet: decodeHtmlEntities(row.snippet).replace(/<[^>]*>/g, " ").replace(/[<>]/g, " ").replace(/\s{2,}/g, " ").trim(),
     bodyText: decodeHtmlEntities(row.bodyText),
-    bodyHtml: row.bodyHtml,
+    bodyHtml: row.bodyHtml ?? "",
     incomingAttachments: row.incomingAttachments,
     receivedAt: row.receivedAt.toISOString(),
     tier1Result: row.tier1Result,
@@ -1693,7 +1703,7 @@ const EmailMessageBlock = memo(function EmailMessageBlock({
             <span style={{ fontWeight: 600, fontSize: "0.875rem" }}>
               {email.fromName || email.fromAddress}
             </span>
-            <span style={{ fontSize: "0.8125rem", color: "#6b7280" }}>
+            <span suppressHydrationWarning style={{ fontSize: "0.8125rem", color: "#6b7280" }}>
               {relativeTime(email.receivedAt, t)}
             </span>
             <span>
@@ -1964,7 +1974,7 @@ const ThreadCard = memo(function ThreadCard({
             </span>
           )}
         </div>
-        <span style={{ flexShrink: 0, fontSize: "0.8125rem", color: "var(--ui-slate-500)" }}>
+        <span suppressHydrationWarning style={{ flexShrink: 0, fontSize: "0.8125rem", color: "var(--ui-slate-500)" }}>
           {messageCount > 1 && `${messageCount} msg · `}
           {latestDirection === "incoming" ? "↓" : latestDirection === "outgoing" ? "↑" : "·"}{" "}
           {relativeTime(latest.receivedAt, t)}

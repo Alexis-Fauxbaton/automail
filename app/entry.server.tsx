@@ -77,6 +77,31 @@ async function handleShutdown(signal: string) {
 process.on("SIGTERM", () => void handleShutdown("SIGTERM"));
 process.on("SIGINT", () => void handleShutdown("SIGINT"));
 
+// Defence-in-depth headers applied to every document response.
+//
+// Intentionally orthogonal to Content-Security-Policy: the Shopify SDK owns
+// the CSP header (it sets `frame-ancestors` per-request based on the shop
+// query param so the embedded admin frame can load us). Adding script-src /
+// style-src directives here would either overwrite Shopify's frame-ancestors
+// or require careful merging with App Bridge + Polaris CDN allowances — left
+// as a follow-up so we don't ship a broken embedded admin frame.
+function setSecurityHeaders(headers: Headers) {
+  headers.set("X-Content-Type-Options", "nosniff");
+  headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  headers.set(
+    "Permissions-Policy",
+    "camera=(), microphone=(), geolocation=(), payment=()",
+  );
+  // HSTS only in production — over HTTP in dev (or behind a non-HTTPS
+  // tunnel) the directive would block the very next request.
+  if (process.env.NODE_ENV === "production") {
+    headers.set(
+      "Strict-Transport-Security",
+      "max-age=31536000; includeSubDomains",
+    );
+  }
+}
+
 export default async function handleRequest(
   request: Request,
   responseStatusCode: number,
@@ -84,6 +109,7 @@ export default async function handleRequest(
   reactRouterContext: EntryContext
 ) {
   addDocumentResponseHeaders(request, responseHeaders);
+  setSecurityHeaders(responseHeaders);
   const userAgent = request.headers.get("user-agent");
   const callbackName = isbot(userAgent ?? '')
     ? "onAllReady"
