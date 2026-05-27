@@ -83,9 +83,13 @@ export async function resolveEntitlements(input: ResolveInput): Promise<Entitlem
   const firstInstallDate = flag.firstInstallDate;
   const isInternal = flag.isInternal;
 
+  // Mailbox usage (always read — needed even for internal bypass so the UI
+  // shows the real "X / ∞" counter rather than a hardcoded 0).
+  const mailboxCount = await prisma.mailConnection.count({ where: { shop: input.shop } });
+
   // Internal bypass — pro-level entitlements with infinite quota.
   if (isInternal) {
-    return buildInternalEntitlements(input.shop, now);
+    return buildInternalEntitlements(input.shop, now, mailboxCount);
   }
 
   // Paid subscription resolution.
@@ -93,9 +97,6 @@ export async function resolveEntitlements(input: ResolveInput): Promise<Entitlem
 
   // Trial state (only relevant if no paid plan).
   const trial = computeTrialState({ firstInstallDate, now });
-
-  // Mailbox usage (always read).
-  const mailboxCount = await prisma.mailConnection.count({ where: { shop: input.shop } });
 
   if (active.plan !== 'none') {
     return buildPaidEntitlements({
@@ -140,7 +141,7 @@ function computeQuotaStatus(used: number, limit: number, periodStart: Date): Quo
   return { used, limit, pct, level, periodStart };
 }
 
-function buildInternalEntitlements(shop: string, now: Date): Entitlements {
+function buildInternalEntitlements(shop: string, now: Date, mailboxCount: number): Entitlements {
   const periodStart = getCurrentPeriodStart(now);
   return {
     shop,
@@ -154,7 +155,7 @@ function buildInternalEntitlements(shop: string, now: Date): Entitlements {
     trialDaysRemaining: null,
     trialExpiresAt: null,
     quotaStatus: { used: 0, limit: Infinity, pct: 0, level: 'ok', periodStart },
-    mailboxStatus: { used: 0, limit: Infinity },
+    mailboxStatus: { used: mailboxCount, limit: Infinity },
     dashboardMaxRangeDays: PLANS.pro.dashboardMaxRangeDays,
   };
 }

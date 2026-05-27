@@ -1703,7 +1703,7 @@ const EmailMessageBlock = memo(function EmailMessageBlock({
             <span style={{ fontWeight: 600, fontSize: "0.875rem" }}>
               {email.fromName || email.fromAddress}
             </span>
-            <span style={{ fontSize: "0.8125rem", color: "#6b7280" }}>
+            <span suppressHydrationWarning style={{ fontSize: "0.8125rem", color: "#6b7280" }}>
               {relativeTime(email.receivedAt, t)}
             </span>
             <span>
@@ -1974,7 +1974,7 @@ const ThreadCard = memo(function ThreadCard({
             </span>
           )}
         </div>
-        <span style={{ flexShrink: 0, fontSize: "0.8125rem", color: "var(--ui-slate-500)" }}>
+        <span suppressHydrationWarning style={{ flexShrink: 0, fontSize: "0.8125rem", color: "var(--ui-slate-500)" }}>
           {messageCount > 1 && `${messageCount} msg · `}
           {latestDirection === "incoming" ? "↓" : latestDirection === "outgoing" ? "↑" : "·"}{" "}
           {relativeTime(latest.receivedAt, t)}
