@@ -18,6 +18,7 @@ import type { ClassificationEdit } from "./manual-classification";
 import { resolveEntitlements } from "../billing/entitlements";
 import { getUsage } from "../billing/usage";
 import { refineContextRefreshTotal } from "../metrics/definitions";
+import { checkLlmRateLimit } from "../llm-rate-limit";
 
 async function maybeRefreshAnalysis(
   emailId: string,
@@ -302,6 +303,14 @@ export async function handleReanalyze(params: {
 }) {
   const { shop, admin, emailId, skipDraft } = params;
 
+  // Per-shop rate cap on LLM actions. Caught BEFORE the entitlement check
+  // because a stuck-loop client retrying after a quota response would still
+  // accumulate rate-counter hits.
+  const limited = await checkLlmRateLimit(shop, "reanalyze");
+  if (limited) {
+    return { reanalyzed: null, report: null, disconnected: false, refined: null, ...limited };
+  }
+
   // Gate on entitlements regardless of skipDraft. Both branches run Tier 3
   // (LLM intent extraction + Shopify + tracking + optional draft) — these
   // cost real money on every call even when markThreadAnalyzedIfFirst would
@@ -360,6 +369,11 @@ export async function handleRedraft(params: {
   emailId: string;
 }) {
   const { shop, admin, emailId } = params;
+
+  const limited = await checkLlmRateLimit(shop, "redraft");
+  if (limited) {
+    return { reanalyzed: null, report: null, disconnected: false, refined: null, ...limited };
+  }
 
   const ent = await resolveEntitlements({ shop, admin });
   if (!ent.canGenerateDraft) {
@@ -437,6 +451,11 @@ export async function handleRefine(params: {
   const record = await prisma.incomingEmail.findUnique({ where: { id: emailId } });
   if (!record || record.shop !== shop || !currentDraft || !instructions) {
     return { report: null, disconnected: false, reanalyzed: null, refined: null };
+  }
+
+  const limited = await checkLlmRateLimit(shop, "refine");
+  if (limited) {
+    return { reanalyzed: null, report: null, disconnected: false, refined: null, ...limited };
   }
 
   const ent = await resolveEntitlements({ shop, admin });
