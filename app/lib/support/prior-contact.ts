@@ -35,9 +35,23 @@ export async function computePriorContact(
 ): Promise<Record<string, PriorContactResult>> {
   if (canonicalIds.length === 0) return {};
 
+  // Bounded by both a date window and a row cap so a shop that has been
+  // using automail for years doesn't load 50k+ outgoing rows on every
+  // inbox render. The signal is "did we reply to this order in the
+  // recent past" — outgoing messages older than 180 days are practically
+  // irrelevant (customer either moved on or the merchant doesn't
+  // remember). A future materialised version on Thread (hasMerchantReply
+  // + lastMerchantReplyAt) would eliminate the scan entirely; tracked
+  // separately.
+  const PRIOR_CONTACT_LOOKBACK_DAYS = 180;
+  const PRIOR_CONTACT_ROW_CAP = 5000;
+  const cutoff = new Date(Date.now() - PRIOR_CONTACT_LOOKBACK_DAYS * 24 * 3600 * 1000);
+
   const outgoingRows = await prisma.incomingEmail.findMany({
-    where: { shop, processingStatus: "outgoing" },
+    where: { shop, processingStatus: "outgoing", receivedAt: { gte: cutoff } },
     select: { canonicalThreadId: true, receivedAt: true },
+    orderBy: { receivedAt: "desc" },
+    take: PRIOR_CONTACT_ROW_CAP,
   });
 
   const earliestOutgoingByThread = new Map<string, number>();
