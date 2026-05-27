@@ -10,7 +10,19 @@ ALTER TABLE "Thread" ADD COLUMN "mailConnectionId" TEXT;
 ALTER TABLE "IncomingEmail" ADD COLUMN "mailConnectionId" TEXT;
 ALTER TABLE "SyncJob" ADD COLUMN "mailConnectionId" TEXT;
 
--- 3. Backfill (each shop has at most one MailConnection at this point)
+-- 3a. Delete orphans: rows whose shop no longer has a MailConnection.
+-- These are the ARCH-C2 leftovers (mailbox disconnected, dependent rows kept).
+-- They can never be re-synced anyway, and they'd cause the post-backfill guard
+-- to fail. Order matters: child tables before parents.
+DELETE FROM "IncomingEmail" e
+  WHERE NOT EXISTS (SELECT 1 FROM "MailConnection" mc WHERE mc.shop = e.shop);
+DELETE FROM "Thread" t
+  WHERE NOT EXISTS (SELECT 1 FROM "MailConnection" mc WHERE mc.shop = t.shop);
+DELETE FROM "SyncJob" j
+  WHERE j.kind NOT IN ('recompute', 'reclassify')
+    AND NOT EXISTS (SELECT 1 FROM "MailConnection" mc WHERE mc.shop = j.shop);
+
+-- 3b. Backfill (each shop has at most one MailConnection at this point)
 UPDATE "Thread" t
   SET "mailConnectionId" = (SELECT mc."id" FROM "MailConnection" mc WHERE mc.shop = t.shop);
 UPDATE "IncomingEmail" e
