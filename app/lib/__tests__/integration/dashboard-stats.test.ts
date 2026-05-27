@@ -47,6 +47,7 @@ describe('getResponseTimeStats', () => {
     await testDb.incomingEmail.create({
       data: {
         shop: TEST_SHOP,
+        mailConnectionId: thread.mailConnectionId,
         externalMessageId: 'rt-in-1',
         canonicalThreadId: thread.id,
         fromAddress: 'customer@example.com',
@@ -61,6 +62,7 @@ describe('getResponseTimeStats', () => {
     await testDb.incomingEmail.create({
       data: {
         shop: TEST_SHOP,
+        mailConnectionId: thread.mailConnectionId,
         externalMessageId: 'rt-out-1',
         canonicalThreadId: thread.id,
         fromAddress: 'shop@example.com',
@@ -100,6 +102,7 @@ describe('getResponseTimeStats', () => {
     await testDb.incomingEmail.create({
       data: {
         shop: TEST_SHOP,
+        mailConnectionId: thread.mailConnectionId,
         externalMessageId: 'merchant-first',
         canonicalThreadId: thread.id,
         fromAddress: 'shop@example.com',
@@ -127,6 +130,7 @@ describe('getDraftUsageStats', () => {
     const email1 = await testDb.incomingEmail.create({
       data: {
         shop: TEST_SHOP,
+        mailConnectionId: thread.mailConnectionId,
         externalMessageId: 'draft-email-1',
         canonicalThreadId: thread.id,
         fromAddress: 'c@example.com',
@@ -140,6 +144,7 @@ describe('getDraftUsageStats', () => {
     const email2 = await testDb.incomingEmail.create({
       data: {
         shop: TEST_SHOP,
+        mailConnectionId: thread.mailConnectionId,
         externalMessageId: 'draft-email-2',
         canonicalThreadId: thread.id,
         fromAddress: 'c@example.com',
@@ -153,6 +158,7 @@ describe('getDraftUsageStats', () => {
     const email3 = await testDb.incomingEmail.create({
       data: {
         shop: TEST_SHOP,
+        mailConnectionId: thread.mailConnectionId,
         externalMessageId: 'draft-email-3',
         canonicalThreadId: thread.id,
         fromAddress: 'c@example.com',
@@ -222,6 +228,7 @@ describe('getDraftUsageStats', () => {
     const email1 = await testDb.incomingEmail.create({
       data: {
         shop: TEST_SHOP,
+        mailConnectionId: thread.mailConnectionId,
         externalMessageId: 'pending-email-1',
         canonicalThreadId: thread.id,
         fromAddress: 'c@example.com',
@@ -235,6 +242,7 @@ describe('getDraftUsageStats', () => {
     const email2 = await testDb.incomingEmail.create({
       data: {
         shop: TEST_SHOP,
+        mailConnectionId: thread.mailConnectionId,
         externalMessageId: 'pending-email-2',
         canonicalThreadId: thread.id,
         fromAddress: 'c@example.com',

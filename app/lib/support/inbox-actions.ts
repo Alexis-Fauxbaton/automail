@@ -60,21 +60,27 @@ async function maybeRefreshAnalysis(
   }
 }
 
-export async function handleDisconnect(params: { shop: string }) {
-  await deleteConnection(params.shop);
+export async function handleDisconnect(params: {
+  shop: string;
+  mailConnectionId: string;
+}) {
+  await deleteConnection({ shop: params.shop, mailConnectionId: params.mailConnectionId });
   return { disconnected: true, report: null, reanalyzed: null, refined: null, stopped: false };
 }
 
-export async function handleStop(params: { shop: string }) {
+export async function handleStop(params: { shop: string; mailConnectionId: string }) {
   await prisma.mailConnection.update({
-    where: { shop: params.shop },
+    where: { id: params.mailConnectionId, shop: params.shop },
     data: { syncCancelledAt: new Date() },
   });
   return { stopped: true, report: null, disconnected: false, reanalyzed: null, refined: null };
 }
 
-export async function handleResync(params: { shop: string }) {
-  const { shop } = params;
+export async function handleResync(params: {
+  shop: string;
+  mailConnectionId: string;
+}) {
+  const { shop, mailConnectionId } = params;
   // Audit log — destructive operation. We capture every resync so a
   // misclick that wipes ingested email history can be traced. The log is
   // intentionally a structured `console.warn` so it ships to whatever log
@@ -82,10 +88,28 @@ export async function handleResync(params: { shop: string }) {
   // a new DB table.
   const startedAt = new Date().toISOString();
   console.warn(
-    `[audit] resync shop=${shop} startedAt=${startedAt} action=delete-all-incoming-emails`,
+    `[audit] resync shop=${shop} mailConnectionId=${mailConnectionId} startedAt=${startedAt} action=delete-incoming-emails-and-reset-cursor`,
   );
+
+  // Snapshot manual overrides (intent / order picks the user explicitly
+  // made) onto Thread BEFORE wiping IncomingEmail rows — they live inside
+  // `analysisResult` JSON which is about to be deleted. The next analysis
+  // pass on each thread will restore them. Scoped to this mailbox only.
+  try {
+    const { snapshotManualOverridesForMailbox } = await import("./preserved-overrides");
+    const n = await snapshotManualOverridesForMailbox(shop, mailConnectionId);
+    if (n > 0) {
+      console.log(`[resync] shop=${shop} mailConnectionId=${mailConnectionId} snapshotted manualOverrides for ${n} thread(s)`);
+    }
+  } catch (err) {
+    console.error("[resync] manual-overrides snapshot failed:", err);
+    // Continue — losing overrides is bad UX but not a blocker for resync.
+  }
+
+  // Threads with a draft are "engaged" — never reset their supportNature, the
+  // merchant has acted on them.
   const engagedThreads = await prisma.incomingEmail.findMany({
-    where: { shop, replyDraft: { isNot: null } },
+    where: { shop, mailConnectionId, replyDraft: { isNot: null } },
     select: { canonicalThreadId: true },
   });
   const engagedThreadIds = Array.from(
@@ -96,33 +120,24 @@ export async function handleResync(params: { shop: string }) {
     ),
   );
 
-  // Snapshot manual overrides (intent / order picks the user explicitly
-  // made) onto Thread BEFORE wiping IncomingEmail rows — they live inside
-  // `analysisResult` JSON which is about to be deleted. The next analysis
-  // pass on each thread will restore them.
-  try {
-    const { snapshotManualOverridesForShop } = await import("./preserved-overrides");
-    const n = await snapshotManualOverridesForShop(shop);
-    if (n > 0) {
-      console.log(`[resync] shop=${shop} snapshotted manualOverrides for ${n} thread(s)`);
-    }
-  } catch (err) {
-    console.error("[resync] manual-overrides snapshot failed:", err);
-    // Continue — losing overrides is bad UX but not a blocker for resync.
-  }
+  // Scoped to this mailbox only — other mailboxes' IncomingEmail rows are untouched.
+  await prisma.incomingEmail.deleteMany({ where: { shop, mailConnectionId } });
 
-  await prisma.incomingEmail.deleteMany({ where: { shop } });
+  // Reset supportNature for this mailbox's classified-but-not-engaged threads —
+  // re-classification will repopulate on the next ingest pass.
   await prisma.thread.updateMany({
     where: {
       shop,
+      mailConnectionId,
       supportNature: { in: ["needs_review", "probable_support", "confirmed_support", "mixed"] },
       previousOperationalState: null,
       id: { notIn: engagedThreadIds },
     },
     data: { supportNature: "unknown" },
   });
+
   await prisma.mailConnection.update({
-    where: { shop },
+    where: { id: mailConnectionId },
     data: {
       historyId: null,
       // Outlook's incremental cursor lives in its own column. Without
@@ -134,12 +149,13 @@ export async function handleResync(params: { shop: string }) {
       onboardingBackfillDoneAt: null,
     },
   });
-  await enqueueJob(shop, "resync");
+
+  await enqueueJob({ shop, kind: "resync", mailConnectionId });
   return { syncStarted: true, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
 }
 
 export async function handleReclassify(params: { shop: string }) {
-  await enqueueJob(params.shop, "reclassify");
+  await enqueueJob({ shop: params.shop, kind: "reclassify" });
   return { syncStarted: true, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
 }
 
@@ -178,8 +194,12 @@ export async function handleDismissThreadFromAnalyze(params: { shop: string; can
   return { dismissedCount: result.count, report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
 }
 
-export async function handleSync(params: { shop: string; admin: AdminGraphqlClient }) {
-  const { shop, admin } = params;
+export async function handleSync(params: {
+  shop: string;
+  admin: AdminGraphqlClient;
+  mailConnectionId?: string; // if provided, sync only that mailbox; otherwise sync all
+}) {
+  const { shop, admin, mailConnectionId } = params;
   // Mirror auto-sync's per-conversation billing semantics: when the shop is
   // suspended (quota exceeded or trial expired) the pipeline still runs but
   // Tier 3 (intent + Shopify + tracking + draft) is skipped — Tier 1 + 2
@@ -188,6 +208,11 @@ export async function handleSync(params: { shop: string; admin: AdminGraphqlClie
   // and is skipped in that case.
   const ent = await resolveEntitlements({ shop, admin });
   const tier3Allowed = !ent.isSyncSuspended;
+
+  const connections = mailConnectionId
+    ? await prisma.mailConnection.findMany({ where: { shop, id: mailConnectionId } })
+    : await prisma.mailConnection.findMany({ where: { shop, autoSyncEnabled: true } });
+
   // The mail provider (Gmail / Outlook / Zoho) can throw — typically when the
   // OAuth refresh token is invalidated (user revoked, app secret rotated,
   // token TTL exceeded). processNewEmails already records the message in
@@ -195,12 +220,32 @@ export async function handleSync(params: { shop: string; admin: AdminGraphqlClie
   // instead of letting it propagate as a 500 (which would render a generic
   // "Erreur applicative" page that swallows the whole inbox).
   let report = null as Awaited<ReturnType<typeof processNewEmails>> | null;
-  let syncError: string | null = null;
-  try {
-    report = await processNewEmails(shop, admin, { tier3Allowed });
-  } catch (err) {
-    syncError = err instanceof Error ? err.message : String(err);
+  let syncError: string | null = connections.length === 0 ? "No mail connection for this shop" : null;
+  for (const connection of connections) {
+    try {
+      const r = await processNewEmails(shop, admin, { tier3Allowed, connection });
+      // Merge reports across mailboxes: sum numeric counters, combine errors,
+      // preserve cancelled=true if any mailbox was cancelled.
+      if (!report) {
+        report = { ...r };
+      } else {
+        report = {
+          total: report.total + r.total,
+          alreadyProcessed: report.alreadyProcessed + r.alreadyProcessed,
+          filtered: report.filtered + r.filtered,
+          supportClient: report.supportClient + r.supportClient,
+          uncertain: report.uncertain + r.uncertain,
+          nonClient: report.nonClient + r.nonClient,
+          errors: report.errors + r.errors,
+          cancelled: report.cancelled || r.cancelled,
+        };
+      }
+    } catch (err) {
+      syncError = err instanceof Error ? err.message : String(err);
+      break;
+    }
   }
+
   let staleRefresh = null as Awaited<ReturnType<typeof refreshStaleAnalysesForShop>> | null;
   if (tier3Allowed && !syncError) {
     try {
@@ -214,12 +259,14 @@ export async function handleSync(params: { shop: string; admin: AdminGraphqlClie
   return { report, syncCompleted: !syncError, syncError, disconnected: false, reanalyzed: null, refined: null, stopped: false, staleRefresh, syncSuspended: !tier3Allowed };
 }
 
-export async function handleBackfill(params: { shop: string; days: number }) {
-  const { shop, days } = params;
+export async function handleBackfill(params: {
+  shop: string;
+  mailConnectionId: string;
+  days: number;
+}) {
+  const { shop, mailConnectionId, days } = params;
   const afterDate = new Date(Date.now() - Math.max(1, days) * 24 * 3600_000);
-  await enqueueJob(shop, "backfill", {
-    afterDateIso: afterDate.toISOString(),
-  });
+  await enqueueJob({ shop, kind: "backfill", mailConnectionId, params: { afterDateIso: afterDate.toISOString() } });
   return {
     syncStarted: true,
     report: null,
@@ -230,9 +277,13 @@ export async function handleBackfill(params: { shop: string; days: number }) {
   };
 }
 
-export async function handleToggleAutoSync(params: { shop: string; enable: boolean }) {
+export async function handleToggleAutoSync(params: {
+  shop: string;
+  mailConnectionId: string;
+  enable: boolean;
+}) {
   await prisma.mailConnection.update({
-    where: { shop: params.shop },
+    where: { id: params.mailConnectionId, shop: params.shop },
     data: { autoSyncEnabled: params.enable },
   });
   return { report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
@@ -342,15 +393,19 @@ export async function handleRefreshEmailHtml(params: {
   const { shop, emailId } = params;
   const record = await prisma.incomingEmail.findUnique({
     where: { id: emailId },
-    select: { shop: true, externalMessageId: true },
+    select: { shop: true, externalMessageId: true, mailConnectionId: true },
   });
   if (!record || record.shop !== shop) {
     return { report: null, disconnected: false, reanalyzed: null, refined: null };
   }
-  const conn = await prisma.mailConnection.findUnique({ where: { shop } });
+  // Use the email's mailConnectionId to resolve the correct connection.
+  // Fall back to any connection for legacy rows that predate the column.
+  const conn = record.mailConnectionId
+    ? await prisma.mailConnection.findUnique({ where: { id: record.mailConnectionId } })
+    : await prisma.mailConnection.findFirst({ where: { shop } });
   if (!conn) return { report: null, disconnected: false, reanalyzed: null, refined: null };
   try {
-    const client = await getMailClient(shop, conn.provider);
+    const client = await getMailClient(conn);
     const msg = await client.getMessage(record.externalMessageId);
     const msgAttachments = msg.attachments ?? [];
     console.log(`[refresh_email_html] email=${emailId} hasHtml=${!!msg.bodyHtml} attachments=${msgAttachments.length}`);
@@ -498,10 +553,11 @@ export async function handleMoveThread(params: {
   if (supportNatureFlipped) {
     const threadRow = await prisma.thread.findUnique({
       where: { id: canonicalThreadId },
-      select: { analyzedAt: true },
+      // TODO(multi-mailbox): mailConnectionId will be plumbed from caller context once per-mailbox routing lands
+      select: { analyzedAt: true, mailConnectionId: true },
     });
     if (threadRow && threadRow.analyzedAt === null) {
-      await enqueueJob(shop, "analyze_thread", { threadId: canonicalThreadId }).catch((err) => {
+      await enqueueJob({ shop, kind: "analyze_thread", mailConnectionId: threadRow.mailConnectionId, params: { threadId: canonicalThreadId } }).catch((err) => {
         console.error(`[catch-up] enqueueJob analyze_thread failed for thread=${canonicalThreadId}:`, err);
       });
     }
@@ -792,14 +848,15 @@ export async function handleUpdateClassification(params: {
     // the call shape.
     const threadRow = await prisma.thread.findFirst({
       where: { id: threadId, shop },
-      select: { analyzedAt: true, supportNature: true },
+      // TODO(multi-mailbox): mailConnectionId will be plumbed from caller context once per-mailbox routing lands
+      select: { analyzedAt: true, supportNature: true, mailConnectionId: true },
     });
     const isSupportNow =
       threadRow?.supportNature === "confirmed_support" ||
       threadRow?.supportNature === "probable_support" ||
       threadRow?.supportNature === "mixed";
     if (threadRow && isSupportNow && threadRow.analyzedAt === null) {
-      await enqueueJob(shop, "analyze_thread", { threadId }).catch((err) => {
+      await enqueueJob({ shop, kind: "analyze_thread", mailConnectionId: threadRow.mailConnectionId, params: { threadId } }).catch((err) => {
         console.error(`[catch-up] enqueueJob analyze_thread failed for thread=${threadId}:`, err);
       });
     }

@@ -24,7 +24,7 @@ vi.mock("../../gmail/crypto", () => ({
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-import { getAuthUrl, exchangeCodeForTokens, saveConnection, getAuthenticatedClient } from "../auth";
+import { getAuthUrl, exchangeCodeForTokens, saveConnection, getAuthenticatedClientById } from "../auth";
 import prisma from "../../../db.server";
 
 describe("outlook/auth", () => {
@@ -100,16 +100,17 @@ describe("outlook/auth", () => {
     });
   });
 
-  describe("getAuthenticatedClient", () => {
+  describe("getAuthenticatedClientById", () => {
     it("returns tokens directly when not expired", async () => {
       const futureExpiry = new Date(Date.now() + 2 * 3600_000);
       (prisma.mailConnection.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: "conn-1",
         accessToken: "enc:access-tok",
         refreshToken: "enc:refresh-tok",
         tokenExpiry: futureExpiry,
       });
 
-      const client = await getAuthenticatedClient("test-shop.myshopify.com");
+      const client = await getAuthenticatedClientById("conn-1");
       expect(client.accessToken).toBe("access-tok");
       expect(mockFetch).not.toHaveBeenCalled();
     });
@@ -117,6 +118,7 @@ describe("outlook/auth", () => {
     it("refreshes token when near expiry", async () => {
       const nearExpiry = new Date(Date.now() + 30_000);
       (prisma.mailConnection.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: "conn-1",
         accessToken: "enc:old-access",
         refreshToken: "enc:refresh-tok",
         tokenExpiry: nearExpiry,
@@ -130,15 +132,15 @@ describe("outlook/auth", () => {
         }),
       });
 
-      const client = await getAuthenticatedClient("test-shop.myshopify.com");
+      const client = await getAuthenticatedClientById("conn-1");
       expect(client.accessToken).toBe("new-access");
       expect(prisma.mailConnection.update).toHaveBeenCalled();
     });
 
     it("throws when no connection exists", async () => {
       (prisma.mailConnection.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(null);
-      await expect(getAuthenticatedClient("test-shop.myshopify.com")).rejects.toThrow(
-        "No Outlook connection for this shop",
+      await expect(getAuthenticatedClientById("nonexistent-id")).rejects.toThrow(
+        "No Outlook connection for id=nonexistent-id",
       );
     });
   });

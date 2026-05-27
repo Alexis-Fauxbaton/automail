@@ -4,7 +4,7 @@ const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
 vi.mock("../auth", () => ({
-  getAuthenticatedClient: vi.fn().mockResolvedValue({ accessToken: "test-token" }),
+  getAuthenticatedClientById: vi.fn().mockResolvedValue({ accessToken: "test-token" }),
 }));
 
 import {
@@ -83,7 +83,7 @@ describe("fetchDeltaMessages", () => {
       }),
     });
 
-    const result = await fetchDeltaMessages("test-shop.myshopify.com", null);
+    const result = await fetchDeltaMessages("conn-test-1", null);
     expect(result.staleDeltaToken).toBe(false);
     expect(result.messages).toHaveLength(1);
     expect(result.messages[0].id).toBe("msg-001");
@@ -109,7 +109,7 @@ describe("fetchDeltaMessages", () => {
         }),
       });
 
-    const result = await fetchDeltaMessages("test-shop.myshopify.com", null);
+    const result = await fetchDeltaMessages("conn-test-1", null);
     expect(result.messages).toHaveLength(1);
     expect(result.nextDeltaLink).toBe(
       "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?$deltatoken=FINAL",
@@ -119,7 +119,7 @@ describe("fetchDeltaMessages", () => {
   it("returns staleDeltaToken=true on 410 Gone", async () => {
     mockFetch.mockResolvedValueOnce({ ok: false, status: 410, json: async () => ({}) });
 
-    const result = await fetchDeltaMessages("test-shop.myshopify.com", "https://graph.microsoft.com/stale");
+    const result = await fetchDeltaMessages("conn-test-1", "https://graph.microsoft.com/stale");
     expect(result.staleDeltaToken).toBe(true);
     expect(result.messages).toEqual([]);
   });
@@ -143,7 +143,7 @@ describe("fetchHistoricalMessages", () => {
       });
 
     const afterDate = new Date("2026-04-01T00:00:00Z");
-    const messages = await fetchHistoricalMessages("test-shop.myshopify.com", afterDate);
+    const messages = await fetchHistoricalMessages("conn-test-1", afterDate);
     expect(messages).toHaveLength(1);
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });

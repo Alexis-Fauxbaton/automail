@@ -49,6 +49,7 @@ describe("billing — refine/redraft never increment counter (Class 9)", () => {
     const anchor = await testDb.incomingEmail.create({
       data: {
         shop: TEST_SHOP,
+        mailConnectionId: t.mailConnectionId,
         externalMessageId: "anchor",
         threadId: "tid",
         canonicalThreadId: t.id,
@@ -98,6 +99,7 @@ describe("billing — refine/redraft never increment counter (Class 9)", () => {
     const anchor = await testDb.incomingEmail.create({
       data: {
         shop: TEST_SHOP,
+        mailConnectionId: t.mailConnectionId,
         externalMessageId: "anchor-rd",
         threadId: "tid",
         canonicalThreadId: t.id,

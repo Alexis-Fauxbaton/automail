@@ -22,7 +22,24 @@ import {
   claimNextJob,
   markJobFailed,
   reclaimZombieJobs,
+  type RunningSet,
 } from '../../mail/job-queue';
+
+/** Creates a minimal MailConnection for TEST_SHOP and returns its id. */
+async function createTestMailConnection(): Promise<string> {
+  const conn = await testDb.mailConnection.create({
+    data: {
+      shop: TEST_SHOP,
+      provider: 'gmail',
+      email: 'test@integration-test.myshopify.com',
+      accessToken: 'test-token',
+      refreshToken: 'test-refresh',
+      tokenExpiry: new Date(Date.now() + 3600_000),
+    },
+    select: { id: true },
+  });
+  return conn.id;
+}
 
 beforeEach(async () => {
   await cleanTestShop();
@@ -42,26 +59,32 @@ afterAll(async () => {
  * attempts. Returns the claimed TEST_SHOP job, or null if not found.
  *
  * In a dev DB with jobs from real shops, claimNextJob() might return other
- * shops' jobs before reaching ours. We skip them by passing their shop names
- * as excludeShops until we get TEST_SHOP's job (or give up).
+ * shops' jobs before reaching ours. We skip them by accumulating those shops
+ * in the RunningSet's perShopCount (cap=1, i.e. legacy shop-granularity for
+ * non-test shops) until we reach TEST_SHOP's job.
  */
 async function claimTestShopJob(
   maxClaims = 30,
 ): Promise<Awaited<ReturnType<typeof claimNextJob>>> {
-  const excludeShops: string[] = [];
+  const skipRunning: RunningSet = {
+    mailConnectionIds: new Set(),
+    perShopCount: new Map(),
+  };
   for (let i = 0; i < maxClaims; i++) {
-    const job = await claimNextJob(excludeShops);
+    const job = await claimNextJob(skipRunning);
     if (!job) return null;
     if (job.shop === TEST_SHOP) return job;
-    // Skip this shop in the next iteration so we reach TEST_SHOP's job.
-    if (!excludeShops.includes(job.shop)) excludeShops.push(job.shop);
+    // Simulate this shop as at-cap (1 running job) so it is excluded next time.
+    skipRunning.perShopCount.set(job.shop, 3); // 3 >= HARD_CAP_PER_SHOP
+    if (job.mailConnectionId) skipRunning.mailConnectionIds.add(job.mailConnectionId);
   }
   return null;
 }
 
 describe('job queue — integration DB', () => {
   it('enqueueJob creates a pending job', async () => {
-    const id = await enqueueJob(TEST_SHOP, 'sync');
+    const mailConnectionId = await createTestMailConnection();
+    const id = await enqueueJob({ shop: TEST_SHOP, kind: 'sync', mailConnectionId });
 
     expect(typeof id).toBe('string');
     expect(id.length).toBeGreaterThan(0);
@@ -74,7 +97,8 @@ describe('job queue — integration DB', () => {
   });
 
   it('claimNextJob marks job as running', async () => {
-    const id = await enqueueJob(TEST_SHOP, 'sync');
+    const mailConnectionId = await createTestMailConnection();
+    const id = await enqueueJob({ shop: TEST_SHOP, kind: 'sync', mailConnectionId });
 
     // Use the helper to skip any non-TEST_SHOP jobs ahead in the queue.
     const claimed = await claimTestShopJob();
@@ -87,23 +111,29 @@ describe('job queue — integration DB', () => {
   });
 
   it('per-shop isolation — second job not claimed while first is running (REQ-SYNC-14)', async () => {
+    const mailConnectionId = await createTestMailConnection();
     // Enqueue and claim first job — TEST_SHOP is now running.
-    await enqueueJob(TEST_SHOP, 'sync');
+    await enqueueJob({ shop: TEST_SHOP, kind: 'sync', mailConnectionId });
     const first = await claimTestShopJob();
     expect(first).not.toBeNull();
     expect(first!.shop).toBe(TEST_SHOP);
 
     // Enqueue a different kind to avoid deduplication.
-    const backfillId = await enqueueJob(TEST_SHOP, 'backfill');
+    const backfillId = await enqueueJob({ shop: TEST_SHOP, kind: 'backfill', mailConnectionId });
 
     // Even if other shops have pending jobs, the TEST_SHOP 'backfill' job must
     // remain unclaimed because TEST_SHOP already has a running job.
     // Drain up to 30 non-TEST_SHOP jobs from the queue to verify.
-    const excludeShops: string[] = [TEST_SHOP];
+    // Simulate TEST_SHOP as at-cap and accumulate other shops as we drain.
+    const drainRunning: RunningSet = {
+      mailConnectionIds: new Set(),
+      perShopCount: new Map([[TEST_SHOP, 3]]), // TEST_SHOP at cap — excluded
+    };
     for (let i = 0; i < 30; i++) {
-      const job = await claimNextJob(excludeShops);
+      const job = await claimNextJob(drainRunning);
       if (!job) break;
-      if (!excludeShops.includes(job.shop)) excludeShops.push(job.shop);
+      drainRunning.perShopCount.set(job.shop, 3); // mark claimed shops at-cap too
+      if (job.mailConnectionId) drainRunning.mailConnectionIds.add(job.mailConnectionId);
     }
 
     // The backfill job for TEST_SHOP must still be pending (not claimed).
@@ -112,7 +142,8 @@ describe('job queue — integration DB', () => {
   });
 
   it('markJobFailed × 3 sets status = error (REQ-SYNC-13)', async () => {
-    const id = await enqueueJob(TEST_SHOP, 'resync');
+    const mailConnectionId = await createTestMailConnection();
+    const id = await enqueueJob({ shop: TEST_SHOP, kind: 'resync', mailConnectionId });
 
     // Attempt 1
     const claim1 = await claimTestShopJob();
@@ -153,7 +184,7 @@ describe('job queue — integration DB', () => {
   });
 
   it('reclaimZombieJobs resets stuck running job to pending (REQ-SYNC-12)', async () => {
-    const id = await enqueueJob(TEST_SHOP, 'recompute');
+    const id = await enqueueJob({ shop: TEST_SHOP, kind: 'recompute' });
 
     // Simulate a job that has been running for 35 minutes.
     const stuckAt = new Date(Date.now() - 35 * 60 * 1000);

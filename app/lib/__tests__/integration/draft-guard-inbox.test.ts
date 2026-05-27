@@ -104,6 +104,7 @@ describe('handleReanalyze — strict quota gate', () => {
     const email = await testDb.incomingEmail.create({
       data: {
         shop: TEST_SHOP,
+        mailConnectionId: thread.mailConnectionId,
         externalMessageId: 'ext-already-analyzed',
         threadId: 'tid',
         canonicalThreadId: thread.id,
@@ -153,6 +154,7 @@ describe('handleReanalyze — strict quota gate', () => {
     const email = await testDb.incomingEmail.create({
       data: {
         shop: TEST_SHOP,
+        mailConnectionId: thread.mailConnectionId,
         externalMessageId: 'ext-never-analyzed',
         threadId: 'tid',
         canonicalThreadId: thread.id,

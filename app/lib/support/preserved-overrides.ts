@@ -76,6 +76,67 @@ export async function snapshotManualOverridesForShop(shop: string): Promise<numb
 }
 
 /**
+ * Mailbox-scoped variant of `snapshotManualOverridesForShop`. Scans only the
+ * IncomingEmail rows belonging to the given `mailConnectionId` (still
+ * double-filtered by `shop` for safety). Same semantics: latest message per
+ * thread wins, persists onto Thread, returns the count of threads snapshotted.
+ */
+export async function snapshotManualOverridesForMailbox(
+  shop: string,
+  mailConnectionId: string,
+): Promise<number> {
+  const rows = await prisma.incomingEmail.findMany({
+    where: {
+      shop,
+      mailConnectionId,
+      analysisResult: { not: null },
+      canonicalThreadId: { not: null },
+    },
+    orderBy: { receivedAt: "desc" },
+    select: { canonicalThreadId: true, analysisResult: true },
+  });
+
+  const byThread = new Map<string, PreservedOverrides>();
+  for (const row of rows) {
+    const threadId = row.canonicalThreadId!;
+    if (byThread.has(threadId)) continue;
+    if (!row.analysisResult) continue;
+    let parsed: SupportAnalysis;
+    try {
+      parsed = JSON.parse(row.analysisResult) as SupportAnalysis;
+    } catch {
+      continue;
+    }
+    const overrides = parsed.manualOverrides;
+    if (!overrides?.intents && !overrides?.order) continue;
+    const snapshot: PreservedOverrides = {};
+    if (overrides.intents) {
+      snapshot.intents = parsed.intents ?? [parsed.intent];
+      snapshot.intentsAt = overrides.intents.editedAt;
+    }
+    if (overrides.order) {
+      snapshot.order = parsed.order ?? null;
+      snapshot.orderAt = overrides.order.editedAt;
+    }
+    byThread.set(threadId, snapshot);
+  }
+
+  if (byThread.size === 0) return 0;
+
+  for (const [threadId, snapshot] of byThread) {
+    await prisma.thread
+      .update({
+        where: { id: threadId, shop },
+        data: { preservedManualOverridesJson: JSON.stringify(snapshot) },
+      })
+      .catch((err) => {
+        console.error(`[preserved-overrides] snapshot failed for thread=${threadId}:`, err);
+      });
+  }
+  return byThread.size;
+}
+
+/**
  * If `Thread.preservedManualOverridesJson` is set, apply it to `analysis`
  * (replacing intent/intents/order and re-asserting the manualOverrides
  * markers), then clear the field. Mutates and returns `analysis`.

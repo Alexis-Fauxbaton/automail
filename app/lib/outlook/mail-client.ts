@@ -1,4 +1,5 @@
 import type { MailClient } from "../mail/types";
+import type { MailConnection } from "@prisma/client";
 import {
   fetchDeltaMessages,
   fetchHistoricalMessages,
@@ -8,25 +9,27 @@ import {
 } from "./client";
 import prisma from "../../db.server";
 
-export async function createOutlookClient(shop: string): Promise<MailClient> {
+export async function createOutlookClient(connection: MailConnection): Promise<MailClient> {
+  const { id: connectionId, shop } = connection;
+
   return {
     async listRecentMessages(opts) {
       const afterDate = opts.afterDate ?? new Date(Date.now() - 7 * 24 * 3600_000);
-      const messages = await fetchHistoricalMessages(shop, afterDate);
+      const messages = await fetchHistoricalMessages(connectionId, afterDate);
       const limit = opts.maxResults ?? 100;
       return messages.slice(0, limit).map((m) => m.id);
     },
 
     async getMessage(messageId) {
-      return getMessageById(shop, messageId);
+      return getMessageById(connectionId, messageId);
     },
 
     async listNewMessages(cursor) {
-      const result = await fetchDeltaMessages(shop, cursor);
+      const result = await fetchDeltaMessages(connectionId, cursor);
 
       if (result.staleDeltaToken) {
         await prisma.mailConnection.update({
-          where: { shop },
+          where: { id: connectionId },
           data: { deltaToken: null },
         });
         return { messageIds: [], latestCursor: null };
@@ -34,7 +37,7 @@ export async function createOutlookClient(shop: string): Promise<MailClient> {
 
       if (result.nextDeltaLink) {
         await prisma.mailConnection.update({
-          where: { shop },
+          where: { id: connectionId },
           data: { deltaToken: result.nextDeltaLink },
         });
       }
@@ -46,13 +49,13 @@ export async function createOutlookClient(shop: string): Promise<MailClient> {
     },
 
     async getSyncCursor() {
-      const conn = await prisma.mailConnection.findUnique({ where: { shop } });
+      const conn = await prisma.mailConnection.findUnique({ where: { id: connectionId } });
       if (conn?.deltaToken) return conn.deltaToken;
-      return getCurrentDeltaLink(shop);
+      return getCurrentDeltaLink(connectionId);
     },
 
     async getThreadMessages(conversationId) {
-      return getThreadMessages(shop, conversationId);
+      return getThreadMessages(connectionId, conversationId);
     },
   };
 }

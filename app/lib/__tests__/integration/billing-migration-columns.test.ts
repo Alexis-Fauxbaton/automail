@@ -22,17 +22,9 @@ describe("billing — migration invariants (Class 7)", () => {
   });
 
   it("Thread.analyzedAt column exists, nullable, indexed", async () => {
-    const t = await testDb.thread.create({
-      data: {
-        shop: TEST_SHOP,
-        provider: "gmail",
-        lastMessageAt: new Date(),
-        firstMessageAt: new Date(),
-        operationalState: "open",
-        supportNature: "unknown",
-        historyStatus: "complete",
-      },
-    });
+    // Use createTestThread helper to auto-create the required MailConnection.
+    const { createTestThread } = await import("./helpers/db");
+    const t = await createTestThread();
     expect(t.analyzedAt).toBeNull();
     await testDb.thread.update({
       where: { id: t.id },

@@ -41,13 +41,14 @@ afterAll(async () => {
   await disconnectTestDb();
 });
 
-async function seedAnalyzedAnchor(canonicalThreadId: string) {
+async function seedAnalyzedAnchor(thread: { id: string; mailConnectionId: string }) {
   return testDb.incomingEmail.create({
     data: {
       shop: TEST_SHOP,
-      externalMessageId: `ext-${canonicalThreadId}`,
+      mailConnectionId: thread.mailConnectionId,
+      externalMessageId: `ext-${thread.id}`,
       threadId: "tid",
-      canonicalThreadId,
+      canonicalThreadId: thread.id,
       fromAddress: "c@x.com",
       subject: "S",
       bodyText: "B",
@@ -73,7 +74,7 @@ async function seedAnalyzedAnchor(canonicalThreadId: string) {
 describe("handleEditThreadIdentifiers — refresh decisions", () => {
   it("calls refreshThreadAnalysis with reSearchOrder=true and refreshTracking=true when order changes", async () => {
     const thread = await createTestThread({});
-    await seedAnalyzedAnchor(thread.id);
+    await seedAnalyzedAnchor(thread);
     await testDb.thread.update({
       where: { id: thread.id },
       data: { resolvedOrderNumber: "1000" },
@@ -101,7 +102,7 @@ describe("handleEditThreadIdentifiers — refresh decisions", () => {
 
   it("calls refreshThreadAnalysis with reSearchOrder=false and refreshTracking=false when only customer name changed", async () => {
     const thread = await createTestThread({});
-    await seedAnalyzedAnchor(thread.id);
+    await seedAnalyzedAnchor(thread);
 
     const res = await handleEditThreadIdentifiers({
       shop: TEST_SHOP,
@@ -124,7 +125,7 @@ describe("handleEditThreadIdentifiers — refresh decisions", () => {
 
   it("returns skipped_noop and never calls refreshThreadAnalysis when nothing changed", async () => {
     const thread = await createTestThread({});
-    await seedAnalyzedAnchor(thread.id);
+    await seedAnalyzedAnchor(thread);
     await testDb.thread.update({
       where: { id: thread.id },
       data: { resolvedOrderNumber: "5", resolvedCustomerName: "Bob" },
@@ -163,7 +164,7 @@ describe("handleEditThreadIdentifiers — refresh decisions", () => {
 
   it("persists the edit even when refreshThreadAnalysis throws", async () => {
     const thread = await createTestThread({});
-    await seedAnalyzedAnchor(thread.id);
+    await seedAnalyzedAnchor(thread);
     refreshSpy.mockRejectedValueOnce(new Error("shopify down"));
 
     const res = await handleEditThreadIdentifiers({
@@ -185,7 +186,7 @@ describe("handleEditThreadIdentifiers — refresh decisions", () => {
 describe("handleRefine — context wiring", () => {
   it("passes a contextSummary derived from analysisResult", async () => {
     const thread = await createTestThread({});
-    const anchor = await seedAnalyzedAnchor(thread.id);
+    const anchor = await seedAnalyzedAnchor(thread);
 
     await handleRefine({
       shop: TEST_SHOP,
@@ -208,6 +209,7 @@ describe("handleRefine — context wiring", () => {
     const anchor = await testDb.incomingEmail.create({
       data: {
         shop: TEST_SHOP,
+        mailConnectionId: thread.mailConnectionId,
         externalMessageId: "no-analysis",
         threadId: "tid",
         canonicalThreadId: thread.id,

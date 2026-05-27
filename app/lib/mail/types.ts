@@ -97,3 +97,32 @@ export interface MailClient {
    */
   getThreadMessages(threadId: string): Promise<MailMessage[]>;
 }
+
+/**
+ * Canonical factory: create a provider-specific MailClient from a MailConnection.
+ * All DB access inside the returned client is scoped to `connection.id` —
+ * never to `shop` alone — making this safe for multi-mailbox shops.
+ *
+ * Tokens stored in the DB are encrypted; each provider's auth helper decrypts
+ * them before handing them to the SDK.
+ */
+export async function getMailClient(connection: import("@prisma/client").MailConnection): Promise<MailClient> {
+  switch (connection.provider) {
+    case "gmail": {
+      const { createGmailClient } = await import("../gmail/mail-client");
+      return createGmailClient(connection);
+    }
+    case "outlook": {
+      const { createOutlookClient } = await import("../outlook/mail-client");
+      return createOutlookClient(connection);
+    }
+    case "zoho": {
+      const { createZohoClient } = await import("../zoho/client");
+      return createZohoClient(connection);
+    }
+    default: {
+      const provider: never = connection.provider as never;
+      throw new Error(`Unknown mail provider: ${provider}`);
+    }
+  }
+}

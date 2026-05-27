@@ -218,24 +218,25 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   try {
+    let savedConn: { id: string };
     if (provider === "zoho") {
       const { exchangeZohoCode, saveZohoConnection } = await import(
         "../lib/zoho/auth"
       );
       const tokens = await exchangeZohoCode(code);
-      await saveZohoConnection(shop, tokens);
+      savedConn = await saveZohoConnection(shop, tokens);
     } else if (provider === "outlook") {
       const { exchangeCodeForTokens, saveConnection } = await import(
         "../lib/outlook/auth"
       );
       const tokens = await exchangeCodeForTokens(code);
-      await saveConnection(shop, tokens);
+      savedConn = await saveConnection(shop, tokens);
     } else {
       const { exchangeCodeForTokens, saveConnection } = await import(
         "../lib/gmail/auth"
       );
       const tokens = await exchangeCodeForTokens(code);
-      await saveConnection(shop, tokens);
+      savedConn = await saveConnection(shop, tokens);
     }
 
     // Kick off the first sync immediately instead of waiting up to 60 s for
@@ -245,7 +246,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     // an empty inbox for up to a minute, with no visible activity — confusing.
     try {
       const { enqueueJob } = await import("../lib/mail/job-queue");
-      await enqueueJob(shop, "sync");
+      await enqueueJob({ shop, kind: "sync", mailConnectionId: savedConn.id });
     } catch (err) {
       // Non-blocking: if enqueueJob fails (e.g. transient DB blip) the
       // periodic scheduler will still queue one within ≤ 60 s.

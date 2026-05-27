@@ -32,7 +32,7 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
     id: 'trial',
     priceUsd: 0,
     analyzedThreadsPerMonth: Infinity,
-    maxMailboxes: 1,
+    maxMailboxes: 3,
     advancedDashboard: true,
     dashboardMaxRangeDays: 90,
     durationDays: 14,

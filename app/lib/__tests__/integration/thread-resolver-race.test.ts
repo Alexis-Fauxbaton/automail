@@ -22,8 +22,24 @@ import {
 } from './helpers/db';
 import { resolveCanonicalThread } from '../../mail/thread-resolver';
 
+const TEST_MAIL_CONNECTION_ID = 'test-conn-resolver-race';
+
 beforeEach(async () => {
   await cleanTestShop();
+  // Create a minimal MailConnection so Thread FK is satisfiable.
+  await testDb.mailConnection.upsert({
+    where: { shop_email: { shop: TEST_SHOP, email: 'test@example.com' } },
+    create: {
+      id: TEST_MAIL_CONNECTION_ID,
+      shop: TEST_SHOP,
+      provider: 'gmail',
+      email: 'test@example.com',
+      accessToken: 'tok',
+      refreshToken: 'rtok',
+      tokenExpiry: new Date(Date.now() + 3600_000),
+    },
+    update: {},
+  });
 });
 
 afterAll(async () => {
@@ -34,6 +50,7 @@ describe('resolveCanonicalThread — concurrent ingestion of same providerThread
   it('two concurrent calls return the same canonicalThreadId without throwing', async () => {
     const input = {
       shop: TEST_SHOP,
+      mailConnectionId: TEST_MAIL_CONNECTION_ID,
       provider: 'zoho',
       providerThreadId: 'race-thread-001',
       subject: 'Re: support request',
@@ -63,6 +80,7 @@ describe('resolveCanonicalThread — concurrent ingestion of same providerThread
   it('handles a high-fan-out batch (10 concurrent calls) without orphans', async () => {
     const input = {
       shop: TEST_SHOP,
+      mailConnectionId: TEST_MAIL_CONNECTION_ID,
       provider: 'gmail',
       providerThreadId: 'race-thread-fanout',
       subject: 'Re: order #1234',

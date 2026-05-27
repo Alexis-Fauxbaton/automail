@@ -35,6 +35,7 @@ describe("billing — light refresh paths don't charge (Class 3)", () => {
     const anchor = await testDb.incomingEmail.create({
       data: {
         shop: TEST_SHOP,
+        mailConnectionId: t.mailConnectionId,
         externalMessageId: "x",
         threadId: "tid",
         canonicalThreadId: t.id,
@@ -76,6 +77,7 @@ describe("billing — light refresh paths don't charge (Class 3)", () => {
     const anchor = await testDb.incomingEmail.create({
       data: {
         shop: TEST_SHOP,
+        mailConnectionId: t.mailConnectionId,
         externalMessageId: "y",
         threadId: "tid",
         canonicalThreadId: t.id,

@@ -73,7 +73,13 @@ export async function markThreadAnalyzedIfFirst(
   // analyses on the same thread can never both succeed and double-charge.
   // Postgres serializes the UPDATE on the row; whichever loses the race
   // sees result.count === 0 and skips the upsert.
-  return prisma.$transaction(async (tx) => {
+  //
+  // CRITICAL: metric `.inc()` calls must stay OUTSIDE the transaction.
+  // Metrics are not transactional — if the transaction rolls back (e.g.,
+  // serialization error, constraint violation on billingUsage), an in-
+  // transaction increment would leave the counter incorrectly bumped
+  // even though no charge was recorded.
+  const txResult = await prisma.$transaction(async (tx) => {
     const result = await tx.thread.updateMany({
       where: { id: threadId, shop, analyzedAt: null },
       data: { analyzedAt: new Date() },
@@ -85,11 +91,12 @@ export async function markThreadAnalyzedIfFirst(
         select: { shop: true, analyzedAt: true },
       });
       if (!row || row.shop !== shop) {
-        billingAnalyzedThreadSkippedTotal.inc({ shop, reason: "not_found" });
-        return { counted: false, alreadyAnalyzed: false };
+        return { outcome: "not_found" as const };
       }
-      billingAnalyzedThreadSkippedTotal.inc({ shop, reason: "already_analyzed" });
-      return { counted: false, alreadyAnalyzed: row.analyzedAt !== null };
+      return {
+        outcome: "already_analyzed" as const,
+        alreadyAnalyzed: row.analyzedAt !== null,
+      };
     }
 
     const periodStart = getCurrentPeriodStart();
@@ -99,7 +106,20 @@ export async function markThreadAnalyzedIfFirst(
       update: { analyzedThreadsCount: { increment: 1 } },
     });
 
-    billingAnalyzedThreadCountedTotal.inc({ shop });
-    return { counted: true, alreadyAnalyzed: false };
+    return { outcome: "counted" as const };
   });
+
+  // Emit metrics AFTER the transaction commits. If the transaction threw
+  // and rolled back, this code path is not reached — the throw propagates
+  // to the caller and no spurious counter bump occurs.
+  if (txResult.outcome === "not_found") {
+    billingAnalyzedThreadSkippedTotal.inc({ shop, reason: "not_found" });
+    return { counted: false, alreadyAnalyzed: false };
+  }
+  if (txResult.outcome === "already_analyzed") {
+    billingAnalyzedThreadSkippedTotal.inc({ shop, reason: "already_analyzed" });
+    return { counted: false, alreadyAnalyzed: txResult.alreadyAnalyzed };
+  }
+  billingAnalyzedThreadCountedTotal.inc({ shop });
+  return { counted: true, alreadyAnalyzed: false };
 }

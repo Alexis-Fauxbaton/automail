@@ -14,12 +14,12 @@
 
 import prisma from "../../db.server";
 import type { MailClient } from "./types";
-import { createGmailClient } from "../gmail/mail-client";
-import { createZohoClient } from "../zoho/client";
+import { getMailClient } from "./types";
 import {
   resolveCanonicalThread,
   refreshThreadStats,
   attachProviderMapping,
+  MailboxGoneError,
 } from "./thread-resolver";
 import { extractAndCache, mergeThreadIdentifiers } from "../support/thread-identifiers";
 import { recomputeThreadState } from "../support/thread-state";
@@ -45,15 +45,7 @@ async function runInBatches<T>(
   }
 }
 
-async function getMailClient(shop: string, provider: string): Promise<MailClient> {
-  if (provider === "zoho") return createZohoClient(shop);
-  if (provider === "outlook") {
-    // Lazy import to avoid coupling backfill.ts to the Graph SDK at module load.
-    const { createOutlookClient } = await import("../outlook/mail-client");
-    return createOutlookClient(shop);
-  }
-  return createGmailClient(shop);
-}
+// getMailClient is imported from ./types (canonical multi-mailbox factory).
 
 /**
  * Onboarding backfill: on first connection, ingest raw messages from
@@ -65,14 +57,15 @@ async function getMailClient(shop: string, provider: string): Promise<MailClient
 export async function runOnboardingBackfill(
   shop: string,
   days: number,
+  mailConnectionId: string,
 ): Promise<{ ingested: number; skipped: number }> {
-  const conn = await prisma.mailConnection.findUnique({ where: { shop } });
-  if (!conn) throw new Error("No mail connection");
+  const conn = await prisma.mailConnection.findUnique({ where: { id: mailConnectionId } });
+  if (!conn || conn.shop !== shop) throw new Error("No mail connection");
   if (conn.onboardingBackfillDoneAt) {
     return { ingested: 0, skipped: 0 };
   }
 
-  const client = await getMailClient(shop, conn.provider);
+  const client = await getMailClient(conn);
   const afterDate = new Date(Date.now() - days * 24 * 3600_000);
   const messageIds = await client.listRecentMessages({
     afterDate,
@@ -80,17 +73,17 @@ export async function runOnboardingBackfill(
   });
 
   const existing = await prisma.incomingEmail.findMany({
-    where: { shop, externalMessageId: { in: messageIds } },
+    where: { shop, mailConnectionId, externalMessageId: { in: messageIds } },
     select: { externalMessageId: true },
   });
   const existingSet = new Set(existing.map((e) => e.externalMessageId));
   const fresh = messageIds.filter((id) => !existingSet.has(id));
 
-  const outgoingCtx = await loadOutgoingContext(shop, conn.email);
+  const outgoingCtx = await loadOutgoingContext(conn);
   let ingested = 0;
   await runInBatches(fresh, 10, 50, async (msgId) => {
     try {
-      await ingestHistoricalMessage(shop, conn.provider, client, msgId, outgoingCtx);
+      await ingestHistoricalMessage(shop, conn.provider, client, msgId, outgoingCtx, conn.id);
       ingested++;
     } catch (err) {
       console.error("[backfill/onboarding] failed for", msgId, err);
@@ -98,7 +91,7 @@ export async function runOnboardingBackfill(
   });
 
   await prisma.mailConnection.update({
-    where: { shop },
+    where: { id: mailConnectionId },
     data: { onboardingBackfillDoneAt: new Date(), onboardingBackfillDays: days },
   });
 
@@ -112,25 +105,26 @@ export async function runOnboardingBackfill(
 export async function runManualBackfill(
   shop: string,
   afterDate: Date,
+  mailConnectionId: string,
   maxResults = 2000,
 ): Promise<{ ingested: number; skipped: number }> {
-  const conn = await prisma.mailConnection.findUnique({ where: { shop } });
-  if (!conn) throw new Error("No mail connection");
-  const client = await getMailClient(shop, conn.provider);
+  const conn = await prisma.mailConnection.findUnique({ where: { id: mailConnectionId } });
+  if (!conn || conn.shop !== shop) throw new Error("No mail connection");
+  const client = await getMailClient(conn);
   const messageIds = await client.listRecentMessages({ afterDate, maxResults });
 
   const existing = await prisma.incomingEmail.findMany({
-    where: { shop, externalMessageId: { in: messageIds } },
+    where: { shop, mailConnectionId, externalMessageId: { in: messageIds } },
     select: { externalMessageId: true },
   });
   const existingSet = new Set(existing.map((e) => e.externalMessageId));
   const fresh = messageIds.filter((id) => !existingSet.has(id));
 
-  const outgoingCtx = await loadOutgoingContext(shop, conn.email);
+  const outgoingCtx = await loadOutgoingContext(conn);
   let ingested = 0;
   await runInBatches(fresh, 10, 50, async (msgId) => {
     try {
-      await ingestHistoricalMessage(shop, conn.provider, client, msgId, outgoingCtx);
+      await ingestHistoricalMessage(shop, conn.provider, client, msgId, outgoingCtx, conn.id);
       ingested++;
     } catch (err) {
       console.error("[backfill/manual] failed for", msgId, err);
@@ -147,18 +141,21 @@ export async function runManualBackfill(
  */
 export async function runOpportunisticThreadBackfill(
   canonicalThreadId: string,
-): Promise<{ added: number }> {
+): Promise<{ added: 0 } | { added: number }> {
   const thread = await prisma.thread.findUnique({
     where: { id: canonicalThreadId },
     include: { providerIds: true },
   });
   if (!thread) return { added: 0 };
 
-  const conn = await prisma.mailConnection.findUnique({
-    where: { shop: thread.shop },
-  });
+  // Use thread.mailConnectionId (set when the thread was created) so we
+  // always talk to the correct mailbox. Fall back to any connection for the
+  // shop only for legacy threads that predate the mailConnectionId column.
+  const conn = thread.mailConnectionId
+    ? await prisma.mailConnection.findUnique({ where: { id: thread.mailConnectionId } })
+    : await prisma.mailConnection.findFirst({ where: { shop: thread.shop } });
   if (!conn) return { added: 0 };
-  const client = await getMailClient(thread.shop, conn.provider);
+  const client = await getMailClient(conn);
 
   const localIds = await prisma.incomingEmail.findMany({
     where: { canonicalThreadId, shop: thread.shop },
@@ -166,7 +163,7 @@ export async function runOpportunisticThreadBackfill(
   });
   const localSet = new Set(localIds.map((r) => r.externalMessageId));
 
-  const outgoingCtx = await loadOutgoingContext(thread.shop, conn.email);
+  const outgoingCtx = await loadOutgoingContext(conn);
   let added = 0;
   for (const mapping of thread.providerIds) {
     try {
@@ -180,6 +177,7 @@ export async function runOpportunisticThreadBackfill(
             client,
             m.id,
             outgoingCtx,
+            conn.id,
           );
           added++;
         } catch (err) {
@@ -215,6 +213,7 @@ export async function runOpportunisticThreadBackfill(
             client,
             m.id,
             outgoingCtx,
+            conn.id,
           );
           added++;
         } catch (err) {
@@ -254,6 +253,7 @@ async function ingestHistoricalMessage(
   client: MailClient,
   msgId: string,
   outgoingCtx: OutgoingContext,
+  mailConnectionId: string,
 ): Promise<void> {
   const existing = await prisma.incomingEmail.findUnique({
     where: { shop_externalMessageId: { shop, externalMessageId: msgId } },
@@ -268,17 +268,27 @@ async function ingestHistoricalMessage(
   const inReplyTo = (msg.headers["in-reply-to"] ?? "").replace(/^<|>$/g, "").trim();
   const rfcReferences = (msg.headers["references"] ?? "").trim();
 
-  const { canonicalThreadId } = await resolveCanonicalThread({
-    shop,
-    provider,
-    providerThreadId: msg.threadId,
-    externalMessageId: msg.id,
-    subject: msg.subject,
-    receivedAt: msg.receivedAt,
-    rfcMessageId,
-    inReplyTo,
-    rfcReferences,
-  });
+  let canonicalThreadId: string;
+  try {
+    ({ canonicalThreadId } = await resolveCanonicalThread({
+      shop,
+      mailConnectionId,
+      provider,
+      providerThreadId: msg.threadId,
+      externalMessageId: msg.id,
+      subject: msg.subject,
+      receivedAt: msg.receivedAt,
+      rfcMessageId,
+      inReplyTo,
+      rfcReferences,
+    }));
+  } catch (err) {
+    if (err instanceof MailboxGoneError) {
+      console.warn(`[backfill] skipping message — mailbox gone: ${err.mailConnectionId}`);
+      return;
+    }
+    throw err;
+  }
 
   // Run the free regex prefilter on historical messages so they get proper
   // tier1Result and classification badges in the UI. We never run tier 2 on

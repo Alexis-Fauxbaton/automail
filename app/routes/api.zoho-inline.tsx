@@ -1,7 +1,7 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-import { getZohoAccessToken } from "../lib/zoho/auth";
+import { getZohoAccessTokenByConnection } from "../lib/zoho/auth";
 import { checkRateLimit } from "../lib/rate-limit";
 
 // Bound the Zoho proxy: a single inbox view loads dozens of inline images,
@@ -60,14 +60,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
     return new Response("Missing params", { status: 400 });
   }
 
-  // Verify the account ID matches the shop's connected Zoho account.
-  const conn = await prisma.mailConnection.findUnique({ where: { shop } });
-  if (!conn?.zohoAccountId || conn.zohoAccountId !== na) {
+  // Verify the account ID matches one of the shop's connected Zoho accounts.
+  // In multi-mailbox, a shop may have several Zoho connections — find the one
+  // whose zohoAccountId matches the `na` param embedded in the image URL.
+  const conn = await prisma.mailConnection.findFirst({
+    where: { shop, provider: "zoho", zohoAccountId: na },
+  });
+  if (!conn?.zohoAccountId) {
     return new Response("Unauthorized", { status: 403 });
   }
 
   try {
-    const token = await getZohoAccessToken(shop);
+    const token = await getZohoAccessTokenByConnection(conn);
     const domain = process.env.ZOHO_API_DOMAIN || "mail.zoho.com";
 
     // Reconstruct the Zoho ImageDisplay URL and proxy it with OAuth token.

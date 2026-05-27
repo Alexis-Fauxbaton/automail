@@ -47,9 +47,11 @@ describe("billing — catch-up on classification change (Class 8)", () => {
     });
 
     expect(enqueueSpy).toHaveBeenCalledWith(
-      TEST_SHOP,
-      "analyze_thread",
-      expect.objectContaining({ threadId: t.id }),
+      expect.objectContaining({
+        shop: TEST_SHOP,
+        kind: "analyze_thread",
+        params: expect.objectContaining({ threadId: t.id }),
+      }),
     );
   });
 

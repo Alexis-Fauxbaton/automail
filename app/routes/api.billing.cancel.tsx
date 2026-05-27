@@ -1,9 +1,11 @@
 import type { ActionFunctionArgs } from "react-router";
+import { redirect } from "react-router";
 import { authenticate } from "../shopify.server";
 import { resolveActivePlan } from "../lib/billing/subscription";
 import { cancelSubscription } from "../lib/billing/shopify-billing";
 import { scheduleDowngrade, cancelScheduledChange } from "../lib/billing/scheduled-changes";
 import { checkRateLimit } from "../lib/rate-limit";
+import { computeOverflowForPlanSwitch } from "../lib/billing/downgrade-overflow";
 
 const VALID_DOWNGRADE_TARGETS = ['starter'] as const;
 
@@ -75,6 +77,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         status: 400,
         headers: { "Content-Type": "application/json" },
       });
+    }
+    // Intercept downgrades that would leave the shop over its mailbox limit.
+    if (toPlan === "starter" || toPlan === "trial") {
+      const overflow = await computeOverflowForPlanSwitch({ shop: session.shop, targetPlanId: toPlan as "starter" | "trial" });
+      if (overflow.hasOverflow) {
+        return redirect(`/app/billing/downgrade/select-mailbox?to=${toPlan}`);
+      }
     }
     const change = await scheduleDowngrade({
       shop: session.shop,

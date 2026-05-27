@@ -20,8 +20,16 @@ import type { PrismaClient, Prisma } from "@prisma/client";
 import { Prisma as PrismaNS } from "@prisma/client";
 import prisma from "../../db.server";
 
+export class MailboxGoneError extends Error {
+  constructor(public readonly mailConnectionId: string) {
+    super(`Mailbox ${mailConnectionId} no longer exists`);
+    this.name = "MailboxGoneError";
+  }
+}
+
 export interface ResolveThreadInput {
   shop: string;
+  mailConnectionId: string;        // required — Thread.mailConnectionId FK
   provider: string;                // "gmail" | "zoho"
   providerThreadId: string;        // raw provider threadId (may be "")
   externalMessageId: string;       // provider message id (fallback key)
@@ -73,7 +81,7 @@ export async function resolveCanonicalThread(
   db: PrismaClient | Prisma.TransactionClient = prisma,
 ): Promise<ResolveThreadResult> {
   const {
-    shop, provider, providerThreadId, externalMessageId,
+    shop, mailConnectionId, provider, providerThreadId, externalMessageId,
     subject, receivedAt,
   } = input;
 
@@ -144,6 +152,7 @@ export async function resolveCanonicalThread(
     const thread = await db.thread.create({
       data: {
         shop,
+        mailConnectionId,
         provider,
         firstMessageAt: receivedAt,
         lastMessageAt: receivedAt,
@@ -166,26 +175,31 @@ export async function resolveCanonicalThread(
       mergedFromRfc: false,
     };
   } catch (err) {
-    if (
-      err instanceof PrismaNS.PrismaClientKnownRequestError &&
-      err.code === "P2002"
-    ) {
-      const winner = await db.threadProviderId.findUnique({
-        where: {
-          shop_provider_providerThreadId: {
-            shop,
-            provider,
-            providerThreadId: mappingKey,
+    if (err instanceof PrismaNS.PrismaClientKnownRequestError) {
+      if (err.code === "P2002") {
+        const winner = await db.threadProviderId.findUnique({
+          where: {
+            shop_provider_providerThreadId: {
+              shop,
+              provider,
+              providerThreadId: mappingKey,
+            },
           },
-        },
-        select: { canonicalThreadId: true },
-      });
-      if (winner) {
-        return {
-          canonicalThreadId: winner.canonicalThreadId,
-          isNew: false,
-          mergedFromRfc: false,
-        };
+          select: { canonicalThreadId: true },
+        });
+        if (winner) {
+          return {
+            canonicalThreadId: winner.canonicalThreadId,
+            isNew: false,
+            mergedFromRfc: false,
+          };
+        }
+      }
+      if (err.code === "P2003") {
+        console.warn(
+          `[resolver] mailbox ${mailConnectionId} disconnected mid-ingest for shop=${shop}`,
+        );
+        throw new MailboxGoneError(mailConnectionId);
       }
     }
     throw err;

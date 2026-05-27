@@ -17,6 +17,7 @@ import {
   cleanTestShop,
   disconnectTestDb,
   TEST_SHOP,
+  createTestThread,
 } from "./helpers/db";
 import { persistClassificationEdit } from "../../support/manual-classification";
 import { refreshStaleAnalysesForShop } from "../../support/refresh-stale-analyses";
@@ -106,22 +107,15 @@ function setupOrchestratorMock(defaultIntent: SupportIntent, trackings: Fulfillm
 }
 
 async function seedThread(analysis: SupportAnalysis) {
-  const thread = await testDb.thread.create({
-    data: {
-      shop: TEST_SHOP,
-      provider: "gmail",
-      lastMessageAt: new Date(),
-      firstMessageAt: new Date(),
-      operationalStateUpdatedAt: new Date(),
-      operationalState: "open",
-      supportNature: "confirmed_support",
-      historyStatus: "complete",
-    },
+  const thread = await createTestThread({
+    operationalState: "open",
+    supportNature: "confirmed_support",
   });
 
   const email = await testDb.incomingEmail.create({
     data: {
       shop: TEST_SHOP,
+      mailConnectionId: thread.mailConnectionId,
       externalMessageId: `ext-${thread.id}`,
       canonicalThreadId: thread.id,
       fromAddress: "customer@example.com",
@@ -291,17 +285,9 @@ describe("classifyAndDraft respects manualOverrides.intents from previous anchor
   it("passes reuseIntents from prev anchor manualOverrides and preserves detectedIntent", async () => {
     // ── Fixture: thread with a previously-analyzed anchor email that has a
     //    manual intent override set (merchant changed it to 'refund_request').
-    const thread = await testDb.thread.create({
-      data: {
-        shop: TEST_SHOP,
-        provider: "gmail",
-        lastMessageAt: new Date(),
-        firstMessageAt: new Date(),
-        operationalStateUpdatedAt: new Date(),
-        operationalState: "open",
-        supportNature: "confirmed_support",
-        historyStatus: "complete",
-      },
+    const thread = await createTestThread({
+      operationalState: "open",
+      supportNature: "confirmed_support",
     });
 
     const anchorAnalysis = makeAnalysis("refund_request", {
@@ -312,6 +298,7 @@ describe("classifyAndDraft respects manualOverrides.intents from previous anchor
     const anchorEmail = await testDb.incomingEmail.create({
       data: {
         shop: TEST_SHOP,
+        mailConnectionId: thread.mailConnectionId,
         externalMessageId: `ext-anchor-${thread.id}`,
         canonicalThreadId: thread.id,
         fromAddress: "customer@example.com",
@@ -329,6 +316,7 @@ describe("classifyAndDraft respects manualOverrides.intents from previous anchor
     const newEmail = await testDb.incomingEmail.create({
       data: {
         shop: TEST_SHOP,
+        mailConnectionId: thread.mailConnectionId,
         externalMessageId: `ext-new-${thread.id}`,
         canonicalThreadId: thread.id,
         fromAddress: "customer@example.com",

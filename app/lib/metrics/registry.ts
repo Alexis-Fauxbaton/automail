@@ -24,6 +24,8 @@
  * exposition format (backslash, newline, double-quote).
  */
 
+import { createHmac } from "node:crypto";
+
 type LabelValues = Record<string, string | number | boolean | undefined>;
 
 interface Series {
@@ -55,18 +57,18 @@ function escapeLabelValue(v: string): string {
 // METRICS_LABEL_SALT (or, in dev, a fixed dev-only salt). The dimension
 // is preserved (each shop maps to a stable opaque ID) so per-shop
 // time-series still work for alerting / dashboards.
-let _hashShopFn: ((s: string) => string) | null = null;
+// Lazily built per-process — the salt is read once at first use so tests
+// can mutate process.env.METRICS_LABEL_SALT before importing the registry.
+let _hashSalt: string | null = null;
+function getHashSalt(): string {
+  if (_hashSalt === null) {
+    _hashSalt = process.env.METRICS_LABEL_SALT || "dev-metrics-salt-do-not-use-in-prod";
+  }
+  return _hashSalt;
+}
 function hashShopLabel(shop: string): string {
   if (!shop) return "";
-  if (!_hashShopFn) {
-    // Lazy-load crypto so registry.ts stays import-safe in any context.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { createHmac } = require("node:crypto") as typeof import("node:crypto");
-    const salt = process.env.METRICS_LABEL_SALT || "dev-metrics-salt-do-not-use-in-prod";
-    _hashShopFn = (s: string) =>
-      "shop_" + createHmac("sha256", salt).update(s).digest("hex").slice(0, 8);
-  }
-  return _hashShopFn(shop);
+  return "shop_" + createHmac("sha256", getHashSalt()).update(shop).digest("hex").slice(0, 8);
 }
 
 // Labels that name a merchant and should be hashed in the Prometheus output.

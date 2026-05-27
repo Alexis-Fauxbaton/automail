@@ -11,6 +11,32 @@ import { backfillBillingShopFlags } from "./lib/billing/migration";
 
 export const streamTimeout = 5000;
 
+// Boot-time env validation: production deployments must explicitly set
+// the security-sensitive env vars below, otherwise we either silently
+// degrade (rate limit, metrics) or use a known-insecure default. We log
+// loudly so the missing var shows up in deploy logs; we don't crash boot
+// because there's an HMR / dev edge case where these aren't set.
+if (process.env.NODE_ENV === "production") {
+  const warnings: string[] = [];
+  if (!process.env.METRICS_LABEL_SALT) {
+    warnings.push(
+      "METRICS_LABEL_SALT is not set — Prometheus shop labels will all hash to the same dev salt, " +
+        "making per-shop dashboards/alerts indistinguishable. Set a stable random value (32+ chars).",
+    );
+  }
+  if (process.env.TRUSTED_PROXY !== "true" && process.env.TRUSTED_PROXY !== "1") {
+    warnings.push(
+      "TRUSTED_PROXY is not set — getClientIp returns 'unknown' for all requests, " +
+        "so /mail-auth's per-IP rate limit becomes a per-deployment limit. " +
+        "Set TRUSTED_PROXY=true behind Render's edge proxy.",
+    );
+  }
+  if (process.env.METRICS_TOKEN && process.env.METRICS_TOKEN.length < 32) {
+    warnings.push("METRICS_TOKEN should be at least 32 chars long.");
+  }
+  for (const w of warnings) console.error(`[BOOT_DEGRADED] ${w}`);
+}
+
 // Fire up the backend auto-sync loop exactly once at server boot
 // (spec §10). The function itself is idempotent, so double-import
 // (HMR, etc.) is safe.

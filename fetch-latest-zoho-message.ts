@@ -87,7 +87,7 @@ async function main() {
   const shop = process.env.SHOP || "test-automail.myshopify.com";
   console.log(`Fetching latest Zoho message for shop: ${shop}`);
 
-  const conn = await prisma.mailConnection.findUnique({
+  const conn = await prisma.mailConnection.findFirst({
     where: { shop },
   });
   if (!conn || conn.provider !== "zoho") {

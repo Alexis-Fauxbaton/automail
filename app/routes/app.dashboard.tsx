@@ -5,6 +5,8 @@ import { useTranslation } from "react-i18next";
 import { authenticate } from "../shopify.server";
 import { requireOnboardingComplete } from "../lib/onboarding/guard";
 import { resolveEntitlements } from "../lib/billing/entitlements";
+import prisma from "../db.server";
+import MailboxFilter from "../components/inbox/MailboxFilter";
 import {
   getPeriodBounds,
   getDashboardKpis,
@@ -58,14 +60,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
   const from = url.searchParams.get("from") ?? undefined;
   const to = url.searchParams.get("to") ?? undefined;
+  const mailConnectionId = url.searchParams.get("mailbox") || undefined;
 
   const bounds = getPeriodBounds(range, from, to);
   const { start, end, prevStart, prevEnd } = bounds;
 
   // Fetch top intents: 8 for advanced (5 shown + 8 passed to alerts), 3 for Starter.
   const topIntentsAll = ent.canViewAdvancedDashboard
-    ? await getTopIntentsWithPerf(shop, start, end, 8).catch(() => [] as IntentPerf[])
-    : await getTopIntentsWithPerf(shop, start, end, 3).catch(() => [] as IntentPerf[]);
+    ? await getTopIntentsWithPerf(shop, start, end, 8, mailConnectionId).catch(() => [] as IntentPerf[])
+    : await getTopIntentsWithPerf(shop, start, end, 3, mailConnectionId).catch(() => [] as IntentPerf[]);
 
   const zeroedKpis: DashboardKpis = {
     responseTime: { medianMs: null, p90Ms: null, prevMedianMs: null },
@@ -78,28 +81,35 @@ export async function loader({ request }: LoaderFunctionArgs) {
   };
 
   const [kpis, qualityChart, productivityChart, threadStates] = await Promise.all([
-    getDashboardKpis(shop, start, end, prevStart, prevEnd).catch(() => zeroedKpis),
-    getResponseTimeDailyBreakdown(shop, start, end).catch(() => [] as ResponseTimeDailyPoint[]),
+    getDashboardKpis(shop, start, end, prevStart, prevEnd, mailConnectionId).catch(() => zeroedKpis),
+    getResponseTimeDailyBreakdown(shop, start, end, mailConnectionId).catch(() => [] as ResponseTimeDailyPoint[]),
     getDraftUsageDailyBreakdown(shop, start, end).catch(() => [] as ProductivityDailyPoint[]),
-    getCurrentThreadStates(shop).catch(() => zeroedStates),
+    getCurrentThreadStates(shop, mailConnectionId).catch(() => zeroedStates),
   ]);
 
   const heatmap = ent.canViewAdvancedDashboard
-    ? await getHeatmap(shop, start, end).catch(() => [] as HeatmapCell[])
+    ? await getHeatmap(shop, start, end, mailConnectionId).catch(() => [] as HeatmapCell[])
     : ([] as HeatmapCell[]);
 
   const reopened = ent.canViewAdvancedDashboard
-    ? await getReopenedThreads(shop, start, end, 10).catch(() => [] as ReopenedThread[])
+    ? await getReopenedThreads(shop, start, end, 10, mailConnectionId).catch(() => [] as ReopenedThread[])
     : ([] as ReopenedThread[]);
 
   const alerts = ent.canViewAdvancedDashboard
-    ? await getAlerts(shop, range, start, end, topIntentsAll).catch(() => [] as Alert[])
+    ? await getAlerts(shop, range, start, end, topIntentsAll, mailConnectionId).catch(() => [] as Alert[])
     : ([] as Alert[]);
+
+  const connections = await prisma.mailConnection.findMany({
+    where: { shop },
+    select: { id: true, email: true },
+  });
 
   return {
     range,
     from: from ?? null,
     to: to ?? null,
+    mailConnectionId: mailConnectionId ?? null,
+    connections,
     kpis,
     qualityChart,
     productivityChart,
@@ -404,7 +414,7 @@ type _Used = DashboardKpis | IntentPerf | ReopenedThread | Alert | HeatmapCell |
 
 export default function Dashboard() {
   const {
-    range, kpis, qualityChart, productivityChart,
+    range, connections, kpis, qualityChart, productivityChart,
     heatmap, topIntents, threadStates, reopened, alerts,
     isAdvancedDashboard,
   } = useLoaderData<typeof loader>();
@@ -497,7 +507,10 @@ export default function Dashboard() {
             {t("dashboard.heroLead", { date: todayLabel, defaultValue: "Vue d'ensemble de votre activité SAV" })}
           </p>
         </div>
-        <PeriodSelector range={range} />
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
+          <MailboxFilter connections={connections} />
+          <PeriodSelector range={range} />
+        </div>
       </div>
 
       {/* Alert banner */}

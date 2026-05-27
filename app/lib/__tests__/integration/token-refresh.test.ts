@@ -39,7 +39,7 @@ vi.mock('../../gmail/crypto', () => ({
 
 // Module imports MUST come after vi.mock declarations.
 import { testDb, cleanTestShop, disconnectTestDb, TEST_SHOP } from './helpers/db';
-import { getAuthenticatedClient } from '../../gmail/auth';
+import { getAuthenticatedClientByConnection } from '../../gmail/auth';
 
 beforeAll(() => {
   process.env.GOOGLE_CLIENT_ID = 'test-client-id';
@@ -65,7 +65,7 @@ describe('Gmail token refresh — integration DB (REQ-SYNC-04)', () => {
   it('expired token triggers refreshAccessToken and updates DB tokenExpiry', async () => {
     // Insert a MailConnection with a token that expired 5 minutes ago.
     const expiredAt = new Date(Date.now() - 5 * 60_000);
-    await testDb.mailConnection.create({
+    const connection = await testDb.mailConnection.create({
       data: {
         shop: TEST_SHOP,
         provider: 'gmail',
@@ -85,14 +85,14 @@ describe('Gmail token refresh — integration DB (REQ-SYNC-04)', () => {
       },
     });
 
-    await getAuthenticatedClient(TEST_SHOP);
+    await getAuthenticatedClientByConnection(connection);
 
     // refreshAccessToken must have been called exactly once.
     expect(mockRefreshAccessToken).toHaveBeenCalledTimes(1);
 
     // The DB tokenExpiry must now be in the future.
     const updated = await testDb.mailConnection.findUniqueOrThrow({
-      where: { shop: TEST_SHOP },
+      where: { id: connection.id },
     });
     expect(updated.tokenExpiry.getTime()).toBeGreaterThan(Date.now());
     expect(updated.tokenExpiry.getTime()).toBeCloseTo(newExpiry, -3);
@@ -101,7 +101,7 @@ describe('Gmail token refresh — integration DB (REQ-SYNC-04)', () => {
   it('valid token skips refreshAccessToken', async () => {
     // Insert a MailConnection with a token that expires 1 hour from now.
     const validExpiry = new Date(Date.now() + 3600_000);
-    await testDb.mailConnection.create({
+    const connection = await testDb.mailConnection.create({
       data: {
         shop: TEST_SHOP,
         provider: 'gmail',
@@ -112,7 +112,7 @@ describe('Gmail token refresh — integration DB (REQ-SYNC-04)', () => {
       },
     });
 
-    await getAuthenticatedClient(TEST_SHOP);
+    await getAuthenticatedClientByConnection(connection);
 
     // refreshAccessToken must NOT have been called.
     expect(mockRefreshAccessToken).not.toHaveBeenCalled();

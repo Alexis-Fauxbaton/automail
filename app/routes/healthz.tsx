@@ -9,6 +9,11 @@ import { getLastTickAt } from "../lib/mail/auto-sync";
 // uptime so /healthz doesn't 503 a fresh container before its first tick.
 const STALE_TICK_MS = 3 * 60_000;
 const BOOT_GRACE_MS = 90_000;
+// Extended grace gives a never-ticked instance a longer ramp before we
+// declare it broken and let Render restart it. 6 min = 90 s startup +
+// 3 ticks. Beyond that, a perpetually-failing first tick is a real
+// problem and a restart loop is the lesser evil.
+const EXTENDED_BOOT_GRACE_MS = 6 * 60_000;
 const bootedAt = Date.now();
 
 /**
@@ -35,7 +40,17 @@ export async function loader(_args: LoaderFunctionArgs) {
     const uptime = Date.now() - bootedAt;
     const lastTickAt = getLastTickAt();
     const tickAge = lastTickAt > 0 ? Date.now() - lastTickAt : Infinity;
-    if (uptime > BOOT_GRACE_MS && tickAge > STALE_TICK_MS) {
+    // Only flag stale if we've actually ticked at least once. A first-tick
+    // failure (rare DB hiccup at boot) would otherwise pin lastTickAt to 0
+    // forever and put the instance into a 503 → SIGKILL → restart loop.
+    // After EXTENDED_BOOT_GRACE_MS we DO 503 even on never-ticked so a
+    // permanently broken loop still gets restarted — just with enough
+    // breathing room for the first tick to land.
+    const hasTickedOnce = lastTickAt > 0;
+    const staleAfterTick =
+      uptime > BOOT_GRACE_MS && hasTickedOnce && tickAge > STALE_TICK_MS;
+    const neverTickedTooLong = uptime > EXTENDED_BOOT_GRACE_MS && !hasTickedOnce;
+    if (staleAfterTick || neverTickedTooLong) {
       return new Response(
         JSON.stringify({
           ok: false,

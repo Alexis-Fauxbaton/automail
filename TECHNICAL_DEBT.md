@@ -1,17 +1,17 @@
 # Technical Debt
 
-Last updated: 2026-05-14
+Last updated: 2026-05-24
 Reviewed by: 6-agent automated audit (security, code-quality, architecture, database, performance, test-quality) + 2026-05-14 production-hardening audit (multi-tenant / 10-shops concurrency focus — see "Production hardening" section at end)
 
 ## Summary
 
 | Severity | Count | Fixed |
 |----------|-------|-------|
-| Critical | 6     | 0     |
+| Critical | 6     | 1     |
 | High     | 21    | 0     |
-| Medium   | 38    | 0     |
-| Low      | 28    | 0     |
-| **Total**| **93**| **0** |
+| Medium   | 38    | 1     |
+| Low      | 28    | 1     |
+| **Total**| **93**| **3** |
 
 ---
 
@@ -29,11 +29,10 @@ Reviewed by: 6-agent automated audit (security, code-quality, architecture, data
   - **Fix**: Wrap both operations in `prisma.$transaction([...])`.
   - **Effort**: small
 
-- [ ] **[ARCH-C2] `deleteConnection` and `handleResync` leave orphan `Thread` rows**
+- [x] **[ARCH-C2] `deleteConnection` and `handleResync` leave orphan `Thread` rows** (RESOLVED 2026-05-24 in multi-mailbox refactor — feature/multi-mailbox)
   - **File**: [app/lib/gmail/auth.ts:160](app/lib/gmail/auth.ts#L160), [app/lib/support/inbox-actions.ts:114](app/lib/support/inbox-actions.ts#L114)
   - **Description**: Both paths wipe `IncomingEmail` but leave `Thread` rows behind. Over disconnect/reconnect cycles (especially when switching providers, e.g. Zoho → Outlook), the `Thread` table accumulates rows pointing to dead `lastMessageId`s. Observed on a fresh test mailbox: 18 real mails → 221 Thread rows, of which 207 had zero `IncomingEmail`. The dashboard now filters them out (`messages: { some: {} }` in `getCurrentThreadStates`, fix `31a7881`), but the rows still bloat the DB.
-  - **Why deferred**: deleting Threads in `handleResync` is intentional (preserves manual `operationalState`, `preservedManualOverridesJson`, draft engagement). In `deleteConnection`, a naive `thread.deleteMany({ where: { shop } })` would wipe manual state across a disconnect/reconnect of the same mailbox. The right moment to fix is when **multi-mailbox per shop** lands: `deleteConnection` will be scoped by mailbox (not shop), and at that point we can safely also delete the Threads tied to the disconnected mailbox.
-  - **Fix**: When introducing multi-mailbox, add `mailConnectionId` (or equivalent) on `Thread`, then have `deleteConnection` also `thread.deleteMany` scoped by that key. Cascade already handles `ThreadProviderId` and `ThreadStateHistory`. GDPR tombstones (`redactedAt IS NOT NULL`) must be excluded.
+  - **Resolution**: `Thread.mailConnectionId` FK with `onDelete: Cascade` (schema commit `cccb687`) means that deleting a `MailConnection` row now atomically removes all associated `Thread`, `IncomingEmail`, and `SyncJob` rows via FK cascade. `deleteConnection` is scoped by `mailConnectionId`, not shop, so reconnecting a different mailbox to the same shop does not wipe unrelated threads. GDPR tombstones remain protected by a pre-delete filter in the GDPR handlers.
   - **Effort**: medium (couples with multi-mailbox migration)
 
 - [ ] **[PERF-C1] Unbounded sequential API call loop in backfill**
@@ -325,9 +324,9 @@ Reviewed by: 6-agent automated audit (security, code-quality, architecture, data
   - **Fix**: Hoist `localIds` fetch outside the `thread.providerIds` loop — it's the same query on every iteration.
   - **Effort**: small
 
-- [ ] **[DB-M5] `enqueueDuePeriodicSyncs` loads all enabled shops every tick — no due-time filter in SQL**
+- [x] **[DB-M5] `enqueueDuePeriodicSyncs` loads all enabled shops every tick — no due-time filter in SQL** (RESOLVED 2026-05-24 in multi-mailbox refactor — feature/multi-mailbox)
   - **File**: [app/lib/mail/auto-sync.ts:93](app/lib/mail/auto-sync.ts#L93)
-  - **Fix**: Push the due-time filter into the query: `lastSyncAt: { lte: new Date(Date.now() - minIntervalMs) }`. Add `@@index([autoSyncEnabled, lastSyncAt])` to `MailConnection`.
+  - **Resolution**: Replaced the Prisma `findMany` with a raw SQL query that pushes the due-time filter into the DB: `WHERE "autoSyncEnabled" = true AND ("lastSyncAt" IS NULL OR "lastSyncAt" + ("autoSyncIntervalMinutes" * INTERVAL '1 minute') <= now)`. The `@@index([autoSyncEnabled, lastSyncAt])` index was added to `MailConnection` in the same schema migration, allowing the DB to efficiently filter without a full table scan.
   - **Effort**: small
 
 - [ ] **[DB-M6] Data migration casts JSON without guarding malformed values**
@@ -494,9 +493,9 @@ Reviewed by: 6-agent automated audit (security, code-quality, architecture, data
 
 ### Database (7)
 
-- [ ] **[DB-L1] Missing index on `MailConnection.lastSyncAt`**
+- [x] **[DB-L1] Missing index on `MailConnection.lastSyncAt`** (RESOLVED 2026-05-24 in multi-mailbox refactor — feature/multi-mailbox)
   - **File**: [prisma/schema.prisma:52](prisma/schema.prisma#L52)
-  - **Fix**: Add `@@index([autoSyncEnabled, lastSyncAt])`.
+  - **Resolution**: `@@index([autoSyncEnabled, lastSyncAt])` added to `MailConnection` in the multi-mailbox schema migration (`cccb687`). Covers both the due-sync scheduler query (see DB-M5) and the index listed in DB-M5's fix recommendation.
   - **Effort**: small
 
 - [ ] **[DB-L2] `fetchCustomerEmails` hard-capped at 250 — silently truncates large shops**
@@ -596,7 +595,7 @@ Reviewed by: 6-agent automated audit (security, code-quality, architecture, data
 - [ ] DB-M1 — Add `@@index([canonicalThreadId])` to `IncomingEmail`
 - [ ] DB-M3 — Merge `refreshThreadStats` two queries into one
 - [ ] DB-M4 — Hoist `localIds` outside loop in backfill
-- [ ] DB-M5 — Push due-time filter into `enqueueDuePeriodicSyncs` query
+- [x] DB-M5 — Push due-time filter into `enqueueDuePeriodicSyncs` query (resolved in feature/multi-mailbox)
 - [ ] DB-L3 — Capture `create` return value; remove `findUniqueOrThrow`
 - [ ] DB-L4 — Replace `getTrueLatestMessage` query with `messages.at(-1)`
 - [ ] PERF-M1 — Cache `isCancelled` result with 15s TTL

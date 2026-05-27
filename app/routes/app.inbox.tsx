@@ -15,7 +15,7 @@ import {
 } from "../lib/onboarding/repo";
 import { deriveChecklistState, isChecklistDismissed } from "../lib/onboarding/state";
 import { OnboardingChecklist } from "../components/onboarding/OnboardingChecklist";
-import { getAuthUrl as getGmailAuthUrl, getConnection } from "../lib/gmail/auth";
+import { getAuthUrl as getGmailAuthUrl } from "../lib/gmail/auth";
 import { getZohoAuthUrl } from "../lib/zoho/auth";
 import { getAuthUrl as getOutlookAuthUrl } from "../lib/outlook/auth";
 import type { ProcessingReport } from "../lib/gmail/pipeline";
@@ -62,6 +62,9 @@ import {
   CheckCircleIcon,
   MailIcon,
 } from "../components/ui";
+import MailboxBadge from "../components/inbox/MailboxBadge";
+import MailboxFilter from "../components/inbox/MailboxFilter";
+import MailboxIndicator from "../components/inbox/MailboxIndicator";
 
 // Tracks email IDs for which an HTML body refresh was already submitted
 // this browser session, so we don't re-fetch on every remount.
@@ -72,9 +75,29 @@ const _refreshedEmailIds = new Set<string>();
 // ---------------------------------------------------------------------------
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   await requireOnboardingComplete(session.shop, request);
   const shop = session.shop;
+  const url = new URL(request.url);
+  const mailConnectionId = url.searchParams.get("mailbox") || undefined;
+
+  // Soft-pause: detect if the shop is over its plan's mailbox limit (can happen
+  // after a scheduled downgrade kicks in) and disable auto-sync on all mailboxes.
+  // Idempotent — safe to call on every request.
+  {
+    const { resolveEntitlements } = await import("../lib/billing/entitlements");
+    const { applySoftPauseIfOverflow } = await import("../lib/billing/soft-pause");
+    const ent = await resolveEntitlements({ shop, admin });
+    if (ent.state === "paid_active" || ent.state === "trial_active") {
+      if (ent.planId) {
+        const paused = await applySoftPauseIfOverflow({ shop, activePlanId: ent.planId });
+        if (paused > 0) {
+          console.warn(`[inbox] soft-paused ${paused} mailboxes for shop=${shop} (plan=${ent.planId})`);
+        }
+      }
+    }
+  }
+
   const onboardingFlag = await getShopFlag(shop);
   const checklistState = deriveChecklistState({
     hasDraft: await hasGeneratedAnyDraft(shop),
@@ -93,14 +116,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     state: checklistState,
     dismissed: checklistDismissed,
   };
-  const connection = await getConnection(shop);
+  // Check if ANY mailbox is connected — inbox only loads when at least one exists.
+  // In multi-mailbox, findFirst is correct: we only need a truthy/falsy answer here.
+  const connection = await prisma.mailConnection.findFirst({ where: { shop } });
 
   let emails: SerializedEmail[] = [];
   let threadStates: Record<string, SerializedThreadState> = {};
   let priorContact: Record<string, { byOrder: boolean; recentReply: boolean }> = {};
   if (connection) {
     const rows = await prisma.incomingEmail.findMany({
-      where: { shop },
+      where: { shop, ...(mailConnectionId ? { mailConnectionId } : {}) },
       orderBy: { receivedAt: "desc" },
       take: 500,
       include: {
@@ -130,6 +155,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       const analyzedPerThread = await prisma.incomingEmail.findMany({
         where: {
           shop,
+          ...(mailConnectionId ? { mailConnectionId } : {}),
           canonicalThreadId: { in: canonicalIds },
           analysisResult: { not: null },
         },
@@ -184,7 +210,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     // canonicalIds query above because there are no IncomingEmail rows
     // pointing at them anymore).
     const tombstoneThreads = await prisma.thread.findMany({
-      where: { shop, redactedAt: { not: null } },
+      where: { shop, ...(mailConnectionId ? { mailConnectionId } : {}), redactedAt: { not: null } },
       orderBy: { redactedAt: "desc" },
       take: 200,
       select: {
@@ -215,6 +241,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         externalMessageId: "",
         threadId: "",
         canonicalThreadId: t.id,
+        mailConnectionId: "",
         fromAddress: "",
         fromName: "",
         subject: "",
@@ -271,8 +298,31 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   });
   const syncInProgress = !!activeHeavyJob;
 
+  // Per-mailbox metadata — consumed by the mailbox filter UI (Phase 8).
+  const connections = await prisma.mailConnection.findMany({
+    where: { shop },
+    select: {
+      id: true,
+      email: true,
+      provider: true,
+      autoSyncEnabled: true,
+      lastSyncError: true,
+      lastSyncAt: true,
+    },
+  });
+
+  const threadCountsRaw = await prisma.thread.groupBy({
+    by: ["mailConnectionId"],
+    where: { shop, messages: { some: {} }, supportNature: { not: "non_support" } },
+    _count: { _all: true },
+  });
+  const threadCountsByMailbox = Object.fromEntries(
+    threadCountsRaw.map((r) => [r.mailConnectionId, r._count._all]),
+  );
+
   return {
     connected: !!connection,
+    connectionId: connection?.id ?? null,
     provider: (connection?.provider ?? null) as MailProvider | null,
     connectedEmail: connection?.email ?? null,
     lastSyncAt: connection?.lastSyncAt?.toISOString() ?? null,
@@ -287,6 +337,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     priorContact,
     syncInProgress,
     onboardingChecklist,
+    connections: connections.map((c) => ({
+      ...c,
+      lastSyncAt: c.lastSyncAt?.toISOString() ?? null,
+    })),
+    threadCountsByMailbox,
+    mailConnectionId: mailConnectionId ?? null,
   };
 };
 
@@ -328,15 +384,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = String(formData.get("_action") ?? "");
 
   if (intent === "disconnect") {
-    return handleDisconnect({ shop });
+    const mailConnectionId = String(formData.get("mailConnectionId") ?? "");
+    if (!mailConnectionId)
+      return { error: "missing_mailConnectionId", report: null, disconnected: false, reanalyzed: null, refined: null };
+    return await handleDisconnect({ shop, mailConnectionId });
   }
 
   if (intent === "stop") {
-    return handleStop({ shop });
+    const mailConnectionId = String(formData.get("mailConnectionId") ?? "");
+    if (!mailConnectionId)
+      return { error: "missing_mailConnectionId", report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
+    return handleStop({ shop, mailConnectionId });
   }
 
   if (intent === "resync") {
-    return handleResync({ shop });
+    const mailConnectionId = String(formData.get("mailConnectionId") ?? "");
+    if (!mailConnectionId)
+      return { error: "missing_mailConnectionId", report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
+    return await handleResync({ shop, mailConnectionId });
   }
 
   if (intent === "reclassify") {
@@ -344,17 +409,26 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "sync") {
-    return handleSync({ shop, admin });
+    const syncMailConnectionId = formData.get("mailConnectionId") as string | null || undefined;
+    return handleSync({ shop, admin, mailConnectionId: syncMailConnectionId });
   }
 
   if (intent === "backfill") {
     const days = Number(formData.get("days") ?? "60");
-    return handleBackfill({ shop, days });
+    const backfillMailConnectionId = formData.get("mailConnectionId") as string | null;
+    if (!backfillMailConnectionId) {
+      return { error: "missing_mailConnectionId", report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
+    }
+    return handleBackfill({ shop, mailConnectionId: backfillMailConnectionId, days });
   }
 
   if (intent === "toggleAutoSync") {
     const enable = formData.get("enable") === "1";
-    return handleToggleAutoSync({ shop, enable });
+    const toggleMailConnectionId = formData.get("mailConnectionId") as string | null;
+    if (!toggleMailConnectionId) {
+      return { error: "missing_mailConnectionId", report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
+    }
+    return handleToggleAutoSync({ shop, mailConnectionId: toggleMailConnectionId, enable });
   }
 
   if (intent === "diagnose") {
@@ -526,6 +600,7 @@ interface SerializedEmail {
   externalMessageId: string;
   threadId: string;
   canonicalThreadId: string | null;
+  mailConnectionId: string;
   fromAddress: string;
   fromName: string;
   subject: string;
@@ -564,6 +639,7 @@ function serializeEmail(row: {
   externalMessageId: string;
   threadId: string;
   canonicalThreadId: string | null;
+  mailConnectionId: string;
   fromAddress: string;
   fromName: string;
   subject: string;
@@ -617,6 +693,7 @@ function serializeEmail(row: {
     externalMessageId: row.externalMessageId,
     threadId: row.threadId,
     canonicalThreadId: row.canonicalThreadId,
+    mailConnectionId: row.mailConnectionId,
     fromAddress: row.fromAddress,
     fromName: decodeHtmlEntities(row.fromName),
     subject: decodeHtmlEntities(row.subject),
@@ -930,6 +1007,7 @@ function getThreadClassification(thread: EmailThread): NatureFilter {
 
 function ConnectionCard({
   connected,
+  connectionId,
   provider,
   connectedEmail,
   lastSyncAt,
@@ -941,6 +1019,7 @@ function ConnectionCard({
   autoSyncIntervalMinutes,
 }: {
   connected: boolean;
+  connectionId: string | null;
   provider: MailProvider | null;
   connectedEmail: string | null;
   lastSyncAt: string | null;
@@ -1040,6 +1119,7 @@ function ConnectionCard({
           </Form>
           <Form method="post">
             <input type="hidden" name="_action" value="toggleAutoSync" />
+            <input type="hidden" name="mailConnectionId" value={connectionId ?? ""} />
             <input type="hidden" name="enable" value={autoSyncEnabled ? "0" : "1"} />
             <s-button variant="tertiary" type="submit">
               {autoSyncEnabled ? t("inbox.pauseAutoSync") : t("inbox.resumeAutoSync")}
@@ -1057,6 +1137,7 @@ function ConnectionCard({
           <s-stack direction="inline" gap="small-300">
             <Form method="post">
               <input type="hidden" name="_action" value="backfill" />
+              <input type="hidden" name="mailConnectionId" value={connectionId ?? ""} />
               <input type="hidden" name="days" value="60" />
               <s-button variant="tertiary" type="submit" {...(isSyncing ? { loading: true } : {})}>
                 {t("inbox.backfill")}
@@ -1065,7 +1146,7 @@ function ConnectionCard({
             <Form
               method="post"
               onSubmit={(e) => {
-                // Resync wipes ALL ingested email rows for the shop. Make
+                // Resync wipes all ingested email rows for this mailbox. Make
                 // sure a misclick doesn't destroy the merchant's history.
                 if (!window.confirm(t("inbox.resyncConfirm"))) {
                   e.preventDefault();
@@ -1073,6 +1154,7 @@ function ConnectionCard({
               }}
             >
               <input type="hidden" name="_action" value="resync" />
+              <input type="hidden" name="mailConnectionId" value={connectionId ?? ""} />
               <s-button variant="tertiary" type="submit" {...(isSyncing ? { loading: true } : {})}>
                 {t("inbox.resyncAll")}
               </s-button>
@@ -1091,6 +1173,7 @@ function ConnectionCard({
             </Form>
             <Form method="post">
               <input type="hidden" name="_action" value="disconnect" />
+              <input type="hidden" name="mailConnectionId" value={connectionId ?? ""} />
               <s-button tone="critical" variant="plain" type="submit">
                 {t("inbox.disconnect")}
               </s-button>
@@ -3302,7 +3385,10 @@ export default function InboxPage() {
     <div className="ui-inbox-root">
       {/* SyncSuspendedBanner moved to the app-shell top strip (app.tsx) so it
           aligns with TrialBanner / QuotaBanner on the right edge. */}
-      <div className="ui-inbox-heading"><h1>{t("nav.emailInbox")}</h1></div>
+      <div className="ui-inbox-heading" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <h1 style={{ margin: 0 }}>{t("nav.emailInbox")}</h1>
+        <MailboxIndicator connections={loaderData.connections} />
+      </div>
 
       {/* Onboarding checklist (auto-hides when dismissed or complete) */}
       <div className="ui-inbox-section">
@@ -3316,6 +3402,7 @@ export default function InboxPage() {
       <div className="ui-inbox-section">
         <ConnectionCard
           connected={loaderData.connected}
+          connectionId={loaderData.connectionId}
           provider={loaderData.provider}
           connectedEmail={loaderData.connectedEmail}
           lastSyncAt={loaderData.lastSyncAt}
@@ -3417,20 +3504,27 @@ export default function InboxPage() {
                 <ClearAnalyzeQueueButton count={bucketCounts.to_analyze} />
               )}
 
-              {/* Secondary filters */}
-              <FiltersBar
-                filters={filters}
-                onChange={setFilters}
-                intentOptions={availableIntents}
-                onReset={() =>
-                  setFilters({
-                    search: "",
-                    orderLinked: "any",
-                    nature: "all",
-                    intent: "",
-                  })
-                }
-              />
+              {/* Secondary filters + mailbox filter */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <FiltersBar
+                  filters={filters}
+                  onChange={setFilters}
+                  intentOptions={availableIntents}
+                  onReset={() =>
+                    setFilters({
+                      search: "",
+                      orderLinked: "any",
+                      nature: "all",
+                      intent: "",
+                    })
+                  }
+                />
+                <MailboxFilter
+                  connections={loaderData.connections}
+                  countsByMailbox={loaderData.threadCountsByMailbox}
+                  totalCount={Object.values(loaderData.threadCountsByMailbox).reduce((a, b) => a + b, 0)}
+                />
+              </div>
 
               {/* Thread list + detail split.
                   IMPORTANT: use `minmax(0, 1fr)` instead of `1fr` even in the
@@ -3458,28 +3552,41 @@ export default function InboxPage() {
                       <s-paragraph>{t("inbox.noEmailsMatch")}</s-paragraph>
                     </s-box>
                   )}
-                  {filteredThreadMeta.map(({ thread, state, previousContact }) =>
-                    state?.redactedAt ? (
+                  {filteredThreadMeta.map(({ thread, state, previousContact }) => {
+                    const mailConn = loaderData.connections.find(
+                      (c) => c.id === thread.latest.mailConnectionId,
+                    );
+                    return state?.redactedAt ? (
                       <TombstoneCard
                         key={thread.threadId}
                         redactedAt={state.redactedAt}
                         reason={state.redactedReason}
                       />
                     ) : (
-                      <ThreadCard
-                        key={thread.threadId}
-                        thread={thread}
-                        threadState={state}
-                        isSelected={expandedThreadId === thread.threadId}
-                        connectedEmail={loaderData.connectedEmail}
-                        previousContact={previousContact}
-                        onSelect={toggleExpandedThreadId}
-                        onOrderClick={handleOrderClick}
-                        onFilterClick={handleFilterClick}
-                        onBucketClick={handleBucketClick}
-                      />
-                    ),
-                  )}
+                      <div key={thread.threadId} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        {mailConn && loaderData.connections.length > 1 && (
+                          <div>
+                            <MailboxBadge
+                              email={mailConn.email}
+                              provider={mailConn.provider}
+                              paused={!mailConn.autoSyncEnabled}
+                            />
+                          </div>
+                        )}
+                        <ThreadCard
+                          thread={thread}
+                          threadState={state}
+                          isSelected={expandedThreadId === thread.threadId}
+                          connectedEmail={loaderData.connectedEmail}
+                          previousContact={previousContact}
+                          onSelect={toggleExpandedThreadId}
+                          onOrderClick={handleOrderClick}
+                          onFilterClick={handleFilterClick}
+                          onBucketClick={handleBucketClick}
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
 
                 {/* Right: thread detail panel (sticky).

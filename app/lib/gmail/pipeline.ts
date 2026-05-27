@@ -1,10 +1,10 @@
 import prisma from "../../db.server";
+import type { MailConnection } from "@prisma/client";
 import type { AdminGraphqlClient } from "../support/shopify/order-search";
 import { analyzeSupportEmail } from "../support/orchestrator";
 import type { MailAttachment, MailClient, MailMessage } from "../mail/types";
+import { getMailClient } from "../mail/types";
 import type { ConversationMessage } from "../support/types";
-import { createGmailClient } from "./mail-client";
-import { createZohoClient } from "../zoho/client";
 import { fetchCustomerEmails } from "./customers";
 import { prefilterEmail } from "./prefilter";
 import { classifyEmail } from "./classifier";
@@ -12,6 +12,7 @@ import {
   resolveCanonicalThread,
   refreshThreadStats,
   getTrueLatestMessage,
+  MailboxGoneError,
 } from "../mail/thread-resolver";
 import {
   extractAndCache,
@@ -49,19 +50,14 @@ export interface ProcessingReport {
   cancelled: boolean;
 }
 
-export async function getMailClient(shop: string, provider: string): Promise<MailClient> {
-  if (provider === "zoho") return createZohoClient(shop);
-  if (provider === "outlook") {
-    const { createOutlookClient } = await import("../outlook/mail-client");
-    return createOutlookClient(shop);
-  }
-  return createGmailClient(shop);
-}
+// Re-export canonical factory so existing imports of getMailClient from this
+// module continue to work during the Phase 3 migration.
+export { getMailClient };
 
 export async function processNewEmails(
   shop: string,
   admin: AdminGraphqlClient,
-  options?: { tier3Allowed?: boolean; bypassCatchupGate?: boolean },
+  opts: { tier3Allowed: boolean; connection: MailConnection; bypassCatchupGate?: boolean },
 ): Promise<ProcessingReport> {
   const report: ProcessingReport = {
     total: 0,
@@ -76,10 +72,7 @@ export async function processNewEmails(
 
   const syncStartedAt = new Date();
   const log = createLogger({ shop, mod: "gmail/pipeline" });
-  // Default true: pre-billing-suspension callers (tests, internal shops,
-  // healthy plans) get the full pipeline. Auto-sync and handleSync pass
-  // `false` when the shop is suspended so Tier 3 is skipped per-shop.
-  const tier3Allowed = options?.tier3Allowed ?? true;
+  const tier3Allowed = opts.tier3Allowed;
   // Internal shops bypass the catch-up gate: they have no quota
   // ceiling, so the gate's only purpose (protect quota across a resume
   // from suspension) doesn't apply, and having Tier 2/3 silently skipped
@@ -89,21 +82,21 @@ export async function processNewEmails(
     select: { isInternal: true },
   }).catch(() => null);
   const bypassCatchupGate =
-    (options?.bypassCatchupGate ?? false) || internalFlag?.isInternal === true;
+    (opts.bypassCatchupGate ?? false) || internalFlag?.isInternal === true;
 
   // Clear any previous top-level error and cancel flag at the start of a new sync.
   await prisma.mailConnection.update({
-    where: { shop },
+    where: { id: opts.connection.id },
     data: { lastSyncError: null, syncCancelledAt: null },
   }).catch(() => { /* ignore if connection gone */ });
 
   try {
-    return await _processNewEmails(shop, admin, report, syncStartedAt, tier3Allowed, bypassCatchupGate);
+    return await _processNewEmails(shop, admin, report, syncStartedAt, tier3Allowed, bypassCatchupGate, opts.connection);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error({ err }, "Top-level sync error");
     await prisma.mailConnection.update({
-      where: { shop },
+      where: { id: opts.connection.id },
       data: { lastSyncError: msg.slice(0, 500) },
     }).catch(() => {});
     throw err;
@@ -117,12 +110,10 @@ async function _processNewEmails(
   syncStartedAt: Date,
   tier3Allowed: boolean,
   bypassCatchupGate: boolean,
+  conn: MailConnection,
 ): Promise<ProcessingReport> {
   const log = createLogger({ shop, mod: "gmail/pipeline" });
-  const conn = await prisma.mailConnection.findUnique({ where: { shop } });
-  if (!conn) throw new Error("No mail connection for this shop");
-
-  const client = await getMailClient(shop, conn.provider);
+  const client = await getMailClient(conn);
 
   // Determine which messages to fetch
   let messageIds: string[];
@@ -174,7 +165,7 @@ async function _processNewEmails(
   if (newMessageIds.length === 0) {
     // Still update sync cursor
     await prisma.mailConnection.update({
-      where: { shop },
+      where: { id: conn.id },
       data: {
         lastSyncAt: new Date(),
         ...(newCursor ? { historyId: newCursor } : {}),
@@ -183,7 +174,7 @@ async function _processNewEmails(
     // Backfill even when there are no new messages — resolved threads
     // accumulate over time and need intent badges regardless of new activity.
     try {
-      await backfillResolvedIntents(shop, admin);
+      await backfillResolvedIntents(shop, admin, { mailboxEmail: conn.email });
     } catch (err) {
       log.error({ err }, "backfillResolvedIntents failed (no-new-messages path)");
     }
@@ -196,7 +187,7 @@ async function _processNewEmails(
   // Load the outgoing-detection context once per pass so each ingest can
   // reliably tag merchant replies (aliases included) as `outgoing` even when
   // the provider didn't expose a SENT label.
-  const outgoingCtx = await loadOutgoingContext(shop, conn.email);
+  const outgoingCtx = await loadOutgoingContext(conn);
 
   // PRE-PASS-1: backfill closed-thread intent badges BEFORE Pass 1 mutates
   // operationalState. During a resync (historyId=null), all emails are deleted
@@ -208,7 +199,7 @@ async function _processNewEmails(
   // For regular syncs (few new messages) this call is nearly free: alreadyAnalyzed
   // covers almost all threads and the function returns after two cheap DB queries.
   try {
-    await backfillResolvedIntents(shop, admin);
+    await backfillResolvedIntents(shop, admin, { mailboxEmail: conn.email });
   } catch (err) {
     log.error({ err }, "pre-pass1 backfillResolvedIntents failed");
   }
@@ -222,7 +213,7 @@ async function _processNewEmails(
   // ---------------------------------------------------------------------
   const INGESTION_BATCH_SIZE = 10;
   for (let i = 0; i < newMessageIds.length; i += INGESTION_BATCH_SIZE) {
-    if (i > 0 && (await isCancelled(shop, syncStartedAt))) {
+    if (i > 0 && (await isCancelled(conn.id, syncStartedAt))) {
       log.info({ processed: i }, "Sync cancelled during ingestion");
       report.cancelled = true;
       break;
@@ -231,7 +222,7 @@ async function _processNewEmails(
     await Promise.allSettled(
       batch.map(async (msgId) => {
         try {
-          await ingestAndPrefilter(shop, conn.provider, client, msgId, customerEmails, outgoingCtx, report);
+          await ingestAndPrefilter(shop, conn.provider, client, msgId, customerEmails, outgoingCtx, report, conn.id);
         } catch (err) {
           report.errors++;
           log.error({ err, msgId }, "Ingestion error");
@@ -264,10 +255,10 @@ async function _processNewEmails(
   // the full thread context. We avoid wasting LLM calls on stale replies.
   // ---------------------------------------------------------------------
   if (!report.cancelled) {
-    const threadsToClassify = await pickThreadsForClassification(shop, newMessageIds);
+    const threadsToClassify = await pickThreadsForClassification(shop, newMessageIds, conn.id);
     const CLASSIFY_BATCH_SIZE = 5;
     for (let i = 0; i < threadsToClassify.length; i += CLASSIFY_BATCH_SIZE) {
-      if (i > 0 && (await isCancelled(shop, syncStartedAt))) {
+      if (i > 0 && (await isCancelled(conn.id, syncStartedAt))) {
         log.info({ processed: i }, "Sync cancelled during classification");
         report.cancelled = true;
         break;
@@ -296,14 +287,14 @@ async function _processNewEmails(
   // Backfill intent badges for resolved threads that lack detectedIntent.
   // Best-effort: failures must never abort the main sync.
   try {
-    await backfillResolvedIntents(shop, admin);
+    await backfillResolvedIntents(shop, admin, { mailboxEmail: conn.email });
   } catch (err) {
     log.error({ err }, "post-pass2 backfillResolvedIntents failed");
   }
 
   // Update sync cursor
   await prisma.mailConnection.update({
-    where: { shop },
+    where: { id: conn.id },
     data: {
       lastSyncAt: new Date(),
       ...(newCursor ? { historyId: newCursor } : {}),
@@ -347,18 +338,18 @@ export async function persistEmailAttachments(
 const cancelledCache = new Map<string, { result: boolean; checkedAt: number }>();
 const CANCEL_CHECK_TTL_MS = 15_000;
 
-async function isCancelled(shop: string, syncStartedAt: Date): Promise<boolean> {
+async function isCancelled(connectionId: string, syncStartedAt: Date): Promise<boolean> {
   const now = Date.now();
-  const cached = cancelledCache.get(shop);
+  const cached = cancelledCache.get(connectionId);
   if (cached && now - cached.checkedAt < CANCEL_CHECK_TTL_MS) {
     return cached.result;
   }
   const fresh = await prisma.mailConnection.findUnique({
-    where: { shop },
+    where: { id: connectionId },
     select: { syncCancelledAt: true },
   });
   const result = !!(fresh?.syncCancelledAt && fresh.syncCancelledAt > syncStartedAt);
-  cancelledCache.set(shop, { result, checkedAt: now });
+  cancelledCache.set(connectionId, { result, checkedAt: now });
   return result;
 }
 
@@ -374,6 +365,7 @@ export async function ingestAndPrefilter(
   customerEmails: Set<string>,
   outgoingCtx: OutgoingContext,
   report: ProcessingReport,
+  mailConnectionId: string,
 ) {
   const log = createLogger({ shop, mod: "gmail/pipeline", msgId });
   const msg: MailMessage = await client.getMessage(msgId);
@@ -390,17 +382,27 @@ export async function ingestAndPrefilter(
 
   // Resolve (or create) the canonical Thread BEFORE upserting the email,
   // so we can write canonicalThreadId atomically.
-  const { canonicalThreadId } = await resolveCanonicalThread({
-    shop,
-    provider,
-    providerThreadId: msg.threadId,
-    externalMessageId: msg.id,
-    subject: msg.subject,
-    receivedAt: msg.receivedAt,
-    rfcMessageId,
-    inReplyTo,
-    rfcReferences,
-  });
+  let canonicalThreadId: string;
+  try {
+    ({ canonicalThreadId } = await resolveCanonicalThread({
+      shop,
+      mailConnectionId,
+      provider,
+      providerThreadId: msg.threadId,
+      externalMessageId: msg.id,
+      subject: msg.subject,
+      receivedAt: msg.receivedAt,
+      rfcMessageId,
+      inReplyTo,
+      rfcReferences,
+    }));
+  } catch (err) {
+    if (err instanceof MailboxGoneError) {
+      console.warn(`[pipeline] skipping message — mailbox gone: ${err.mailConnectionId}`);
+      return;
+    }
+    throw err;
+  }
 
   const msgAttachments = msg.attachments;
   const hasAttachments = msgAttachments.length > 0;
@@ -582,7 +584,7 @@ export async function ingestAndPrefilter(
 export async function backfillResolvedIntents(
   shop: string,
   admin: AdminGraphqlClient,
-  opts: { maxThreads?: number } = {},
+  opts: { maxThreads?: number; mailboxEmail?: string } = {},
 ): Promise<void> {
   const log = createLogger({ shop, mod: "gmail/pipeline:backfillResolvedIntents" });
   // Step 1: collect thread IDs for both closed states.
@@ -658,10 +660,9 @@ export async function backfillResolvedIntents(
   const toProcess = needsBackfill.slice(0, opts.maxThreads ?? 200);
   log.info({ count: toProcess.length }, "thread(s) need intent backfill");
 
-  // Fetch mailbox address once — used by buildThreadContext for direction labels.
-  const connEmail = (
-    await prisma.mailConnection.findUnique({ where: { shop }, select: { email: true } })
-  )?.email ?? "";
+  // Use the caller-supplied mailbox email (from conn.email in processNewEmails)
+  // so we don't need a shop-scoped DB lookup — which would be ambiguous in multi-mailbox.
+  const connEmail = opts.mailboxEmail ?? "";
 
   const anchorSelect = {
     id: true,
@@ -911,12 +912,16 @@ export async function backfillResolvedIntents(
 async function pickThreadsForClassification(
   shop: string,
   newMessageIds: string[],
+  mailConnectionId: string,
 ): Promise<string[]> {
   if (newMessageIds.length === 0) return [];
 
   // Find which canonical threads were touched by this batch.
+  // Include mailConnectionId so a shop with two mailboxes can't cross-pollinate
+  // threads when both mailboxes happen to receive the same externalMessageId
+  // (e.g. a forwarded message stored in both inboxes).
   const newRecords = await prisma.incomingEmail.findMany({
-    where: { shop, externalMessageId: { in: newMessageIds } },
+    where: { shop, mailConnectionId, externalMessageId: { in: newMessageIds } },
     select: { canonicalThreadId: true },
   });
   const canonicalIds = Array.from(
@@ -1452,15 +1457,17 @@ export async function reanalyzeEmail(
     throw new Error("Email not found");
   }
 
-  const conn = await prisma.mailConnection.findUnique({
-    where: { shop },
-    select: { email: true, provider: true },
-  });
+  // Use the email's mailConnectionId (set at ingest time) to resolve the
+  // correct connection. Fall back to any connection for the shop for legacy
+  // rows that predate the mailConnectionId column.
+  const conn = record.mailConnectionId
+    ? await prisma.mailConnection.findUnique({ where: { id: record.mailConnectionId } })
+    : await prisma.mailConnection.findFirst({ where: { shop } });
 
   // Build a provider client so we can pull the FULL thread (inbox + sent)
   let client: MailClient | undefined;
   try {
-    if (conn) client = await getMailClient(shop, conn.provider);
+    if (conn) client = await getMailClient(conn);
   } catch (err) {
     log.error({ err }, "Could not create mail client for reanalyze");
   }

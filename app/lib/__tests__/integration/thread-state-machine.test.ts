@@ -40,6 +40,7 @@ describe('thread state machine — integration DB', () => {
     await testDb.incomingEmail.create({
       data: {
         shop: TEST_SHOP,
+        mailConnectionId: thread.mailConnectionId,
         externalMessageId: 'msg-reopen-001',
         canonicalThreadId: thread.id,
         fromAddress: 'client@example.com',
@@ -87,6 +88,7 @@ describe('thread state machine — integration DB', () => {
     await testDb.incomingEmail.create({
       data: {
         shop: TEST_SHOP,
+        mailConnectionId: thread.mailConnectionId,
         externalMessageId: 'msg-preresolve-001',
         canonicalThreadId: thread.id,
         fromAddress: 'client@example.com',
@@ -119,6 +121,7 @@ describe('thread state machine — integration DB', () => {
     await testDb.incomingEmail.create({
       data: {
         shop: TEST_SHOP,
+        mailConnectionId: thread.mailConnectionId,
         externalMessageId: 'msg-non-client-001',
         canonicalThreadId: thread.id,
         fromAddress: 'bot@spam.com',

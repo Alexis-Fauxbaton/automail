@@ -5,6 +5,7 @@ import {
   disconnectTestDb,
   TEST_SHOP,
   createTestThread,
+  seedMailConnection,
 } from "./helpers/db";
 import { markThreadAnalyzedIfFirst, getUsage } from "../../billing/usage";
 
@@ -13,11 +14,13 @@ const OTHER_SHOP = "cross-shop.myshopify.com";
 beforeEach(async () => {
   await cleanTestShop();
   await testDb.thread.deleteMany({ where: { shop: OTHER_SHOP } });
+  await testDb.mailConnection.deleteMany({ where: { shop: OTHER_SHOP } });
   await testDb.billingUsage.deleteMany({ where: { shop: OTHER_SHOP } });
 });
 
 afterAll(async () => {
   await testDb.thread.deleteMany({ where: { shop: OTHER_SHOP } });
+  await testDb.mailConnection.deleteMany({ where: { shop: OTHER_SHOP } });
   await testDb.billingUsage.deleteMany({ where: { shop: OTHER_SHOP } });
   await disconnectTestDb();
 });
@@ -25,9 +28,11 @@ afterAll(async () => {
 describe("billing — cross-shop isolation (Class 4)", () => {
   it("shop A analyses do not touch shop B counter", async () => {
     const tA = await createTestThread({});
+    const mcB = await seedMailConnection({ shop: OTHER_SHOP });
     const tB = await testDb.thread.create({
       data: {
         shop: OTHER_SHOP,
+        mailConnectionId: mcB.id,
         provider: "gmail",
         lastMessageAt: new Date(),
         firstMessageAt: new Date(),
@@ -47,9 +52,11 @@ describe("billing — cross-shop isolation (Class 4)", () => {
 
   it("concurrent analyses on two shops do not interfere", async () => {
     const tA = await createTestThread({});
+    const mcB = await seedMailConnection({ shop: OTHER_SHOP });
     const tB = await testDb.thread.create({
       data: {
         shop: OTHER_SHOP,
+        mailConnectionId: mcB.id,
         provider: "gmail",
         lastMessageAt: new Date(),
         firstMessageAt: new Date(),

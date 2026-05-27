@@ -99,6 +99,7 @@ describe('GDPR webhooks — integration DB', () => {
       data: [
         {
           ...baseEmail,
+          mailConnectionId: victimThread.mailConnectionId,
           threadId: victimThread.id,
           canonicalThreadId: victimThread.id,
           externalMessageId: 'msg-victim-1',
@@ -106,6 +107,7 @@ describe('GDPR webhooks — integration DB', () => {
         },
         {
           ...baseEmail,
+          mailConnectionId: otherThread.mailConnectionId,
           threadId: otherThread.id,
           canonicalThreadId: otherThread.id,
           externalMessageId: 'msg-other-1',
@@ -158,11 +160,13 @@ describe('GDPR webhooks — integration DB', () => {
 
   it('shop/redact deletes all shop data (REQ-GDPR-03)', async () => {
     // 1. Seed: thread + mailConnection + supportSettings + incomingEmail.
-    await createTestThread();
+    const thread = await createTestThread();
 
     await testDb.incomingEmail.create({
       data: {
         shop: TEST_SHOP,
+        mailConnectionId: thread.mailConnectionId,
+        canonicalThreadId: thread.id,
         externalMessageId: 'msg-shop-redact',
         fromAddress: 'customer@example.com',
         fromName: '',
@@ -172,15 +176,6 @@ describe('GDPR webhooks — integration DB', () => {
         receivedAt: new Date(),
         extractedIdentifiers: '{}',
         labelIds: '[]',
-      },
-    });
-
-    await testDb.mailConnection.create({
-      data: {
-        shop: TEST_SHOP,
-        accessToken: 'enc-access',
-        refreshToken: 'enc-refresh',
-        tokenExpiry: new Date(Date.now() + 3_600_000),
       },
     });
 

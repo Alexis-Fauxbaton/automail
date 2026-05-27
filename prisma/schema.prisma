@@ -51,8 +51,9 @@ model SupportSettings {
 }
 
 model MailConnection {
-  shop           String   @id
-  provider       String   @default("gmail") // "gmail" | "zoho"
+  id             String   @id @default(cuid())
+  shop           String
+  provider       String   @default("gmail") // "gmail" | "zoho" | "outlook"
   email          String   @default("")      // connected email address
   // Lowercased addresses from which the merchant can send via this account
   // (e.g. support@, contact@ aliases configured in Zoho/Gmail/Outlook).
@@ -80,6 +81,12 @@ model MailConnection {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
+  threads        Thread[]
+  incomingEmails IncomingEmail[]
+  syncJobs       SyncJob[]
+
+  @@unique([shop, email])
+  @@index([shop])
   @@index([autoSyncEnabled, lastSyncAt])
 }
 
@@ -91,6 +98,8 @@ model MailConnection {
 model Thread {
   id             String   @id @default(cuid())
   shop           String
+  mailConnectionId String
+  mailConnection   MailConnection @relation(fields: [mailConnectionId], references: [id], onDelete: Cascade)
   provider       String   // "gmail" | "zoho" — provider that first created the thread
   // Fast-path cached stats (maintained by the resolver on ingestion):
   lastMessageAt  DateTime // receivedAt of the true latest message (any direction)
@@ -175,6 +184,7 @@ model Thread {
   // Helps detect duplicate canonical threads when ThreadProviderId backfill races.
   @@index([shop, provider, subjectKey])
   @@index([shop, analyzedAt])
+  @@index([mailConnectionId])
 }
 
 // Mapping from a provider-native threadId to the canonical Thread.id.
@@ -196,6 +206,8 @@ model ThreadProviderId {
 model IncomingEmail {
   id               String   @id @default(cuid())
   shop             String
+  mailConnectionId String
+  mailConnection   MailConnection @relation(fields: [mailConnectionId], references: [id], onDelete: Cascade)
   externalMessageId String
   // Provider-native thread identifier (Gmail threadId / Zoho threadId).
   // Kept for diagnostics; logic should prefer canonicalThreadId.
@@ -264,6 +276,7 @@ model IncomingEmail {
   // AND lastAnalyzedAt — pure lastAnalyzedAt index leaves the status filter
   // to a heap scan.
   @@index([shop, processingStatus, lastAnalyzedAt])
+  @@index([mailConnectionId])
 }
 
 // Attachments and inline images extracted from incoming emails.
@@ -402,6 +415,8 @@ model UserPreference {
 model SyncJob {
   id           String    @id @default(cuid())
   shop         String
+  mailConnectionId String?
+  mailConnection   MailConnection? @relation(fields: [mailConnectionId], references: [id], onDelete: Cascade)
   kind         String    // "sync" | "backfill" | "resync"
   params       String    @default("{}") // JSON payload (e.g. { afterDate })
   status       String    @default("pending") // pending | running | done | error
@@ -416,6 +431,7 @@ model SyncJob {
 
   @@index([shop, status])
   @@index([status, nextRetryAt])
+  @@index([mailConnectionId])
 }
 
 // Sliding-window rate-limit counters. One row per (key, kind) — the
