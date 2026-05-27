@@ -15,6 +15,7 @@
 import prisma from "../../db.server";
 import type { MailClient } from "./types";
 import { getMailClient } from "./types";
+import { enqueueJob } from "./job-queue";
 import {
   resolveCanonicalThread,
   refreshThreadStats,
@@ -95,6 +96,8 @@ export async function runOnboardingBackfill(
     data: { onboardingBackfillDoneAt: new Date(), onboardingBackfillDays: days },
   });
 
+  await enqueueClassifyJobsForUnclassifiedThreads(shop, mailConnectionId);
+
   return { ingested, skipped: existing.length };
 }
 
@@ -130,7 +133,59 @@ export async function runManualBackfill(
       console.error("[backfill/manual] failed for", msgId, err);
     }
   });
+
+  await enqueueClassifyJobsForUnclassifiedThreads(shop, mailConnectionId);
+
   return { ingested, skipped: existing.length };
+}
+
+/**
+ * After a backfill, ingested historical messages sit at processingStatus="classified"
+ * with tier2Result=null and thread.supportNature="unknown" — Tier 2 (LLM
+ * classifier) was intentionally skipped at ingest time to save tokens. Without
+ * a follow-up, those threads pollute the À traiter tab forever (the loader
+ * defaults unknown threads there). Enqueue one analyze_thread job per touched
+ * canonical thread; the job runner skips already-analyzed threads cheaply so
+ * a second backfill on the same mailbox does no double work.
+ */
+async function enqueueClassifyJobsForUnclassifiedThreads(
+  shop: string,
+  mailConnectionId: string,
+): Promise<void> {
+  // Distinct canonical threads on this mailbox whose latest incoming has
+  // never been LLM-classified. We rely on the analyze_thread runner to
+  // pick the anchor itself, so we only need the threadId.
+  const threads = await prisma.thread.findMany({
+    where: {
+      shop,
+      mailConnectionId,
+      supportNature: "unknown",
+      messages: {
+        some: {
+          tier1Result: "passed",
+          tier2Result: null,
+          processingStatus: { notIn: ["outgoing", "error"] },
+        },
+      },
+    },
+    select: { id: true },
+  });
+  if (threads.length === 0) return;
+  console.log(
+    `[backfill] enqueueing analyze_thread for ${threads.length} unclassified thread(s) on shop=${shop} mailbox=${mailConnectionId}`,
+  );
+  for (const t of threads) {
+    try {
+      await enqueueJob({
+        shop,
+        kind: "analyze_thread",
+        mailConnectionId,
+        params: { threadId: t.id },
+      });
+    } catch (err) {
+      console.error(`[backfill] enqueue analyze_thread failed for thread=${t.id}:`, err);
+    }
+  }
 }
 
 /**
