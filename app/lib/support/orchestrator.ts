@@ -173,7 +173,7 @@ export async function analyzeSupportEmail(
     // but confidence scoring handles null matchedBy gracefully.
   } else {
     try {
-      const result = await searchOrders(input.admin, identifiers);
+      const result = await searchOrders(input.admin, identifiers, { shop: input.shop });
       matchedBy = result.matchedBy;
       candidates = result.orders.map(normalizeOrder);
     } catch (err) {

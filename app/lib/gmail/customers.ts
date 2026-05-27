@@ -1,4 +1,9 @@
 import type { AdminGraphqlClient } from "../support/shopify/order-search";
+import {
+  partitionGraphqlErrors,
+  warnPcdOnce,
+  type ShopifyGraphqlError,
+} from "../support/shopify/protected-customer-data";
 
 const CUSTOMERS_QUERY = `#graphql
   query RecentCustomerEmails($first: Int!) {
@@ -57,7 +62,20 @@ export async function fetchCustomerEmails(
     const res = await admin.graphql(CUSTOMERS_QUERY, {
       variables: { first: 250 },
     });
-    const data = await res.json();
+    const data = (await res.json()) as {
+      data?: { customers?: { nodes: Array<{ email: string | null }> } };
+      errors?: ShopifyGraphqlError[];
+    };
+    if (data.errors && data.errors.length > 0) {
+      const { pcdErrors, realErrors } = partitionGraphqlErrors(data.errors);
+      if (pcdErrors.length > 0) warnPcdOnce(shop, "fetchCustomerEmails");
+      if (realErrors.length > 0) {
+        console.error(
+          "[gmail/customers] GraphQL errors:",
+          realErrors.map((e) => e.message).join(" | "),
+        );
+      }
+    }
     for (const node of data?.data?.customers?.nodes ?? []) {
       if (node.email) emails.add(node.email.toLowerCase());
     }
