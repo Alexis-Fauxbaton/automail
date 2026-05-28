@@ -63,6 +63,16 @@ const MAX_CONCURRENT = Math.max(
 // syncs must complete in under 10 min — anything longer is treated as dead.
 const ZOMBIE_TIMEOUT_MS = 10 * 60_000;
 
+// ---------------------------------------------------------------------------
+// Stale-unknown classify cron state
+// ---------------------------------------------------------------------------
+// In-memory throttle: scanned at most once per hour. Safe under leader-lock
+// (only one replica runs the scheduling loop at a time).
+const STALE_CLASSIFY_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 h gate per thread
+const STALE_CLASSIFY_BATCH = 50;                          // max threads per tick
+const STALE_CLASSIFY_SCAN_INTERVAL_MS = 60 * 60 * 1000;  // 1 h between scans
+export let _lastStaleClassifyScanAt = 0; // exported for tests
+
 let started = false;
 let _intervalHandle: ReturnType<typeof setInterval> | null = null;
 let inFlight = 0;
@@ -190,6 +200,11 @@ async function tick(): Promise<void> {
   );
   // 2. Convert due periodic syncs into SyncJob rows (de-dup is inside enqueueJob).
   await enqueueDuePeriodicSyncs();
+  // 2b. Enqueue classify jobs for legacy threads stuck at supportNature=unknown.
+  //     Best-effort; gated to once per hour in-memory and 24 h per thread in DB.
+  await enqueueClassifyStaleUnknown().catch((err) =>
+    console.error("[auto-sync] enqueueClassifyStaleUnknown failed:", err),
+  );
   // 3. Enqueue a recompute job for any shop that still has threads stuck
   //    in the default "open" state (de-dup prevents duplicate jobs).
   await enqueueRecomputeIfNeeded();
@@ -267,6 +282,81 @@ export async function enqueueDuePeriodicSyncs(now: Date = new Date()): Promise<n
     console.error("[auto-sync] enqueueDuePeriodicSyncs failed:", err);
     return 0;
   }
+}
+
+/**
+ * Scan for threads that are stuck at supportNature=unknown because they were
+ * backfilled before Tier 2 was deployed, and enqueue one analyze_thread job per
+ * thread so they eventually get classified.
+ *
+ * Gate 1 (in-memory): skip if called within the last hour (STALE_CLASSIFY_SCAN_INTERVAL_MS).
+ *   Safe under the leader-lock advisory lock — only one replica runs this.
+ * Gate 2 (DB): skip threads whose lastClassifyAttemptAt is within 24 h (STALE_CLASSIFY_COOLDOWN_MS).
+ *   Prevents quota burn during LLM outages.
+ * Gate 3 (dedup): skip threads that already have a pending/running analyze_thread job.
+ */
+export async function enqueueClassifyStaleUnknown(now: Date = new Date()): Promise<number> {
+  // In-memory throttle: at most one scan per hour per process/leader.
+  if (now.getTime() - _lastStaleClassifyScanAt < STALE_CLASSIFY_SCAN_INTERVAL_MS) return 0;
+  _lastStaleClassifyScanAt = now.getTime();
+
+  const cutoff = new Date(now.getTime() - STALE_CLASSIFY_COOLDOWN_MS);
+
+  // Find threads unclassified at the thread level AND with at least one message
+  // that passed Tier 1 but never got Tier 2.
+  const due = await prisma.thread.findMany({
+    where: {
+      supportNature: "unknown",
+      messages: {
+        some: {
+          tier1Result: "passed",
+          tier2Result: null,
+          processingStatus: { notIn: ["outgoing", "error"] },
+        },
+      },
+      OR: [
+        { lastClassifyAttemptAt: null },
+        { lastClassifyAttemptAt: { lt: cutoff } },
+      ],
+    },
+    select: { id: true, shop: true, mailConnectionId: true },
+    take: STALE_CLASSIFY_BATCH,
+  });
+
+  let enqueued = 0;
+  for (const t of due) {
+    if (!t.mailConnectionId) continue; // defensive; shouldn't happen post multi-mailbox migration
+
+    // Dedup: SyncJob.params is a JSON string — use exact match to avoid
+    // false positives from substring collision.
+    const expectedParams = JSON.stringify({ threadId: t.id });
+    const existing = await prisma.syncJob.count({
+      where: {
+        shop: t.shop,
+        kind: "analyze_thread",
+        status: { in: ["pending", "running"] },
+        params: { equals: expectedParams },
+      },
+    });
+    if (existing > 0) continue;
+
+    try {
+      await enqueueJob({
+        shop: t.shop,
+        kind: "analyze_thread",
+        mailConnectionId: t.mailConnectionId,
+        params: { threadId: t.id },
+      });
+      enqueued++;
+    } catch (err) {
+      console.error(`[stale-classify] enqueue failed for thread=${t.id} shop=${t.shop}:`, err);
+    }
+  }
+
+  if (enqueued > 0) {
+    console.log(`[stale-classify] enqueued ${enqueued} analyze_thread job(s) for stale unknown threads`);
+  }
+  return enqueued;
 }
 
 /**
@@ -512,9 +602,42 @@ async function runJob(job: {
           }
           throw err;
         }
-        const { reanalyzeEmail } = await import("../gmail/pipeline");
-        await reanalyzeEmail(anchor.id, admin, job.shop, { skipDraft: true });
-        // markThreadAnalyzedIfFirst was called inside reanalyzeEmail.
+
+        // Route according to thread classification state:
+        // - supportNature=unknown → run Tier 2 first (cheap LLM classify) so
+        //   the thread is no longer stuck as unknown. analyzeThread handles the
+        //   Tier 2 → Tier 3 gate internally.
+        // - already classified → refresh path via reanalyzeEmail (no Tier 2 re-run).
+        //
+        // Intent: the stale-unknown cron (enqueueClassifyStaleUnknown) dispatches
+        // these jobs for legacy backfilled threads that missed Tier 2. Threads
+        // queued by other paths (e.g. user-triggered re-analysis) have a known
+        // supportNature and take the existing reanalyzeEmail path.
+        const thread = await prisma.thread.findUnique({
+          where: { id: threadId },
+          select: { supportNature: true },
+        });
+
+        if (thread?.supportNature === "unknown") {
+          // Never been classified — run Tier 2 first, let analyzeThread gate Tier 3.
+          const { analyzeThread } = await import("../support/analyze-thread");
+          await analyzeThread(
+            threadId,
+            { shop: job.shop, admin, mailboxAddress: conn?.email ?? "" },
+            {
+              runTier2: true,
+              runShopify: true,
+              runTracking: true,
+              runDraft: false,
+              skipBillingIncrement: false, // charge if Tier 3 runs and it's the first analysis
+            },
+          );
+        } else {
+          // Already classified — use the refresh path (no Tier 2 re-run).
+          const { reanalyzeEmail } = await import("../gmail/pipeline");
+          await reanalyzeEmail(anchor.id, admin, job.shop, { skipDraft: true });
+          // markThreadAnalyzedIfFirst was called inside reanalyzeEmail.
+        }
         console.log(`[auto-sync] analyze_thread ok thread=${threadId} shop=${job.shop} mailbox=${conn?.email ?? "?"}`);
         break;
       }

@@ -238,6 +238,14 @@ export async function analyzeThread(
   let tier2Classification: string | undefined;
 
   if (runTier2) {
+    // Stamp the attempt timestamp BEFORE the LLM call. Even if classifyEmail crashes,
+    // the timestamp is set so the stale-classify cron waits 24 h before retrying.
+    // Best-effort: a DB failure here is logged but must not block the classify path.
+    await prisma.thread.update({
+      where: { id: threadId },
+      data: { lastClassifyAttemptAt: new Date() },
+    }).catch((err) => log.error({ err }, "lastClassifyAttemptAt update failed"));
+
     // Build thread state for the classifier (compact structured state + true latest).
     const threadStateForClassify = await readStructuredState(threadId).catch(() => null);
     let trueLatestBody: string | undefined;

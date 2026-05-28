@@ -156,6 +156,12 @@ model Thread {
   // than a confusing gap. `redactedAt` non-null signals tombstone state.
   redactedAt     DateTime?
   redactedReason String?  // e.g. "gdpr_customer_request"
+  // --- Stale-classify cron gate ------------------------------------
+  // Set to NOW() immediately before each Tier 2 LLM call (even if the call
+  // crashes afterwards). The hourly enqueueClassifyStaleUnknown cron skips
+  // threads where this is within the last 24 h, preventing quota burn during
+  // LLM outages. null = never attempted.
+  lastClassifyAttemptAt DateTime?
   // --- Billing (per-conversation) -----------------------------------
   // Timestamp of the first successful Tier 3 analysis on this thread.
   // Used by the billing counter `markThreadAnalyzedIfFirst` to guarantee
@@ -185,6 +191,7 @@ model Thread {
   @@index([shop, provider, subjectKey])
   @@index([shop, analyzedAt])
   @@index([mailConnectionId])
+  @@index([supportNature, lastClassifyAttemptAt])
 }
 
 // Mapping from a provider-native threadId to the canonical Thread.id.
