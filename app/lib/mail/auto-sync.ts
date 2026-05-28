@@ -410,7 +410,26 @@ async function runJob(job: {
         const afterDateIso = String(job.params.afterDateIso ?? "");
         if (!afterDateIso) throw new Error("backfill job missing afterDateIso");
         if (!job.mailConnectionId) throw new Error("backfill job missing mailConnectionId");
-        const res = await runManualBackfill(job.shop, new Date(afterDateIso), job.mailConnectionId);
+        // Need a fresh admin client for Tier 2/3 analysis of backfilled threads.
+        // The entitlement try-block above scoped its `admin` locally, so we
+        // re-fetch here — mirrors the pattern used by analyze_thread.
+        let backfillAdmin: Awaited<ReturnType<typeof unauthenticated.admin>>["admin"] | undefined;
+        try {
+          ({ admin: backfillAdmin } = await withTimeout(
+            unauthenticated.admin(job.shop),
+            10_000,
+            `unauthenticated.admin(${job.shop})`,
+          ));
+        } catch (err) {
+          console.error(`[auto-sync] backfill: could not get admin for shop ${job.shop}, Tier 2/3 skipped:`, err);
+        }
+        const res = await runManualBackfill(
+          job.shop,
+          new Date(afterDateIso),
+          job.mailConnectionId,
+          2000,
+          backfillAdmin,
+        );
         console.log(
           `[auto-sync] shop=${job.shop} backfill: ingested=${res.ingested} skipped=${res.skipped}`,
         );
@@ -568,7 +587,9 @@ async function runSyncForShop(
   }
   if (opts.runOnboarding && opts.mailConnectionId) {
     try {
-      const res = await runOnboardingBackfill(shop, opts.onboardingDays, opts.mailConnectionId);
+      // Pass admin so Tier 2 + Tier 3 run on freshly-ingested threads
+      // (fix: onboarding backfill previously left tier2Result=null).
+      const res = await runOnboardingBackfill(shop, opts.onboardingDays, opts.mailConnectionId, admin);
       console.log(
         `[auto-sync] shop=${shop} onboarding backfill: ingested=${res.ingested} skipped=${res.skipped}`,
       );

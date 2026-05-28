@@ -1,39 +1,19 @@
 /**
  * refreshThreadAnalysis — selective thread analysis refresh helper.
  *
- * PATH CHOSEN: Path A (fine-grained orchestrator flags)
- *
- * Motivation: the background auto-sync calls reanalyzeEmail every hour for
- * every active "to handle" thread, which re-runs the LLM intent classifier
- * AND the Shopify order search even when those values are already stable.
- * Path A adds reuseIntents / reuseOrder flags to analyzeSupportEmail so that
- * those expensive steps are genuinely skipped — not just discarded after the
- * fact (Path B). The orchestrator changes are ~30 LOC and all existing callers
- * continue to work unchanged (the fields are optional).
- *
- * Tradeoff: orchestrator is slightly more complex. The risk is low because the
- * new branches are additive and gated by explicit opt-in fields.
+ * Thin shim over analyzeThread. Preserves the public signature for all
+ * existing callers (stale-refresh cron, handleEditThreadIdentifiers, etc.)
+ * while delegating all DB writes and pipeline logic to the single entry point.
  */
 
 import prisma from "../../db.server";
 import type { AdminGraphqlClient } from "./shopify/order-search";
 import type { SupportAnalysis } from "./types";
-import { analyzeSupportEmail } from "./orchestrator";
-import {
-  extractAndCache,
-  mergeThreadIdentifiers,
-  getThreadResolution,
-} from "./thread-identifiers";
-import type { MailClient } from "../mail/types";
-import { getMailClient } from "../mail/types";
-import {
-  buildThreadContext,
-} from "../gmail/pipeline";
 
 export interface RefreshThreadAnalysisOptions {
   /**
    * When false, keep the previous intent and intents values from the
-   * persisted analysis rather than re-running the LLM classifier.
+   * persisted analysis rather than re-running the LLM intent classifier.
    */
   reclassifyIntent: boolean;
   /**
@@ -54,8 +34,7 @@ export interface RefreshThreadAnalysisOptions {
  *
  * - reclassifyIntent: false → skip LLM classifier, reuse previous intent/intents/identifiers
  * - reSearchOrder: false    → skip Shopify search, reuse previous order/orderCandidates
- * - refreshTracking: true   → always refresh trackings (order value forwarded from previous
- *                             analysis when reSearchOrder is false)
+ * - refreshTracking: true   → always refresh trackings
  *
  * Persists the merged analysis back to prisma and returns it.
  */
@@ -65,137 +44,56 @@ export async function refreshThreadAnalysis(
   shop: string,
   options: RefreshThreadAnalysisOptions,
 ): Promise<SupportAnalysis> {
-  // Load the current persisted record
-  const record = await prisma.incomingEmail.findUnique({ where: { id: emailId } });
+  const record = await prisma.incomingEmail.findUnique({
+    where: { id: emailId },
+    select: { shop: true, canonicalThreadId: true },
+  });
   if (!record || record.shop !== shop) {
     throw new Error("Email not found");
   }
-
-  // Parse the previous analysis so we can reuse fields selectively
-  let previousAnalysis: SupportAnalysis | null = null;
-  if (record.analysisResult) {
-    try {
-      previousAnalysis = JSON.parse(record.analysisResult as string) as SupportAnalysis;
-    } catch {
-      // Treat as no previous analysis — run full pipeline
-    }
+  if (!record.canonicalThreadId) {
+    throw new Error(`Email ${emailId} has no canonicalThreadId`);
   }
 
-  // Use the email's mailConnectionId (set at ingest time) to resolve the
-  // correct connection. Fall back to any connection for the shop for legacy
-  // rows that predate the mailConnectionId column.
-  const conn = record.mailConnectionId
-    ? await prisma.mailConnection.findUnique({ where: { id: record.mailConnectionId } })
-    : await prisma.mailConnection.findFirst({ where: { shop } });
-
-  let client: MailClient | undefined;
-  try {
-    if (conn) {
-      client = await getMailClient(conn);
-    }
-  } catch (err) {
-    console.error("[refresh-thread-analysis] Could not create mail client:", err);
-  }
-
-  // Build thread context (full conversation body + messages array)
-  const threadContext = await buildThreadContext(
-    shop,
-    record.threadId,
+  const { analyzeThread } = await import("./analyze-thread");
+  const result = await analyzeThread(
     record.canonicalThreadId,
-    record.id,
-    conn?.email ?? "",
-    client,
+    { shop, admin },
+    {
+      // No Tier 2 — this is a lightweight data-refresh path, not a new
+      // message path. Tier 2 was already run when the message was synced.
+      runTier2: false,
+      runIntent: options.reclassifyIntent,
+      runShopify: options.reSearchOrder,
+      runTracking: options.refreshTracking,
+      runDraft: false,
+      // When the caller asked to skip intent/order re-run, forward
+      // the previous values (reuseIntents/reuseOrder in analyzeThread
+      // reads manualOverrides to decide whether to forward them).
+      reuseIntents: !options.reclassifyIntent,
+      reuseOrder: !options.reSearchOrder,
+      // enforceQuota: false — the stale-refresh cron only runs when the
+      // shop is active (suspended shops are skipped upstream). Rechecking
+      // here would slow every tick with a billing API call.
+      enforceQuota: false,
+      // skipBillingIncrement: true — light refreshes (stale-refresh cron,
+      // handleEditThreadIdentifiers) must never consume a billing unit.
+      // Only first-analysis paths (live sync, Generate Draft, reanalyzeEmail)
+      // should charge.
+      skipBillingIncrement: true,
+      // skipRecomputeState: true — preserve existing behaviour. The original
+      // refreshThreadAnalysis did not call recomputeThreadState; doing so would
+      // change the thread's operational state and could make it ineligible for
+      // future background refreshes (e.g. if the thread transitions to
+      // no_reply_needed because the seeded anchor has no tier1Result).
+      skipRecomputeState: true,
+    },
   );
 
-  // Refresh thread-level identifier consolidation
-  if (record.canonicalThreadId) {
-    try {
-      await extractAndCache(record.id, record.subject, record.bodyText);
-      await mergeThreadIdentifiers(record.canonicalThreadId, shop);
-    } catch (err) {
-      console.error("[refresh-thread-analysis] thread identifier merge failed:", err);
-    }
-  }
-  const threadResolution = record.canonicalThreadId
-    ? await getThreadResolution(record.canonicalThreadId, shop)
-    : null;
-
-  // Build reuseIntents / reuseOrder payloads from the previous analysis
-  // when the caller asked to skip those steps.
-  const reuseIntents =
-    !options.reclassifyIntent && previousAnalysis
-      ? {
-          intent: previousAnalysis.intent,
-          intents: previousAnalysis.intents ?? [previousAnalysis.intent],
-          identifiers: previousAnalysis.identifiers,
-        }
-      : undefined;
-
-  const reuseOrder =
-    !options.reSearchOrder && previousAnalysis
-      ? {
-          order: previousAnalysis.order,
-          orderCandidates: previousAnalysis.orderCandidates,
-        }
-      : undefined;
-
-  // Run the orchestrator with the selective flags.
-  // skipDraft: true — this helper is for data refresh, not draft generation.
-  // skipTracking: false — tracking is always refreshed.
-  const freshAnalysis = await analyzeSupportEmail({
-    subject: record.subject,
-    body: threadContext.body,
-    conversationMessages: threadContext.messages,
-    admin,
-    shop,
-    mailboxAddress: conn?.email,
-    trackedCallContext: {
-      shop,
-      emailId: record.id,
-      threadId: record.threadId,
-    },
-    threadResolution: threadResolution
-      ? {
-          identifiers: {
-            orderNumber: threadResolution.orderNumber,
-            trackingNumber: threadResolution.trackingNumber,
-            email: threadResolution.email,
-            customerName: threadResolution.customerName,
-          },
-          confidence: threadResolution.confidence,
-        }
-      : undefined,
-    skipDraft: true,
-    skipTracking: !options.refreshTracking,
-    reuseIntents,
-    reuseOrder,
-  });
-
-  // Always preserve manualOverrides from the previous analysis.
-  // The user's manual edits must never be lost across refreshes.
-  const merged: SupportAnalysis = {
-    ...freshAnalysis,
-    manualOverrides: previousAnalysis?.manualOverrides,
-  };
-
-  // Restore overrides snapshotted by handleResync, if any. No-op when the
-  // thread has no snapshot (the common case).
-  if (record.canonicalThreadId) {
-    const { applyPreservedOverridesIfAny } = await import("./preserved-overrides");
-    await applyPreservedOverridesIfAny(merged, record.canonicalThreadId, shop);
+  if (!result.ok) {
+    throw new Error(`refreshThreadAnalysis failed: skipped=${result.skipped}`);
   }
 
-  // Persist the merged analysis
-  await prisma.incomingEmail.update({
-    where: { id: emailId },
-    data: {
-      processingStatus: "analyzed",
-      analysisResult: JSON.stringify(merged),
-      detectedIntent: merged.intent,
-      analysisConfidence: merged.confidence,
-      lastAnalyzedAt: new Date(),
-    },
-  });
-
-  return merged;
+  // Return the analysis for callers that use the return value.
+  return result.analysis as SupportAnalysis;
 }
