@@ -7,14 +7,39 @@ import {
   createTestThread,
 } from "./helpers/db";
 
-// Stub Shopify / 17track so refreshThreadAnalysis runs end-to-end without
-// hitting external services. We only care that no billing increment fires.
-vi.mock("../../support/shopify/order-search", () => ({
-  searchOrders: async () => ({ candidates: [] }),
+// Stub the orchestrator and classifier so refreshThreadAnalysis runs end-to-end
+// without hitting external services. We only care that no billing increment fires.
+vi.mock("../../support/orchestrator", () => ({
+  analyzeSupportEmail: async () => ({
+    intent: "where_is_my_order",
+    intents: ["where_is_my_order"],
+    identifiers: {},
+    order: null,
+    orderCandidates: [],
+    trackings: [],
+    warnings: [],
+    confidence: "high",
+    conversation: { messageCount: 1, incomingCount: 1, outgoingCount: 0, lastMessageDirection: "incoming", noReplyNeeded: false },
+    crawledContexts: [],
+  }),
 }));
-vi.mock("../../support/tracking/tracking-service", () => ({
-  resolveTrackings: async () => [],
+vi.mock("../../gmail/classifier", () => ({
+  classifyEmail: async () => "support_client",
 }));
+// Stub thread-identifier helpers (no-op for these tests).
+vi.mock("../../support/thread-identifiers", () => ({
+  extractAndCache: async () => undefined,
+  mergeThreadIdentifiers: async () => undefined,
+  getThreadResolution: async () => null,
+}));
+// Stub buildThreadContext so we don't need a real mail provider.
+vi.mock("../../gmail/pipeline", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../gmail/pipeline")>();
+  return {
+    ...original,
+    buildThreadContext: async () => ({ body: "Hello", messages: [] }),
+  };
+});
 
 import { refreshThreadAnalysis } from "../../support/refresh-thread-analysis";
 import { getUsage } from "../../billing/usage";

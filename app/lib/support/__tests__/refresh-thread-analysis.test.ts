@@ -25,6 +25,9 @@ vi.mock("../../../db.server", () => ({
   default: {
     incomingEmail: {
       findUnique: vi.fn(),
+      // findFirst is used by analyzeThread (anchor resolution) — we wire it to
+      // the same underlying mock so test setup via findUnique propagates.
+      findFirst: vi.fn(),
       update: vi.fn(),
     },
     mailConnection: {
@@ -36,6 +39,40 @@ vi.mock("../../../db.server", () => ({
       update: vi.fn().mockResolvedValue({}),
     },
   },
+}));
+
+// analyzeThread imports classifyEmail and resolveEntitlements — stub them.
+// classifyEmail is not called when runTier2=false (which refreshThreadAnalysis uses).
+// resolveEntitlements is not called when enforceQuota=false (which refreshThreadAnalysis uses).
+vi.mock("../../gmail/classifier", () => ({
+  classifyEmail: vi.fn().mockResolvedValue("support_client"),
+}));
+vi.mock("../../billing/entitlements", () => ({
+  resolveEntitlements: vi.fn().mockResolvedValue({
+    isSyncSuspended: false,
+    canGenerateDraft: true,
+    quotaStatus: { used: 0, limit: 50 },
+    state: "paid_active",
+  }),
+  __resetCacheForTests: () => undefined,
+}));
+// analyzeThread imports preserved-overrides dynamically — stub it.
+vi.mock("../preserved-overrides", () => ({
+  applyPreservedOverridesIfAny: vi.fn().mockResolvedValue(undefined),
+}));
+// analyzeThread imports markThreadAnalyzedIfFirst dynamically — stub it.
+vi.mock("../../billing/usage", () => ({
+  markThreadAnalyzedIfFirst: vi.fn().mockResolvedValue(undefined),
+  getUsage: vi.fn().mockResolvedValue({ count: 0 }),
+}));
+// analyzeThread calls recomputeThreadState — stub it.
+vi.mock("../thread-state", () => ({
+  recomputeThreadState: vi.fn().mockResolvedValue(undefined),
+  readStructuredState: vi.fn().mockResolvedValue(null),
+}));
+// analyzeThread calls getTrueLatestMessage — stub it.
+vi.mock("../../mail/thread-resolver", () => ({
+  getTrueLatestMessage: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock("../orchestrator", () => ({
@@ -124,8 +161,10 @@ function makePrismaRecord(analysisResult: SupportAnalysis | null = null) {
 beforeEach(() => {
   vi.clearAllMocks();
 
-  // Default: no mail connection
-  (prisma.mailConnection.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+  // Default mail connection — analyzeThread requires a connection to proceed.
+  const defaultConn = { id: "conn-1", shop: SHOP, email: "shop@example.com", provider: "gmail" };
+  (prisma.mailConnection.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue(defaultConn);
+  (prisma.mailConnection.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(defaultConn);
 
   // Default: buildThreadContext returns minimal context
   (buildThreadContext as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -140,6 +179,33 @@ beforeEach(() => {
 
   // Default: prisma.update succeeds
   (prisma.incomingEmail.update as ReturnType<typeof vi.fn>).mockResolvedValue({});
+
+  // findFirst (used by analyzeThread anchor resolution) mirrors findUnique so
+  // that tests only need to set up the record once via findUnique.
+  // analyzeThread looks for the anchor by canonicalThreadId — the record from
+  // findUnique is the same email, just accessed differently.
+  (prisma.incomingEmail.findFirst as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+    // Return whatever findUnique is currently mocked to return, enriched with
+    // the fields analyzeThread expects on the anchor row.
+    const base = await (prisma.incomingEmail.findUnique as unknown as () => Promise<unknown>)();
+    if (!base) return null;
+    return {
+      mailConnectionId: null,
+      fromName: null,
+      fromAddress: "customer@example.com",
+      snippet: null,
+      receivedAt: new Date(),
+      externalMessageId: "ext-default",
+      processingStatus: "classified",
+      analysisConfidence: null,
+      detectedIntent: null,
+      lastAnalyzedAt: null,
+      tier2Result: null,
+      errorMessage: null,
+      tier1Result: "passed",
+      ...base,
+    };
+  });
 });
 
 // ---------------------------------------------------------------------------

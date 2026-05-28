@@ -993,285 +993,93 @@ export async function classifyAndDraft(
   report: ProcessingReport,
   options: { tier3Allowed?: boolean; bypassCatchupGate?: boolean } = {},
 ) {
+  // Thin shim: resolve the canonical thread and delegate to analyzeThread.
+  //
+  // Resolved threads skip tracking (no value once the conversation is closed).
+  // tier3Allowed=false means Tier 2 still runs (cheap classification to know
+  // it's support) but Tier 3 is skipped (billing-gated). The email surfaces
+  // in the inbox as "support, unanalyzed" until the merchant upgrades.
   const tier3Allowed = options.tier3Allowed ?? true;
   const bypassCatchupGate = options.bypassCatchupGate ?? false;
   const log = createLogger({ shop, mod: "gmail/pipeline:classifyAndDraft", recordId });
+
+  // Keep customerEmails referenced (future Tier 2 boosts).
+  void customerEmails;
+
   const record = await prisma.incomingEmail.findFirst({
     where: { id: recordId, shop },
+    select: { canonicalThreadId: true },
   });
   if (!record) throw new Error(`Email ${recordId} not found for shop ${shop}`);
+  if (!record.canonicalThreadId) {
+    log.warn({ recordId }, "no canonicalThreadId, cannot classifyAndDraft");
+    return;
+  }
 
-  // Resolved threads: restore intent badges without hitting Shopify/tracking.
-  const thread = record.canonicalThreadId
-    ? await prisma.thread.findUnique({
-        where: { id: record.canonicalThreadId },
-        select: { operationalState: true },
-      })
-    : null;
+  // Resolved threads: skip tracking (no value once the conversation is closed).
+  const thread = await prisma.thread.findUnique({
+    where: { id: record.canonicalThreadId },
+    select: { operationalState: true },
+  });
   const isResolved = thread?.operationalState === "resolved";
 
-  // Rebuild a MailMessage shape from the DB record for the classifier.
-  const msg: MailMessage = {
-    id: record.externalMessageId,
-    threadId: record.threadId,
-    from: record.fromAddress,
-    fromName: record.fromName,
-    subject: record.subject,
-    snippet: record.snippet,
-    bodyText: record.bodyText,
-    receivedAt: record.receivedAt,
-    labelIds: [],
-    headers: {},
-    attachments: [],
-  };
-
-  // --- Catch-up gate: skip Tier 2 + Tier 3 for emails outside the
-  // active zone (see ACTIVE_ZONE_HOURS in lib/billing/catchup.ts) ---
-  // When auto-sync resumes after a suspend, it pulls all messages since
-  // lastSyncAt. Older messages are marked "received" and surfaced in the
-  // inbox; the merchant triggers explicit analysis from the UI (1 quota unit).
-  //
-  // Bypassed for internal shops (no quota concerns) and for explicit
-  // resyncs (the user clicked "Re-synchroniser tout" expecting everything
-  // to be re-analyzed, not silently dropped on the floor).
-  const isFresh = isWithinActiveZone(record.receivedAt);
-  if (!isFresh && !bypassCatchupGate) {
-    console.log(`[pipeline] ${shop} email=${record.id} outside ${ACTIVE_ZONE_HOURS}h active zone, skipping Tier 2/3 (catch-up)`);
-    await prisma.incomingEmail.update({
-      where: { id: record.id },
-      data: { processingStatus: "ingested" },
-    });
-    return;
-  }
-
-  // --- Tier 2: LLM classification ---
-  // Spec §6, §8: inject the compact structured thread state + the true
-  // latest message so the classifier has useful context at low cost.
-  const threadStateForClassify = record.canonicalThreadId
-    ? await readStructuredState(record.canonicalThreadId)
-    : null;
-  let trueLatestBody: string | undefined;
-  let agentHasReplied = false;
-  if (record.canonicalThreadId) {
-    const trueLatest = await getTrueLatestMessage(record.canonicalThreadId, shop);
-    if (trueLatest && trueLatest.id !== record.id) {
-      trueLatestBody = trueLatest.bodyText;
-    }
-    // "Agent replied" must mean "replied AFTER this message". A stale
-    // outgoing message from earlier in the thread must not flip the flag.
-    const lastAgentIso = threadStateForClassify?.lastAgentMessageAt;
-    if (lastAgentIso) {
-      agentHasReplied = new Date(lastAgentIso).getTime() > record.receivedAt.getTime();
-    }
-  }
-
-  const classification = await classifyEmail(msg.subject, msg.bodyText, {
-    shop,
-    emailId: record.id,
-    threadId: record.threadId,
-    threadState: threadStateForClassify,
-    trueLatestBody,
-    agentHasReplied,
-  });
-  await prisma.incomingEmail.update({
-    where: { id: record.id },
-    data: { tier2Result: classification },
-  });
-
-  // Refresh thread state now that message-level classification changed.
-  if (record.canonicalThreadId) {
-    try {
-      await recomputeThreadState(record.canonicalThreadId, {
-        mailboxAddress,
-      });
-    } catch (err) {
-      log.error({ err }, "post-Tier2 state recompute failed");
-    }
-  }
-
-  if (classification === "probable_non_client") {
-    report.nonClient++;
-    await prisma.incomingEmail.update({
-      where: { id: record.id },
-      data: { processingStatus: "classified" },
-    });
-    return;
-  }
-
-  if (classification === "incertain") {
-    report.uncertain++;
-    await prisma.incomingEmail.update({
-      where: { id: record.id },
-      data: { processingStatus: "classified" },
-    });
-    return;
-  }
-
-  // --- Tier 3: Full support analysis ---
-  report.supportClient++;
-
-  // Per-conversation billing: when the shop is suspended (quota exceeded
-  // or trial expired) we still ingest + classify (free / cheap) but skip
-  // the expensive Tier 3 step (intent extraction + Shopify order search +
-  // tracking + draft). The mail surfaces in the inbox as "support, unanalyzed"
-  // until the merchant upgrades or the period rolls over.
-  if (!tier3Allowed) {
-    await prisma.incomingEmail.update({
-      where: { id: record.id },
-      data: { processingStatus: "classified" },
-    });
-    return;
-  }
+  const { analyzeThread } = await import("../support/analyze-thread");
 
   try {
-    const threadContext = await buildThreadContext(
-      shop,
-      msg.threadId,
+    const result = await analyzeThread(
       record.canonicalThreadId,
-      record.id,
-      mailboxAddress,
-      client,
+      { shop, admin, client, mailboxAddress, customerEmails },
+      {
+        runTier2: true,
+        // tier2Only: billing-suspended path — Tier 2 classifies, Tier 3 skipped.
+        // Preserves the original classifyAndDraft behaviour: support_client
+        // lands at "classified" when the shop is over quota.
+        tier2Only: !tier3Allowed,
+        runShopify: true,
+        runTracking: !isResolved,
+        // Draft is always skipped during auto-sync. The user must click
+        // "Generate draft" explicitly in the inbox.
+        runDraft: false,
+        reuseIntents: true,
+        reuseOrder: true,
+        bypassCatchupGate,
+        // enforceQuota: false — quota was already checked by the job runner
+        // (tier3Allowed reflects that check). We express it via tier2Only.
+        enforceQuota: false,
+      },
     );
 
-    // Thread-level resolved identifiers (cheap path, populated at
-    // ingestion). The orchestrator will prefer these over re-parsing.
-    const threadResolution = record.canonicalThreadId
-      ? await getThreadResolution(record.canonicalThreadId, shop)
-      : null;
-
-    // Respect any manual intent override set on the previous anchor.
-    // Aligns this path with reanalyzeEmail (which does the same at ~line 1301).
-    const prevAnchor = record.canonicalThreadId
-      ? await prisma.incomingEmail.findFirst({
-          where: {
-            canonicalThreadId: record.canonicalThreadId,
-            processingStatus: "analyzed",
-            analysisResult: { not: null },
-            id: { not: record.id },
-          },
-          orderBy: { receivedAt: "desc" },
-          select: { analysisResult: true },
-        })
-      : null;
-    let prevAnalysis: Awaited<ReturnType<typeof analyzeSupportEmail>> | null = null;
-    if (prevAnchor?.analysisResult) {
-      try {
-        prevAnalysis = JSON.parse(prevAnchor.analysisResult) as Awaited<ReturnType<typeof analyzeSupportEmail>>;
-      } catch (err) {
-        log.error({ err }, "failed to parse prevAnchor analysisResult");
+    if (!result.ok) {
+      if (result.skipped === "catchup_zone") {
+        // Normal for old emails during a catch-up pass — not an error.
+        return;
       }
-    }
-    const reuseIntents = prevAnalysis?.manualOverrides?.intents
-      ? {
-          intent: prevAnalysis.intent,
-          intents: prevAnalysis.intents ?? [prevAnalysis.intent],
-          identifiers: prevAnalysis.identifiers,
-        }
-      : undefined;
-    const reuseOrder = prevAnalysis?.manualOverrides?.order
-      ? {
-          order: prevAnalysis.order ?? null,
-          orderCandidates: prevAnalysis.orderCandidates ?? [],
-        }
-      : undefined;
-
-    const analysis = await analyzeSupportEmail({
-      subject: msg.subject,
-      body: threadContext.body,
-      conversationMessages: threadContext.messages,
-      admin,
-      shop,
-      mailboxAddress,
-      trackedCallContext: {
-        shop,
-        emailId: record.id,
-        threadId: record.threadId,
-      },
-      threadResolution: threadResolution
-        ? {
-            identifiers: {
-              orderNumber: threadResolution.orderNumber,
-              trackingNumber: threadResolution.trackingNumber,
-              email: threadResolution.email,
-              customerName: threadResolution.customerName,
-            },
-            confidence: threadResolution.confidence,
-          }
-        : undefined,
-      // Draft generation is intentionally skipped during auto-sync.
-      // The user must click "Generate draft" explicitly in the inbox.
-      skipDraft: true,
-      // Resolved threads: extract intent only, skip Shopify/tracking fetch.
-      skipTracking: isResolved,
-      reuseIntents,
-      reuseOrder,
-    });
-
-    // Carry forward manual override markers (same as reanalyzeEmail line ~1342).
-    if (prevAnalysis?.manualOverrides) {
-      analysis.manualOverrides = prevAnalysis.manualOverrides;
-    }
-
-    // Restore overrides snapshotted by handleResync, if any. No-op when
-    // there's no snapshot (regular sync path).
-    if (record.canonicalThreadId) {
-      const { applyPreservedOverridesIfAny } = await import("../support/preserved-overrides");
-      await applyPreservedOverridesIfAny(analysis, record.canonicalThreadId, shop);
-    }
-
-    if (record.canonicalThreadId && analysis.manualOverrides?.order) {
-      const finalOrderNumber = analysis.order?.name?.replace(/^#/, "") ?? null;
-      await prisma.thread.update({
-        where: { id: record.canonicalThreadId, shop },
-        data: { resolvedOrderNumber: finalOrderNumber },
-      }).catch((err) => {
-        log.error({ err }, "thread order sync failed");
-      });
-    }
-
-    await prisma.incomingEmail.update({
-      where: { id: record.id },
-      data: {
-        processingStatus: "analyzed",
-        analysisResult: JSON.stringify(analysis),
-        // Promoted columns — kept in sync with the JSON blob so SQL
-        // dashboards / rules don't have to parse JSON.
-        detectedIntent: analysis.intent,
-        analysisConfidence: analysis.confidence,
-        lastAnalyzedAt: new Date(),
-      },
-    });
-    if (record.canonicalThreadId) {
-      const { markThreadAnalyzedIfFirst } = await import("../billing/usage");
-      await markThreadAnalyzedIfFirst(record.canonicalThreadId, shop).catch((err) => {
-        // Don't fail the analysis if billing increment fails — the analysis
-        // is real and useful. The skipped metric will flag the discrepancy.
-        console.error(`[billing] markThreadAnalyzedIfFirst failed for thread=${record.canonicalThreadId}:`, err);
-      });
-    }
-    if (record.canonicalThreadId) {
-      try {
-        await recomputeThreadState(record.canonicalThreadId, {
-          mailboxAddress,
-        });
-      } catch (err) {
-        log.error({ err }, "post-Tier3 state recompute failed");
+      if (result.skipped === "no_anchor" || result.skipped === "no_connection") {
+        log.warn({ recordId, skipped: result.skipped }, "classifyAndDraft: skipped");
+        return;
       }
+      return;
+    }
+
+    // Update report counters based on the Tier 2 classification.
+    const cls = result.classification;
+    if (!cls || cls === "support_client") {
+      report.supportClient++;
+    } else if (cls === "probable_non_client") {
+      report.nonClient++;
+    } else if (cls === "incertain") {
+      report.uncertain++;
     }
   } catch (err) {
     report.errors++;
     await prisma.incomingEmail.update({
-      where: { id: record.id },
+      where: { id: recordId },
       data: {
         processingStatus: "error",
         errorMessage: err instanceof Error ? err.message : String(err),
       },
-    });
+    }).catch(() => { /* best-effort */ });
   }
-
-  // Ensure customerEmails is referenced (silence unused-var lint even though
-  // we keep the param for future Tier 2 boosts).
-  void customerEmails;
 }
 
 /**
@@ -1453,156 +1261,42 @@ export async function reanalyzeEmail(
   shop: string,
   options: { skipDraft?: boolean } = {},
 ) {
-  const log = createLogger({ shop, mod: "gmail/pipeline:reanalyzeEmail", emailId });
-  const record = await prisma.incomingEmail.findFirst({ where: { id: emailId, shop } });
-  if (!record) {
-    throw new Error("Email not found");
-  }
+  // Thin shim: resolve the canonical thread from the email, then delegate
+  // to analyzeThread which owns all DB writes and invariants.
+  const record = await prisma.incomingEmail.findFirst({
+    where: { id: emailId, shop },
+    select: { canonicalThreadId: true },
+  });
+  if (!record) throw new Error("Email not found");
+  if (!record.canonicalThreadId) throw new Error(`Email ${emailId} has no canonicalThreadId`);
 
-  // Use the email's mailConnectionId (set at ingest time) to resolve the
-  // correct connection. Fall back to any connection for the shop for legacy
-  // rows that predate the mailConnectionId column.
-  const conn = record.mailConnectionId
-    ? await prisma.mailConnection.findUnique({ where: { id: record.mailConnectionId } })
-    : await prisma.mailConnection.findFirst({ where: { shop } });
-
-  // Build a provider client so we can pull the FULL thread (inbox + sent)
-  let client: MailClient | undefined;
-  try {
-    if (conn) client = await getMailClient(conn);
-  } catch (err) {
-    log.error({ err }, "Could not create mail client for reanalyze");
-  }
-
-  // Build thread context
-  const threadContext = await buildThreadContext(
-    shop,
-    record.threadId,
+  const { analyzeThread } = await import("../support/analyze-thread");
+  const result = await analyzeThread(
     record.canonicalThreadId,
-    record.id,
-    conn?.email ?? "",
-    client,
+    { shop, admin },
+    {
+      // No Tier 2 — reanalyze is always a Tier 3 path (user-triggered or
+      // background analyze_thread job). Tier 2 was already run at sync time.
+      runTier2: false,
+      runShopify: true,
+      runTracking: true,
+      runDraft: !options.skipDraft,
+      // Reuse manual overrides if present (the hook is inside analyzeThread).
+      reuseIntents: true,
+      reuseOrder: true,
+      // enforceQuota is false: quota is already checked by the caller
+      // (inbox-actions) or we're in the analyze_thread job (which checked
+      // entitlements in the job runner before dispatching).
+      enforceQuota: false,
+    },
   );
 
-  // Re-run thread-level identifier consolidation before drafting —
-  // this message's extraction may have been stale.
-  if (record.canonicalThreadId) {
-    try {
-      await extractAndCache(record.id, record.subject, record.bodyText);
-      await mergeThreadIdentifiers(record.canonicalThreadId, shop);
-    } catch (err) {
-      log.error({ err }, "thread identifier merge failed");
-    }
-  }
-  const threadResolution = record.canonicalThreadId
-    ? await getThreadResolution(record.canonicalThreadId, shop)
-    : null;
-
-  // Honour any manual classification overrides set by the user in the
-  // editor: feed the orchestrator with reuseIntents/reuseOrder so the
-  // draft is written from the user's chosen classification, not from
-  // the LLM's autonomous re-classification.
-  const previous = record.analysisResult
-    ? (JSON.parse(record.analysisResult) as Awaited<ReturnType<typeof analyzeSupportEmail>>)
-    : null;
-  const reuseIntents = previous && previous.manualOverrides?.intents
-    ? {
-        intent: previous.intent,
-        intents: previous.intents ?? [previous.intent],
-        identifiers: previous.identifiers,
-      }
-    : undefined;
-  const reuseOrder = previous && previous.manualOverrides?.order
-    ? {
-        order: previous.order,
-        orderCandidates: previous.orderCandidates ?? [],
-      }
-    : undefined;
-
-  const analysis = await analyzeSupportEmail({
-    subject: record.subject,
-    body: threadContext.body,
-    conversationMessages: threadContext.messages,
-    admin,
-    shop,
-    mailboxAddress: conn?.email,
-    trackedCallContext: {
-      shop,
-      emailId: record.id,
-      threadId: record.threadId,
-    },
-    threadResolution: threadResolution
-      ? {
-          identifiers: {
-            orderNumber: threadResolution.orderNumber,
-            trackingNumber: threadResolution.trackingNumber,
-            email: threadResolution.email,
-            customerName: threadResolution.customerName,
-          },
-          confidence: threadResolution.confidence,
-        }
-      : undefined,
-    reuseIntents,
-    reuseOrder,
-  });
-
-  // Carry forward manual override markers so they survive the regen.
-  if (previous?.manualOverrides) {
-    analysis.manualOverrides = previous.manualOverrides;
+  if (!result.ok) {
+    throw new Error(`reanalyzeEmail failed: skipped=${result.skipped}`);
   }
 
-  // Restore overrides snapshotted by handleResync, if any.
-  if (record.canonicalThreadId) {
-    const { applyPreservedOverridesIfAny } = await import("../support/preserved-overrides");
-    await applyPreservedOverridesIfAny(analysis, record.canonicalThreadId, shop);
-  }
-
-  await prisma.incomingEmail.update({
-    where: { id: emailId },
-    data: {
-      processingStatus: "analyzed",
-      tier2Result: "support_client",
-      analysisResult: JSON.stringify(analysis),
-      detectedIntent: analysis.intent,
-      analysisConfidence: analysis.confidence,
-      lastAnalyzedAt: new Date(),
-    },
-  });
-
-  if (record.canonicalThreadId) {
-    const { markThreadAnalyzedIfFirst } = await import("../billing/usage");
-    await markThreadAnalyzedIfFirst(record.canonicalThreadId, shop).catch((err) => {
-      console.error(`[billing] markThreadAnalyzedIfFirst failed for thread=${record.canonicalThreadId}:`, err);
-    });
-  }
-
-  // If the user manually set the order, re-apply it on Thread now that
-  // mergeThreadIdentifiers may have pulled an old order number out of
-  // the email body again.
-  if (record.canonicalThreadId && analysis.manualOverrides?.order) {
-    const finalOrderNumber = analysis.order?.name?.replace(/^#/, "") ?? null;
-    await prisma.thread.update({
-      where: { id: record.canonicalThreadId },
-      data: { resolvedOrderNumber: finalOrderNumber },
-    }).catch((err) => {
-      log.error({ err }, "thread order sync failed");
-    });
-  }
-  if (analysis.draftReply && !options.skipDraft) {
-    await upsertReplyDraftBody(emailId, shop, analysis.draftReply);
-  }
-
-  if (record.canonicalThreadId) {
-    try {
-      await recomputeThreadState(record.canonicalThreadId, {
-        mailboxAddress: conn?.email ?? "",
-      });
-    } catch (err) {
-      log.error({ err }, "state recompute failed");
-    }
-  }
-
-  return analysis;
+  // Return the analysis so callers that use the return value still work.
+  return result.analysis;
 }
 
 /**

@@ -15,6 +15,7 @@
 import prisma from "../../db.server";
 import type { MailClient } from "./types";
 import { getMailClient } from "./types";
+import type { AdminGraphqlClient } from "../support/shopify/order-search";
 import {
   resolveCanonicalThread,
   refreshThreadStats,
@@ -53,11 +54,16 @@ async function runInBatches<T>(
  * sync so the first sync isn't unbounded.
  *
  * Fire-and-forget friendly — the caller should `.catch()` errors.
+ *
+ * When `admin` is provided, Tier 2 + Tier 3 are run on freshly-ingested
+ * threads so they get proper intent badges and supportNature immediately
+ * instead of sitting at tier2Result=null / supportNature=unknown forever.
  */
 export async function runOnboardingBackfill(
   shop: string,
   days: number,
   mailConnectionId: string,
+  admin?: AdminGraphqlClient,
 ): Promise<{ ingested: number; skipped: number }> {
   const conn = await prisma.mailConnection.findUnique({ where: { id: mailConnectionId } });
   if (!conn || conn.shop !== shop) throw new Error("No mail connection");
@@ -80,11 +86,14 @@ export async function runOnboardingBackfill(
   const fresh = messageIds.filter((id) => !existingSet.has(id));
 
   const outgoingCtx = await loadOutgoingContext(conn);
+  // Track which canonical threads received newly-ingested emails.
+  const ingestedThreadIds = new Set<string>();
   let ingested = 0;
   await runInBatches(fresh, 10, 50, async (msgId) => {
     try {
-      await ingestHistoricalMessage(shop, conn.provider, client, msgId, outgoingCtx, conn.id);
+      const threadId = await ingestHistoricalMessage(shop, conn.provider, client, msgId, outgoingCtx, conn.id);
       ingested++;
+      if (threadId) ingestedThreadIds.add(threadId);
     } catch (err) {
       console.error("[backfill/onboarding] failed for", msgId, err);
     }
@@ -95,18 +104,33 @@ export async function runOnboardingBackfill(
     data: { onboardingBackfillDoneAt: new Date(), onboardingBackfillDays: days },
   });
 
+  // Fix: run Tier 2 + Tier 3 on freshly-ingested threads so they get proper
+  // intent badges and supportNature instead of staying at
+  // tier2Result=null / supportNature=unknown indefinitely.
+  if (admin && ingestedThreadIds.size > 0) {
+    await runAnalysisOnBackfilledThreads(
+      [...ingestedThreadIds],
+      { shop, admin, client, mailboxAddress: conn.email },
+      "backfill/onboarding",
+    );
+  }
+
   return { ingested, skipped: existing.length };
 }
 
 /**
  * Manual backfill: re-fetch messages from a given `afterDate`. Unlike
  * the onboarding pass, this can be run multiple times.
+ *
+ * When `admin` is provided, Tier 2 + Tier 3 are run on freshly-ingested
+ * threads (same fix as onboarding backfill).
  */
 export async function runManualBackfill(
   shop: string,
   afterDate: Date,
   mailConnectionId: string,
   maxResults = 2000,
+  admin?: AdminGraphqlClient,
 ): Promise<{ ingested: number; skipped: number }> {
   const conn = await prisma.mailConnection.findUnique({ where: { id: mailConnectionId } });
   if (!conn || conn.shop !== shop) throw new Error("No mail connection");
@@ -121,16 +145,77 @@ export async function runManualBackfill(
   const fresh = messageIds.filter((id) => !existingSet.has(id));
 
   const outgoingCtx = await loadOutgoingContext(conn);
+  // Track which canonical threads received newly-ingested emails.
+  const ingestedThreadIds = new Set<string>();
   let ingested = 0;
   await runInBatches(fresh, 10, 50, async (msgId) => {
     try {
-      await ingestHistoricalMessage(shop, conn.provider, client, msgId, outgoingCtx, conn.id);
+      const threadId = await ingestHistoricalMessage(shop, conn.provider, client, msgId, outgoingCtx, conn.id);
       ingested++;
+      if (threadId) ingestedThreadIds.add(threadId);
     } catch (err) {
       console.error("[backfill/manual] failed for", msgId, err);
     }
   });
+
+  // Fix: run Tier 2 + Tier 3 on freshly-ingested threads.
+  if (admin && ingestedThreadIds.size > 0) {
+    await runAnalysisOnBackfilledThreads(
+      [...ingestedThreadIds],
+      { shop, admin, client, mailboxAddress: conn.email },
+      "backfill/manual",
+    );
+  }
+
   return { ingested, skipped: existing.length };
+}
+
+/**
+ * Run Tier 2 + Tier 3 analysis on a list of freshly-backfilled threads.
+ *
+ * Concurrency is deliberately low (3) to avoid hammering OpenAI right after
+ * a heavy ingest batch. Draft is always skipped — the user can click
+ * "Generate draft" when they open the thread.
+ */
+async function runAnalysisOnBackfilledThreads(
+  threadIds: string[],
+  ctx: { shop: string; admin: AdminGraphqlClient; client?: MailClient; mailboxAddress?: string },
+  tag: string,
+): Promise<void> {
+  const { analyzeThread } = await import("../support/analyze-thread");
+  const CONCURRENCY = 3;
+  let done = 0;
+  let failed = 0;
+  for (let i = 0; i < threadIds.length; i += CONCURRENCY) {
+    const chunk = threadIds.slice(i, i + CONCURRENCY);
+    await Promise.allSettled(
+      chunk.map(async (threadId) => {
+        try {
+          await analyzeThread(threadId, ctx, {
+            runTier2: true,
+            runShopify: true,
+            runTracking: true,
+            runDraft: false,
+            reuseIntents: true,
+            reuseOrder: true,
+            // bypassCatchupGate: true — backfill is historical and is never
+            // "fresh" in the 72-h window sense. We explicitly want to classify
+            // these threads regardless of age.
+            bypassCatchupGate: true,
+            enforceQuota: false,
+          });
+          done++;
+        } catch (err) {
+          failed++;
+          console.error(`[${tag}] analyzeThread failed for thread=${threadId}:`, err);
+        }
+      }),
+    );
+    if (i + CONCURRENCY < threadIds.length) {
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  }
+  console.log(`[${tag}] analysis: done=${done} failed=${failed} total=${threadIds.length}`);
 }
 
 /**
@@ -246,6 +331,9 @@ export async function runOpportunisticThreadBackfill(
  * Ingest a historical message — same shape as pipeline.ingestAndPrefilter
  * but without Tier 1/2 side-effects (history messages should not trigger
  * draft generation just because they were backfilled).
+ *
+ * Returns the canonicalThreadId of the ingested email, or null when the
+ * message already existed (skipped).
  */
 async function ingestHistoricalMessage(
   shop: string,
@@ -254,11 +342,11 @@ async function ingestHistoricalMessage(
   msgId: string,
   outgoingCtx: OutgoingContext,
   mailConnectionId: string,
-): Promise<void> {
+): Promise<string | null> {
   const existing = await prisma.incomingEmail.findUnique({
     where: { shop_externalMessageId: { shop, externalMessageId: msgId } },
   });
-  if (existing) return;
+  if (existing) return null;
 
   const msg = await client.getMessage(msgId);
   const isOutgoing = isOutgoingMessage(msg, outgoingCtx);
@@ -285,15 +373,16 @@ async function ingestHistoricalMessage(
   } catch (err) {
     if (err instanceof MailboxGoneError) {
       console.warn(`[backfill] skipping message — mailbox gone: ${err.mailConnectionId}`);
-      return;
+      return null;
     }
     throw err;
   }
 
   // Run the free regex prefilter on historical messages so they get proper
-  // tier1Result and classification badges in the UI. We never run tier 2 on
-  // backfilled emails (too expensive, and historical context is stale), but
-  // tier 1 is free and gives the Thread a meaningful supportNature.
+  // tier1Result and classification badges in the UI. Tier 1 is free and gives
+  // the Thread a meaningful supportNature for non-support filtering.
+  // Tier 2 is deferred: the caller (runOnboardingBackfill / runManualBackfill)
+  // runs analyzeThread on fresh threads after the full ingest batch completes.
   let tier1Result: string | null = null;
   if (!isOutgoing) {
     const pf = prefilterEmail(msg);
@@ -316,8 +405,9 @@ async function ingestHistoricalMessage(
       snippet: msg.snippet,
       bodyText: msg.bodyText,
       receivedAt: msg.receivedAt,
-      // Historical messages are marked as "classified" directly so Pass 2
-      // (LLM tier 2) never reprocesses them. Outgoing stays "outgoing".
+      // Historical messages start as "classified" so Pass 2 auto-sync
+      // doesn't reprocess them. analyzeThread (called by the backfill
+      // caller) will promote tier1-passed emails to "analyzed" after ingest.
       processingStatus: isOutgoing ? "outgoing" : "classified",
       tier1Result,
     },
@@ -340,6 +430,8 @@ async function ingestHistoricalMessage(
       console.error("[backfill] recomputeThreadState failed:", err);
     }
   }
+
+  return canonicalThreadId;
 }
 
 /**
