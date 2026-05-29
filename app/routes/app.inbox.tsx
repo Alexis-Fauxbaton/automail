@@ -102,6 +102,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   const onboardingFlag = await getShopFlag(shop);
+  const shopFlagRaw = process.env.SEND_DISABLED_FOR_INTERNAL === "true"
+    ? await prisma.shopFlag.findUnique({ where: { shop }, select: { isInternal: true } })
+    : null;
+  const sendDisabled = process.env.SEND_DISABLED_FOR_INTERNAL === "true" && shopFlagRaw?.isInternal === true;
   const checklistState = deriveChecklistState({
     hasDraft: await hasGeneratedAnyDraft(shop),
     hasCustomizedSettings: await hasCustomizedSupportSettings(shop),
@@ -357,6 +361,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     })),
     threadCountsByMailbox,
     mailConnectionId: mailConnectionId ?? null,
+    sendDisabled,
   };
 };
 
@@ -3443,6 +3448,16 @@ export default function InboxPage() {
         <h1 style={{ margin: 0 }}>{t("nav.emailInbox")}</h1>
         <MailboxIndicator connections={loaderData.connections} />
       </div>
+
+      {/* Safety bypass banner: shown when SEND_DISABLED_FOR_INTERNAL=true on an internal shop */}
+      {loaderData.sendDisabled && (
+        <div style={{
+          padding: "10px 16px", background: "#fff3cd", border: "1px solid #ffeeba",
+          borderRadius: 6, marginBottom: 16, color: "#856404", fontFamily: "system-ui",
+        }}>
+          🧪 {t("inbox.send.internal_banner")}
+        </div>
+      )}
 
       {/* Onboarding checklist (auto-hides when dismissed or complete) */}
       <div className="ui-inbox-section">

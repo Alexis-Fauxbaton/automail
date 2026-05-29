@@ -403,7 +403,8 @@
       "pending": "Sending to {{customer}} in {{seconds}}s",
       "cancel": "Cancel",
       "sent": "Sent",
-      "retry": "Retry"
+      "retry": "Retry",
+      "internal_banner": "Sends disabled (internal store) — click anyway to test the flow"
     }
   },
   "login": {

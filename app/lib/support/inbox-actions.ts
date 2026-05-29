@@ -964,6 +964,17 @@ export async function handleSendDraft(params: {
     where: { id: mailConnectionId, shop },
   });
   if (!conn) return { error: "connection_not_found" };
+
+  // Safety bypass: SEND_DISABLED_FOR_INTERNAL + isInternal short-circuits the
+  // actual provider API call but runs the entire DB flow with a fake SendResult.
+  // Lets internal shops test the UX/flow without real emails leaving.
+  if (process.env.SEND_DISABLED_FOR_INTERNAL === "true") {
+    const flag = await prisma.shopFlag.findUnique({ where: { shop } });
+    if (flag?.isInternal) {
+      return runFakeSendForInternalShop({ shop, conn, draftId });
+    }
+  }
+
   if (!canSend(conn)) {
     return {
       needsReauth: true,
@@ -1110,4 +1121,110 @@ function buildReferencesChain(existingRefs: string, latestRfcId: string): string
   if (!refs) return latestRfcId;
   if (refs.includes(latestRfcId)) return refs;
   return `${refs} ${latestRfcId}`;
+}
+
+/**
+ * Fake-send path for internal shops when SEND_DISABLED_FOR_INTERNAL=true.
+ * Mirrors the success path of handleSendDraft (CAS, pre-emptive insert,
+ * state transitions) but skips the actual provider API call entirely.
+ * Allows internal testers to validate the UX/flow in prod-pointing dev
+ * without real emails leaving the mailbox.
+ */
+async function runFakeSendForInternalShop(params: {
+  shop: string;
+  conn: Awaited<ReturnType<typeof prisma.mailConnection.findUnique>> & {};
+  draftId: string;
+}): Promise<SendDraftResult> {
+  const { shop, conn, draftId } = params;
+
+  // CAS reserve
+  const reserved = await prisma.replyDraft.updateMany({
+    where: { id: draftId, sentAt: null, sendingStartedAt: null },
+    data: { sendingStartedAt: new Date(), sendError: null },
+  });
+  if (reserved.count === 0) return { error: "already_sent_or_sending" };
+
+  // Load draft + thread + incoming
+  const draft = await prisma.replyDraft.findUnique({
+    where: { id: draftId },
+    include: { email: { include: { thread: true } } },
+  });
+  if (!draft || !draft.email.canonicalThreadId) {
+    await prisma.replyDraft.update({
+      where: { id: draftId },
+      data: { sendingStartedAt: null, sendError: "fake_send_missing_thread" },
+    });
+    return { error: "draft_not_found_or_thread_unresolved" };
+  }
+  const thread = draft.email.thread!;
+
+  // Assemble payload — same as real path
+  const payload = assembleRfc822({
+    shop,
+    mailbox: { email: conn.email, fromName: "" },
+    customer: { email: draft.email.fromAddress, name: draft.email.fromName ?? "" },
+    originalIncoming: {
+      rfcMessageId: draft.email.rfcMessageId,
+      receivedAt: draft.email.receivedAt,
+      subject: draft.email.subject,
+      bodyText: draft.email.bodyText,
+    },
+    thread: { references: buildReferencesChain(draft.email.rfcReferences, draft.email.rfcMessageId) },
+    draftBody: draft.body ?? "",
+  });
+
+  // Fake the provider response — no API call
+  const fakeResult = {
+    externalMessageId: `fake-internal-${Date.now()}`,
+    rfcMessageId: payload.rfcMessageId,
+  };
+
+  const now = new Date();
+  const result = await prisma.$transaction(async (tx) => {
+    const outgoing = await tx.incomingEmail.create({
+      data: {
+        shop,
+        mailConnectionId: conn.id,
+        externalMessageId: fakeResult.externalMessageId,
+        rfcMessageId: fakeResult.rfcMessageId,
+        inReplyTo: draft.email.rfcMessageId,
+        rfcReferences: payload.references,
+        fromAddress: conn.email,
+        subject: payload.subject,
+        bodyText: payload.bodyText,
+        receivedAt: now,
+        canonicalThreadId: draft.email.canonicalThreadId!,
+        processingStatus: "outgoing",
+        tier1Result: "outgoing",
+        sourceMarker: "sent_from_app",
+      },
+    });
+    const updatedDraft = await tx.replyDraft.update({
+      where: { id: draftId },
+      data: {
+        sentAt: now,
+        sentRfcMessageId: fakeResult.rfcMessageId,
+        sendingStartedAt: null,
+        sendError: null,
+        linkedOutgoingEmailId: outgoing.id,
+      },
+    });
+    await tx.thread.update({
+      where: { id: draft.email.canonicalThreadId! },
+      data: { operationalState: "waiting_customer", operationalStateUpdatedAt: now },
+    });
+    await tx.threadStateHistory.create({
+      data: {
+        shop,
+        threadId: draft.email.canonicalThreadId!,
+        fromState: thread.operationalState,
+        toState: "waiting_customer",
+        reason: "draft_sent_fake_internal",
+      },
+    });
+    return updatedDraft;
+  });
+
+  console.log(`[send] FAKE SEND for internal shop ${shop} draftId=${draftId} (SEND_DISABLED_FOR_INTERNAL=true)`);
+  return { sent: true, sentAt: result.sentAt!, rfcMessageId: result.sentRfcMessageId! };
 }

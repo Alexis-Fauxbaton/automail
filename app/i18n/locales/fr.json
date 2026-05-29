@@ -403,7 +403,8 @@
       "pending": "Envoi à {{customer}} dans {{seconds}}s",
       "cancel": "Annuler",
       "sent": "Envoyé",
-      "retry": "Réessayer"
+      "retry": "Réessayer",
+      "internal_banner": "Envois désactivés (boutique interne) — cliquez quand même pour tester le flow"
     }
   },
   "login": {

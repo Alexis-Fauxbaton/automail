@@ -159,6 +159,42 @@ describe("handleSendDraft — integration", () => {
     expect(outgoingCount).toBe(0);
   });
 
+  it("SEND_DISABLED_FOR_INTERNAL=true + isInternal shop: fake send runs without provider call", async () => {
+    process.env.SEND_DISABLED_FOR_INTERNAL = "true";
+    try {
+      await prisma.shopFlag.upsert({
+        where: { shop: TEST_SHOP },
+        create: { shop: TEST_SHOP, isInternal: true, firstInstallDate: new Date(), onboardingCompletedAt: new Date() },
+        update: { isInternal: true },
+      });
+      // grant ONLY read scope — bypass should ignore canSend
+      const conn = await seedMailConnection({
+        shop: TEST_SHOP,
+        provider: "gmail",
+        email: "s@b.com",
+        grantedScopes: "https://www.googleapis.com/auth/gmail.readonly",
+      });
+      const thread = await seedThread({ shop: TEST_SHOP, mailConnectionId: conn.id });
+      const incoming = await seedIncomingEmail({ shop: TEST_SHOP, mailConnectionId: conn.id, canonicalThreadId: thread.id });
+      const draft = await prisma.replyDraft.create({ data: { shop: TEST_SHOP, emailId: incoming.id, body: "hi" } });
+
+      const sendSpy = vi.fn();
+      (createMailClient as any).mockResolvedValue({ send: sendSpy, findSentByRfcMessageId: vi.fn() });
+
+      const result = await handleSendDraft({ shop: TEST_SHOP, mailConnectionId: conn.id, draftId: draft.id });
+      expect(result).toMatchObject({ sent: true });
+      expect(sendSpy).not.toHaveBeenCalled(); // bypass: no provider call
+
+      const refreshed = await prisma.replyDraft.findUnique({ where: { id: draft.id } });
+      expect(refreshed?.sentRfcMessageId).toMatch(/@/);
+
+      const outgoing = await prisma.incomingEmail.findFirst({ where: { sourceMarker: "sent_from_app", shop: TEST_SHOP } });
+      expect(outgoing?.externalMessageId).toContain("fake-internal-");
+    } finally {
+      delete process.env.SEND_DISABLED_FOR_INTERNAL;
+    }
+  });
+
   it("retry after timeout: findSentByRfcMessageId hit, marks sent without double-send", async () => {
     const conn = await seedMailConnection({
       shop: TEST_SHOP,
