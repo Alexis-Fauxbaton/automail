@@ -115,9 +115,15 @@ export async function resolveCanonicalThread(
   ].filter((id) => id.length > 0);
 
   if (parentIds.length > 0) {
+    // Filter by mailConnectionId so two different mailboxes within the SAME
+    // shop that happen to receive a forwarded email sharing the same RFC
+    // Message-ID cannot merge into one thread across mailboxes. Without
+    // this filter, mailbox A's conversation would appear in mailbox B's
+    // inbox under a shared canonical thread.
     const parent = await db.incomingEmail.findFirst({
       where: {
         shop,
+        mailConnectionId: input.mailConnectionId,
         rfcMessageId: { in: parentIds },
         canonicalThreadId: { not: null },
       },

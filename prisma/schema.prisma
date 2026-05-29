@@ -432,6 +432,11 @@ model SyncJob {
   @@index([shop, status])
   @@index([status, nextRetryAt])
   @@index([mailConnectionId])
+  // Covering index for the enqueueJob de-dup query — without it the
+  // dedup findFirst falls back to scanning the (shop, status) index and
+  // filtering by mailConnectionId+kind in heap, which is slow on shops
+  // with hundreds of pending jobs.
+  @@index([shop, mailConnectionId, kind, status])
 }
 
 // Sliding-window rate-limit counters. One row per (key, kind) — the

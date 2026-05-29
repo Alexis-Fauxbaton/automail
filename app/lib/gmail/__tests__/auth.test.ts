@@ -43,7 +43,7 @@ vi.mock("../../../db.server", () => ({
 }));
 
 // Imports come AFTER vi.mock declarations (automatically hoisted by Vitest).
-import { getAuthUrl, exchangeCodeForTokens, deleteConnection } from "../auth";
+import { getAuthUrl, exchangeCodeForTokens, deleteConnection, MailboxRevokedError } from "../auth";
 import { google } from "googleapis";
 import prisma from "../../../db.server";
 
@@ -141,6 +141,28 @@ describe("gmail/auth", () => {
       await deleteConnection({ shop, mailConnectionId });
 
       expect(mockDelete).toHaveBeenCalledWith({ where: { id: mailConnectionId, shop } });
+    });
+  });
+
+  describe("MailboxRevokedError", () => {
+    it("carries provider and shop fields for caller dispatch", () => {
+      const err = new MailboxRevokedError("gmail", "demo.myshopify.com");
+      expect(err).toBeInstanceOf(Error);
+      expect(err).toBeInstanceOf(MailboxRevokedError);
+      expect(err.provider).toBe("gmail");
+      expect(err.shop).toBe("demo.myshopify.com");
+      // The message must mention the provider so log lines remain useful.
+      expect(err.message).toContain("gmail");
+    });
+
+    it("is catchable as MailboxRevokedError via instanceof", () => {
+      // Regression guard against a future refactor that accidentally
+      // converts the class into a plain Error (e.g., by dropping `extends Error`).
+      try {
+        throw new MailboxRevokedError("outlook", "demo.myshopify.com");
+      } catch (e) {
+        expect(e instanceof MailboxRevokedError).toBe(true);
+      }
     });
   });
 });

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("../../../db.server", () => ({
   default: {
@@ -30,10 +30,18 @@ import prisma from "../../../db.server";
 describe("outlook/auth", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Pin the clock so token-expiry math is deterministic (tests like
+    // "returns tokens directly when not expired" depend on Date.now()
+    // staying stable across the test body).
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-29T12:00:00Z"));
     process.env.MICROSOFT_CLIENT_ID = "test-client-id";
     process.env.MICROSOFT_CLIENT_SECRET = "test-client-secret";
     process.env.SHOPIFY_APP_URL = "https://example.com";
     process.env.SHOPIFY_API_SECRET = "test-secret-32-chars-padded-here";
+  });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe("getAuthUrl", () => {

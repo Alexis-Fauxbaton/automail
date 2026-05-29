@@ -35,6 +35,13 @@ if (process.env.NODE_ENV === "production") {
     warnings.push("METRICS_TOKEN should be at least 32 chars long.");
   }
   for (const w of warnings) console.error(`[BOOT_DEGRADED] ${w}`);
+  // Surface the degraded state as a gauge so dashboards/alerts can pick it
+  // up — an operator who misses the log lines now has a metric signal.
+  if (warnings.length > 0) {
+    import("./lib/metrics/definitions")
+      .then(({ bootDegraded }) => bootDegraded.set({}, 1))
+      .catch(() => undefined);
+  }
 }
 
 // Fire up the backend auto-sync loop exactly once at server boot
@@ -71,6 +78,15 @@ async function handleShutdown(signal: string) {
     await stopAutoSyncLoop(20_000);
   } catch (err) {
     console.error("[shutdown] drain error:", err);
+  }
+  // Close the Prisma pool AFTER drain completes — db.server.ts intentionally
+  // does NOT listen on SIGTERM/SIGINT precisely so we can control the order
+  // here. If we disconnect before drain, the drain queries hit a closed pool.
+  try {
+    const { default: prisma } = await import("./db.server");
+    await prisma.$disconnect();
+  } catch (err) {
+    console.error("[shutdown] prisma disconnect error:", err);
   }
   process.exit(0);
 }
