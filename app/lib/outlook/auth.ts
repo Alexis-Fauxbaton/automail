@@ -12,7 +12,11 @@ const GRAPH_ME_PROXY = "https://graph.microsoft.com/v1.0/me?$select=mail,proxyAd
 // from the $select response. Existing merchants who connected before this
 // scope was added won't have it — their alias backfill will fail
 // gracefully (out = [primary] only) until they re-consent at next reauth.
-const SCOPES = "Mail.Read Mail.Send User.Read offline_access";
+// Mail.ReadWrite is required to create draft messages via POST /me/messages
+// (used by the create-draft + send pattern in mail-client.ts to capture the
+// message id for the pre-emptive outgoing insert). Mail.Send alone only
+// allows POST /me/sendMail which returns 202 no body, breaking that flow.
+const SCOPES = "Mail.ReadWrite Mail.Send User.Read offline_access";
 
 function getClientConfig() {
   const clientId = process.env.MICROSOFT_CLIENT_ID;

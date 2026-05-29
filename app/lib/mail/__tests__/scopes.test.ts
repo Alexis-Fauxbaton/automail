@@ -8,10 +8,16 @@ describe("canSend", () => {
   it("Gmail without gmail.send cannot send", () => {
     expect(canSend({ provider: "gmail", grantedScopes: "https://www.googleapis.com/auth/gmail.readonly" })).toBe(false);
   });
-  it("Outlook with Mail.Send can send (case-insensitive)", () => {
-    expect(canSend({ provider: "outlook", grantedScopes: "mail.send,mail.read,user.read,offline_access" })).toBe(true);
+  it("Outlook with both Mail.ReadWrite + Mail.Send can send (case-insensitive)", () => {
+    expect(canSend({ provider: "outlook", grantedScopes: "mail.readwrite,mail.send,user.read,offline_access" })).toBe(true);
   });
-  it("Outlook without Mail.Send cannot send", () => {
+  it("Outlook with only Mail.Send (no Mail.ReadWrite) cannot send — create-draft step needs ReadWrite", () => {
+    expect(canSend({ provider: "outlook", grantedScopes: "mail.send,mail.read,user.read,offline_access" })).toBe(false);
+  });
+  it("Outlook with only Mail.ReadWrite (no Mail.Send) cannot send — send step needs Mail.Send", () => {
+    expect(canSend({ provider: "outlook", grantedScopes: "mail.readwrite,user.read,offline_access" })).toBe(false);
+  });
+  it("Outlook with neither cannot send", () => {
     expect(canSend({ provider: "outlook", grantedScopes: "mail.read,user.read,offline_access" })).toBe(false);
   });
   it("Zoho with messages.all can send", () => {
