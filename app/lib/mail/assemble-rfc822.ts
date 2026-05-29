@@ -5,13 +5,25 @@ export function buildSubjectWithRePrefix(subject: string): string {
   return `Re: ${subject}`;
 }
 
-export function quoteOriginal(body: string): string {
+/** HTML-escape user-supplied content before embedding it inside our HTML body. */
+export function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
+ * Render the original customer message as an HTML <blockquote>. Normalizes
+ * CRLF to LF, HTML-escapes the content (defends against the original mail
+ * containing literal `<script>` etc.), then converts newlines to <br>.
+ */
+export function quoteOriginalHtml(body: string): string {
   if (!body) return "";
-  return body
-    .replace(/\r\n/g, "\n")
-    .split("\n")
-    .map((line) => `> ${line}`)
-    .join("\n");
+  const escaped = escapeHtml(body.replace(/\r\n/g, "\n"));
+  return `<blockquote style="margin:0 0 0 8px;border-left:2px solid #ccc;padding-left:8px;">${escaped.replace(/\n/g, "<br>")}</blockquote>`;
 }
 
 export function generateMessageId(shop: string): string {
@@ -36,6 +48,12 @@ export interface AssembleInput {
     bodyText: string;
   };
   thread: { references: string };
+  /**
+   * Draft body as authored. The LLM generates HTML (e.g. `<p>...</p>`), and
+   * the inbox preview renders it as HTML — we pass it through unchanged.
+   * If a future caller wants to send a plain-text-only draft, escape it
+   * upstream before calling assembleRfc822.
+   */
   draftBody: string;
 }
 
@@ -50,9 +68,11 @@ export function assembleRfc822(input: AssembleInput): SendPayload {
   const customerLabel = customer.name
     ? `${customer.name} <${customer.email}>`
     : customer.email;
-  const quoteHeader = `Le ${dateStr}, ${customerLabel} a écrit :`;
-  const quoted = quoteOriginal(originalIncoming.bodyText);
-  const bodyText = `${draftBody}\n\n${quoteHeader}\n${quoted}`;
+  // Build an HTML body: draft (already HTML) + spacer + quote header + blockquote.
+  // The quote header is HTML-escaped because customerLabel can contain `<email>`.
+  const quoteHeader = `Le ${dateStr}, ${escapeHtml(customerLabel)} a écrit :`;
+  const quoted = quoteOriginalHtml(originalIncoming.bodyText);
+  const bodyHtml = `${draftBody}<br><br><p>${quoteHeader}</p>${quoted}`;
   return {
     rfcMessageId: generateMessageId(shop),
     inReplyToRfcId: originalIncoming.rfcMessageId,
@@ -62,7 +82,7 @@ export function assembleRfc822(input: AssembleInput): SendPayload {
     fromName: mailbox.fromName,
     toEmails: [customer.email],
     subject: buildSubjectWithRePrefix(originalIncoming.subject),
-    bodyText,
+    bodyText: bodyHtml,
   };
 }
 
@@ -70,6 +90,8 @@ export function assembleRfc822(input: AssembleInput): SendPayload {
  * Render a SendPayload to a full RFC822 string suitable for raw transport
  * (Gmail's gmail.users.messages.send takes base64url(RFC822)). Outlook and
  * Zoho use structured JSON and don't need this.
+ *
+ * Body is always HTML — see assembleRfc822 for the composition.
  */
 export function renderRfc822(payload: SendPayload): string {
   const lines: string[] = [];
@@ -85,7 +107,7 @@ export function renderRfc822(payload: SendPayload): string {
   if (payload.inReplyToRfcId) lines.push(`In-Reply-To: <${payload.inReplyToRfcId}>`);
   if (payload.references) lines.push(`References: ${payload.references}`);
   lines.push(`Date: ${new Date().toUTCString()}`);
-  lines.push(`Content-Type: text/plain; charset=utf-8`);
+  lines.push(`Content-Type: text/html; charset=utf-8`);
   lines.push(`Content-Transfer-Encoding: 8bit`);
   lines.push("");
   lines.push(payload.bodyText);

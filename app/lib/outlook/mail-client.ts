@@ -91,7 +91,7 @@ export async function createOutlookClient(connection: MailConnection): Promise<M
             // it inherits the canonical sender from the original message.
             body: JSON.stringify({
               message: {
-                body: { contentType: "text", content: payload.bodyText },
+                body: { contentType: "html", content: payload.bodyText },
               },
             }),
           },
@@ -179,7 +179,7 @@ async function createStandaloneDraft(
 ): Promise<string> {
   const draftBody = {
     subject: payload.subject,
-    body: { contentType: "text", content: payload.bodyText },
+    body: { contentType: "html", content: payload.bodyText },
     toRecipients: payload.toEmails.map((e) => ({ emailAddress: { address: e } })),
     ccRecipients: (payload.ccEmails ?? []).map((e) => ({ emailAddress: { address: e } })),
     from: { emailAddress: { address: payload.fromEmail, name: payload.fromName } },

@@ -403,7 +403,7 @@ export async function createZohoClient(connection: MailConnection): Promise<Mail
         toAddress: payload.toEmails.join(","),
         subject: payload.subject,
         content: payload.bodyText,
-        mailFormat: "plaintext",
+        mailFormat: "html",
       };
       if (payload.ccEmails?.length) body.ccAddress = payload.ccEmails.join(",");
       if (payload.inReplyToRfcId) body.inReplyTo = `<${payload.inReplyToRfcId}>`;

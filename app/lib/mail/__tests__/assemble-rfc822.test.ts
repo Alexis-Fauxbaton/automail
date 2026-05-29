@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { assembleRfc822, buildSubjectWithRePrefix, quoteOriginal, generateMessageId, renderRfc822 } from "../assemble-rfc822";
+import {
+  assembleRfc822,
+  buildSubjectWithRePrefix,
+  quoteOriginalHtml,
+  generateMessageId,
+  renderRfc822,
+  escapeHtml,
+} from "../assemble-rfc822";
 
 describe("buildSubjectWithRePrefix", () => {
   it("adds Re: prefix if missing", () => {
@@ -13,15 +20,34 @@ describe("buildSubjectWithRePrefix", () => {
   });
 });
 
-describe("quoteOriginal", () => {
-  it("prefixes each line with '> '", () => {
-    expect(quoteOriginal("ligne 1\nligne 2")).toBe("> ligne 1\n> ligne 2");
+describe("escapeHtml", () => {
+  it("escapes <, >, &, \", '", () => {
+    expect(escapeHtml(`<script>alert("xss")</script>`)).toBe(
+      "&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;"
+    );
   });
-  it("handles empty body", () => {
-    expect(quoteOriginal("")).toBe("");
+  it("escapes lone ampersand", () => {
+    expect(escapeHtml("a & b")).toBe("a &amp; b");
+  });
+});
+
+describe("quoteOriginalHtml", () => {
+  it("wraps the body in a styled blockquote with <br> for newlines", () => {
+    const out = quoteOriginalHtml("ligne 1\nligne 2");
+    expect(out).toContain("<blockquote");
+    expect(out).toContain("ligne 1<br>ligne 2");
+  });
+  it("returns empty string for empty body", () => {
+    expect(quoteOriginalHtml("")).toBe("");
   });
   it("normalizes CRLF to LF", () => {
-    expect(quoteOriginal("a\r\nb")).toBe("> a\n> b");
+    const out = quoteOriginalHtml("a\r\nb");
+    expect(out).toContain("a<br>b");
+  });
+  it("HTML-escapes the quoted content", () => {
+    const out = quoteOriginalHtml(`<script>alert("xss")</script>`);
+    expect(out).toContain("&lt;script&gt;");
+    expect(out).not.toContain("<script>");
   });
 });
 
@@ -38,7 +64,7 @@ describe("generateMessageId", () => {
 });
 
 describe("assembleRfc822", () => {
-  it("builds a complete payload from draft + thread + customer", () => {
+  it("builds an HTML payload from draft + thread + customer", () => {
     const payload = assembleRfc822({
       shop: "integration-test.myshopify.com",
       mailbox: { email: "support@brand.com", fromName: "AMBIENT HOME" },
@@ -50,7 +76,7 @@ describe("assembleRfc822", () => {
         bodyText: "Bonjour, où est ma commande #1234 ?",
       },
       thread: { references: "orig-prev@gmail.com orig-msg-1@gmail.com" },
-      draftBody: "Bonjour Jean, votre commande est en transit. Suivi attendu sous 2 jours.",
+      draftBody: "<p>Bonjour Jean, votre commande est en transit. Suivi attendu sous 2 jours.</p>",
     });
     expect(payload.fromEmail).toBe("support@brand.com");
     expect(payload.fromName).toBe("AMBIENT HOME");
@@ -59,9 +85,13 @@ describe("assembleRfc822", () => {
     expect(payload.inReplyToRfcId).toBe("orig-msg-1@gmail.com");
     expect(payload.references).toBe("orig-prev@gmail.com orig-msg-1@gmail.com");
     expect(payload.rfcMessageId).toMatch(/@integration-test\.myshopify\.com$/);
-    expect(payload.bodyText).toContain("Bonjour Jean, votre commande est en transit.");
-    expect(payload.bodyText).toContain("Le 28/05/2026, Jean Dupont <client@gmail.com> a écrit :");
-    expect(payload.bodyText).toContain("> Bonjour, où est ma commande #1234 ?");
+    // Draft HTML passes through unchanged
+    expect(payload.bodyText).toContain("<p>Bonjour Jean, votre commande est en transit.");
+    // Quote header (HTML-escaped customer label)
+    expect(payload.bodyText).toContain("Le 28/05/2026, Jean Dupont &lt;client@gmail.com&gt; a écrit :");
+    // Original body inside an HTML blockquote (escaped)
+    expect(payload.bodyText).toContain("<blockquote");
+    expect(payload.bodyText).toContain("Bonjour, où est ma commande #1234 ?");
   });
 
   it("falls back to customer email if no name", () => {
@@ -76,7 +106,7 @@ describe("assembleRfc822", () => {
         bodyText: "body",
       },
       thread: { references: "" },
-      draftBody: "answer",
+      draftBody: "<p>answer</p>",
     });
     expect(payload.bodyText).toContain("Le 28/05/2026, c@g.com a écrit :");
   });
@@ -97,10 +127,28 @@ describe("assembleRfc822", () => {
     });
     expect(payload.references).toBe("prev@g.com m1@g.com");
   });
+
+  it("threads inReplyToExternalMessageId through to the payload", () => {
+    const payload = assembleRfc822({
+      shop: "x.myshopify.com",
+      mailbox: { email: "s@b.com" },
+      customer: { email: "c@g.com" },
+      originalIncoming: {
+        rfcMessageId: "m1@g.com",
+        externalMessageId: "AAMkAGUyNTEzNzMy",
+        receivedAt: new Date(),
+        subject: "Q",
+        bodyText: "body",
+      },
+      thread: { references: "" },
+      draftBody: "answer",
+    });
+    expect(payload.inReplyToExternalMessageId).toBe("AAMkAGUyNTEzNzMy");
+  });
 });
 
 describe("renderRfc822", () => {
-  it("produces a valid RFC822 string with all expected headers", () => {
+  it("produces a valid RFC822 string with all expected headers and text/html content type", () => {
     const rendered = renderRfc822({
       rfcMessageId: "test-id@x.com",
       inReplyToRfcId: "orig@g.com",
@@ -109,7 +157,7 @@ describe("renderRfc822", () => {
       fromName: "Brand",
       toEmails: ["c@g.com"],
       subject: "Re: hi",
-      bodyText: "hello",
+      bodyText: "<p>hello</p>",
     });
     expect(rendered).toContain('From: "Brand" <s@b.com>');
     expect(rendered).toContain("To: c@g.com");
@@ -117,10 +165,10 @@ describe("renderRfc822", () => {
     expect(rendered).toContain("Message-ID: <test-id@x.com>");
     expect(rendered).toContain("In-Reply-To: <orig@g.com>");
     expect(rendered).toContain("References: a@g.com b@g.com");
-    expect(rendered).toContain("Content-Type: text/plain; charset=utf-8");
-    expect(rendered.endsWith("hello")).toBe(true);
+    expect(rendered).toContain("Content-Type: text/html; charset=utf-8");
+    expect(rendered.endsWith("<p>hello</p>")).toBe(true);
     // Headers separated by CRLF, blank line before body
-    expect(rendered).toMatch(/\r\n\r\nhello$/);
+    expect(rendered).toMatch(/\r\n\r\n<p>hello<\/p>$/);
   });
 
   it("omits Cc and From-name when not provided", () => {
