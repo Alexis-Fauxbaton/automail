@@ -153,13 +153,16 @@ export async function analyzeThread(
 
   // ── Step 1: Resolve anchor email ──────────────────────────────────────────
   // Latest IncomingEmail in the thread that passed Tier 1, ordered by receivedAt.
-  // Falls back to any non-outgoing, non-error email for legacy rows that predate
-  // the tier1Result column (null = created before the column existed, treated as passed).
+  // We allow processingStatus="error" — retrying error rows is exactly what
+  // user-triggered "Relancer l'analyse" is supposed to do, and the cron
+  // (lastClassifyAttemptAt 24 h gate in auto-sync.ts) bounds automatic
+  // retries. Outgoing rows are still excluded (they're our own sent mails,
+  // not customer messages worth analyzing).
   let anchor = await prisma.incomingEmail.findFirst({
     where: {
       shop,
       canonicalThreadId: threadId,
-      processingStatus: { notIn: ["outgoing", "error"] },
+      processingStatus: { notIn: ["outgoing"] },
       tier1Result: "passed",
     },
     orderBy: { receivedAt: "desc" },
@@ -171,7 +174,7 @@ export async function analyzeThread(
       where: {
         shop,
         canonicalThreadId: threadId,
-        processingStatus: { notIn: ["outgoing", "error"] },
+        processingStatus: { notIn: ["outgoing"] },
         tier1Result: null,
       },
       orderBy: { receivedAt: "desc" },

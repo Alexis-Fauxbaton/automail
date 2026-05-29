@@ -483,11 +483,14 @@ async function runJob(job: {
               select: { email: true },
             });
         // Pick the latest analyzable email of the thread as anchor.
+        // Allow processingStatus="error" — analyze_thread jobs are how
+        // we retry stuck error rows (the user clicks "Relancer l'analyse",
+        // a job is enqueued, this runner picks it up).
         const anchor = await prisma.incomingEmail.findFirst({
           where: {
             shop: job.shop,
             canonicalThreadId: threadId,
-            processingStatus: { notIn: ["outgoing", "error"] },
+            processingStatus: { notIn: ["outgoing"] },
             tier1Result: "passed",
           },
           orderBy: { receivedAt: "desc" },
