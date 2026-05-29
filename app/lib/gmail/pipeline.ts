@@ -1265,19 +1265,26 @@ export async function reanalyzeEmail(
   // to analyzeThread which owns all DB writes and invariants.
   const record = await prisma.incomingEmail.findFirst({
     where: { id: emailId, shop },
-    select: { canonicalThreadId: true },
+    select: { canonicalThreadId: true, tier2Result: true },
   });
   if (!record) throw new Error("Email not found");
   if (!record.canonicalThreadId) throw new Error(`Email ${emailId} has no canonicalThreadId`);
+
+  // If the email was never Tier-2-classified (legacy backfilled rows, or
+  // emails that errored before Tier 2 ran), we MUST run Tier 2 first —
+  // otherwise Tier 3 assumes support_client by default and misclassifies
+  // spam/non-support as actionable threads with a fabricated intent.
+  const needsTier2 = record.tier2Result === null;
 
   const { analyzeThread } = await import("../support/analyze-thread");
   const result = await analyzeThread(
     record.canonicalThreadId,
     { shop, admin },
     {
-      // No Tier 2 — reanalyze is always a Tier 3 path (user-triggered or
-      // background analyze_thread job). Tier 2 was already run at sync time.
-      runTier2: false,
+      // Normally Tier 2 already ran at sync time, so reanalyze is a Tier 3
+      // refresh. Force Tier 2 only when the anchor was never classified
+      // (null tier2Result) — see comment above.
+      runTier2: needsTier2,
       runShopify: true,
       runTracking: true,
       runDraft: !options.skipDraft,

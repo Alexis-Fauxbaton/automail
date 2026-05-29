@@ -2052,6 +2052,12 @@ const ThreadCard = memo(function ThreadCard({
                 ? t("inbox.retryAnalysis")
                 : bucket === "to_analyze"
                 ? t("inbox.analyze")
+                : latest.tier2Result === null
+                  // Not yet Tier-2-classified: clicking runs Tier 2 first, and
+                  // may or may not produce a draft depending on the verdict.
+                  // "Analyser" is honest; "Générer le brouillon" promises a
+                  // draft that won't materialize on non-support emails.
+                  ? t("inbox.analyze")
                 : latest.draftReply
                 ? t("inbox.regenerateDraft")
                 : t("inbox.generateDraft")}
