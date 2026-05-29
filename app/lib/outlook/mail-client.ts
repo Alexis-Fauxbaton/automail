@@ -65,17 +65,21 @@ export async function createOutlookClient(connection: MailConnection): Promise<M
       // Step 1: Create a draft. We use the create-draft + send-draft pattern
       // rather than /me/sendMail because sendMail returns 202 No Content —
       // we'd lose the message ID needed for the pre-emptive outgoing insert.
+      //
+      // Microsoft Graph rejects standard RFC headers (In-Reply-To, References,
+      // Message-ID) in `internetMessageHeaders` — only `X-` prefixed custom
+      // headers are allowed. v1 trade-off: omit RFC threading headers on
+      // Outlook entirely. Subject "Re: …" preserves human-readable threading
+      // in customer mail clients, but customer replies may create a new
+      // canonical thread on our side instead of chaining to this one.
+      // v2 improvement: use POST /me/messages/{originalId}/createReply for
+      // native threading via Outlook's conversationId.
       const draftBody = {
         subject: payload.subject,
         body: { contentType: "text", content: payload.bodyText },
         toRecipients: payload.toEmails.map((e) => ({ emailAddress: { address: e } })),
         ccRecipients: (payload.ccEmails ?? []).map((e) => ({ emailAddress: { address: e } })),
         from: { emailAddress: { address: payload.fromEmail, name: payload.fromName } },
-        internetMessageId: `<${payload.rfcMessageId}>`,
-        internetMessageHeaders: [
-          payload.inReplyToRfcId ? { name: "In-Reply-To", value: `<${payload.inReplyToRfcId}>` } : null,
-          payload.references ? { name: "References", value: payload.references } : null,
-        ].filter(Boolean) as Array<{ name: string; value: string }>,
       };
 
       const createRes = await fetch("https://graph.microsoft.com/v1.0/me/messages", {
