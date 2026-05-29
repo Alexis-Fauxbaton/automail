@@ -395,7 +395,16 @@
     "mailboxCount_one": "{{count}} boîte",
     "mailboxCount_other": "{{count}} boîtes",
     "errorCount_one": "{{count}} erreur",
-    "errorCount_other": "{{count}} erreurs"
+    "errorCount_other": "{{count}} erreurs",
+    "send": {
+      "cta": "Envoyer",
+      "disabled_no_draft": "Générez d'abord un brouillon",
+      "activate": "Activer l'envoi pour cette boîte",
+      "pending": "Envoi à {{customer}} dans {{seconds}}s",
+      "cancel": "Annuler",
+      "sent": "Envoyé",
+      "retry": "Réessayer"
+    }
   },
   "login": {
     "heading": "Connexion",

@@ -395,7 +395,16 @@
     "mailboxCount_one": "{{count}} mailbox",
     "mailboxCount_other": "{{count}} mailboxes",
     "errorCount_one": "{{count}} error",
-    "errorCount_other": "{{count}} errors"
+    "errorCount_other": "{{count}} errors",
+    "send": {
+      "cta": "Send",
+      "disabled_no_draft": "Generate a draft first",
+      "activate": "Activate sending for this mailbox",
+      "pending": "Sending to {{customer}} in {{seconds}}s",
+      "cancel": "Cancel",
+      "sent": "Sent",
+      "retry": "Retry"
+    }
   },
   "login": {
     "heading": "Log in",
