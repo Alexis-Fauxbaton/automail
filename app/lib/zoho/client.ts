@@ -283,6 +283,16 @@ export async function createZohoClient(connection: MailConnection): Promise<Mail
         token, accountId, folderId, String(detail.messageId),
       ).catch(() => []);
 
+      // Best-effort: fetch RFC822 headers so the thread resolver can chain
+      // outgoing → incoming via In-Reply-To. Zoho's /details endpoint omits
+      // these; a separate /header endpoint returns the raw header block.
+      const rfcHeaders = await fetchZohoMessageHeaders(
+        token, accountId, folderId, String(detail.messageId),
+      ).catch((err) => {
+        console.warn(`[zoho/getMessage] header fetch failed for ${detail.messageId}: ${err}`);
+        return {} as Record<string, string>;
+      });
+
       return {
         id: String(detail.messageId),
         threadId: String(detail.threadId ?? detail.messageId),
@@ -298,7 +308,7 @@ export async function createZohoClient(connection: MailConnection): Promise<Mail
         // message in (see comment above on folderCandidates). Alias-based
         // outgoing detection is handled downstream in outgoing-detection.ts.
         labelIds: (mailboxLower && fromAddress.toLowerCase() === mailboxLower) ? ["SENT"] : [],
-        headers: {},
+        headers: rfcHeaders,
         attachments: zohoAttachments,
       } satisfies MailMessage;
     },
@@ -584,6 +594,57 @@ async function embedZohoInlineImages(
 }
 
 /** Fetch attachment metadata for a Zoho message using attachmentinfo endpoint. */
+/**
+ * Fetch the raw RFC822 headers for a Zoho message and parse them into a
+ * lowercase-keyed map. The thread resolver reads `headers["message-id"]`,
+ * `headers["in-reply-to"]`, `headers["references"]` — without these, the
+ * Zoho-ingested side of conversations can't be chained to merchant replies
+ * sent via our app (and vice-versa).
+ *
+ * Zoho's /details endpoint omits headers. The /header endpoint returns the
+ * raw header block as a string in data.content; we parse it minimally (one
+ * line = one header, continuation lines folded).
+ */
+async function fetchZohoMessageHeaders(
+  accessToken: string,
+  accountId: string,
+  folderId: string,
+  messageId: string,
+): Promise<Record<string, string>> {
+  const domain = getApiDomain();
+  const url = `https://${domain}/api/accounts/${accountId}/folders/${folderId}/messages/${messageId}/header`;
+  const r = await fetch(url, {
+    headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!r.ok) {
+    throw new Error(`Zoho /header ${r.status}`);
+  }
+  const json = (await r.json()) as { data?: { content?: string } | string };
+  // Zoho sometimes returns data as a string (raw block), sometimes as object.
+  const raw = typeof json.data === "string"
+    ? json.data
+    : json.data?.content ?? "";
+  return parseRfc822Headers(raw);
+}
+
+/** Minimal RFC822 header parser: lowercase keys, folded-line support. */
+function parseRfc822Headers(raw: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!raw) return out;
+  // Normalize line endings + unfold continuation lines (RFC 2822 §2.2.3:
+  // a header line continues on the next line if it starts with WSP).
+  const unfolded = raw.replace(/\r\n/g, "\n").replace(/\n[ \t]+/g, " ");
+  for (const line of unfolded.split("\n")) {
+    const colon = line.indexOf(":");
+    if (colon <= 0) continue;
+    const key = line.slice(0, colon).trim().toLowerCase();
+    const value = line.slice(colon + 1).trim();
+    if (key && value) out[key] = value;
+  }
+  return out;
+}
+
 async function fetchZohoAttachmentsMeta(
   accessToken: string,
   accountId: string,
