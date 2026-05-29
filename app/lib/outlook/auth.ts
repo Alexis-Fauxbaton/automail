@@ -12,7 +12,7 @@ const GRAPH_ME_PROXY = "https://graph.microsoft.com/v1.0/me?$select=mail,proxyAd
 // from the $select response. Existing merchants who connected before this
 // scope was added won't have it — their alias backfill will fail
 // gracefully (out = [primary] only) until they re-consent at next reauth.
-const SCOPES = "Mail.Read User.Read offline_access";
+const SCOPES = "Mail.Read Mail.Send User.Read offline_access";
 
 function getClientConfig() {
   const clientId = process.env.MICROSOFT_CLIENT_ID;
