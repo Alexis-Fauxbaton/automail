@@ -125,23 +125,8 @@ export async function handleResync(params: {
     ),
   );
 
-  // Scoped to this mailbox only — other mailboxes' IncomingEmail rows are
-  // untouched. Rows with sourceMarker="sent_from_app" are PRESERVED: they
-  // are our own audit trail of messages the merchant sent via the Send
-  // button (pre-emptive outgoing inserts from handleSendDraft) and cannot
-  // be re-ingested by sync (Outlook's sync only fetches Inbox; Zoho fetches
-  // Sent but rebuilds providerThreadId from scratch, losing the chain).
-  // Preserving them keeps the thread history intact across resyncs.
-  await prisma.incomingEmail.deleteMany({
-    where: {
-      shop,
-      mailConnectionId,
-      OR: [
-        { sourceMarker: null },
-        { sourceMarker: { not: "sent_from_app" } },
-      ],
-    },
-  });
+  // Scoped to this mailbox only — other mailboxes' IncomingEmail rows are untouched.
+  await prisma.incomingEmail.deleteMany({ where: { shop, mailConnectionId } });
 
   // Reset supportNature for this mailbox's classified-but-not-engaged threads —
   // re-classification will repopulate on the next ingest pass.
