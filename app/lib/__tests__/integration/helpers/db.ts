@@ -88,6 +88,8 @@ export async function seedMailConnection(opts: {
   email?: string;
   provider?: string;
   id?: string;
+  /** CSV of OAuth scopes granted — used by canSend checks. */
+  grantedScopes?: string;
 }): Promise<MailConnection> {
   return prisma.mailConnection.create({
     data: {
@@ -98,6 +100,7 @@ export async function seedMailConnection(opts: {
       accessToken: 'test-access',
       refreshToken: 'test-refresh',
       tokenExpiry: new Date(Date.now() + 3600_000),
+      grantedScopes: opts.grantedScopes ?? null,
     },
   });
 }
@@ -128,6 +131,12 @@ export async function seedIncomingEmail(opts: {
   mailConnectionId: string;
   canonicalThreadId: string;
   receivedAt?: Date;
+  /** Override the RFC Message-ID stored on the row. */
+  rfcMessageId?: string;
+  fromAddress?: string;
+  fromName?: string;
+  subject?: string;
+  bodyText?: string;
 }): Promise<IncomingEmail> {
   return prisma.incomingEmail.create({
     data: {
@@ -138,12 +147,19 @@ export async function seedIncomingEmail(opts: {
       threadId: `t-${Math.random().toString(36).slice(2, 8)}`,
       receivedAt: opts.receivedAt ?? new Date(),
       processingStatus: 'ingested',
-      fromAddress: 'customer@example.com',
-      subject: 'Test subject',
-      bodyText: 'Test body',
+      fromAddress: opts.fromAddress ?? 'customer@example.com',
+      fromName: opts.fromName ?? '',
+      subject: opts.subject ?? 'Test subject',
+      bodyText: opts.bodyText ?? 'Test body',
       bodyHtml: '<p>Test body</p>',
+      rfcMessageId: opts.rfcMessageId ?? `msg-${Math.random().toString(36).slice(2, 8)}@test.com`,
     },
   });
+}
+
+/** Alias for cleanTestShop(TEST_SHOP) — convenience for beforeEach hooks. */
+export async function resetTestDb() {
+  await cleanTestShop(TEST_SHOP);
 }
 
 /** Call in afterAll() to prevent Vitest from hanging on open DB connections. */
