@@ -6,6 +6,18 @@ import type { Plugin } from "vite";
 import type { IncomingMessage, ServerResponse } from "http";
 import { verifyOAuthState } from "./app/lib/mail/oauth-state";
 
+// Normalize the provider-returned scope string into the lowercase CSV format
+// that canSend() expects. Microsoft returns space-separated, Zoho returns
+// comma-separated; we accept both. Keep in sync with mail-auth.tsx.
+function normalizeScopes(raw?: string | null): string | null {
+  if (!raw) return null;
+  return raw
+    .toLowerCase()
+    .split(/[\s,]+/)
+    .filter(Boolean)
+    .join(",");
+}
+
 export function mailAuthPlugin(): Plugin {
   return {
     name: "mail-auth-callback",
@@ -58,19 +70,28 @@ export function mailAuthPlugin(): Plugin {
                 "./app/lib/zoho/auth"
               );
               const tokens = await exchangeZohoCode(code);
-              await saveZohoConnection(shop, tokens);
+              await saveZohoConnection(shop, {
+                ...tokens,
+                grantedScopes: normalizeScopes(tokens.scope),
+              });
             } else if (provider === "outlook") {
               const { exchangeCodeForTokens, saveConnection } = await import(
                 "./app/lib/outlook/auth"
               );
               const tokens = await exchangeCodeForTokens(code);
-              await saveConnection(shop, tokens);
+              await saveConnection(shop, {
+                ...tokens,
+                grantedScopes: normalizeScopes(tokens.scope),
+              });
             } else {
               const { exchangeCodeForTokens, saveConnection } = await import(
                 "./app/lib/gmail/auth"
               );
               const tokens = await exchangeCodeForTokens(code);
-              await saveConnection(shop, tokens);
+              await saveConnection(shop, {
+                ...tokens,
+                grantedScopes: normalizeScopes(tokens.scope),
+              });
             }
 
             // Redirect to Shopify admin embedded app URL
