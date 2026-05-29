@@ -12,30 +12,9 @@ import {
 } from "./client";
 import { google } from "googleapis";
 import { getAuthenticatedClientByConnection } from "./auth";
+import { renderRfc822 } from "../mail/assemble-rfc822";
 
 const GMAIL_REQUEST_TIMEOUT_MS = 15_000;
-
-/**
- * TEMPORARY: will be replaced by import from app/lib/mail/assemble-rfc822.ts
- * in Task 4.1. Keep this local for now so the file compiles.
- */
-function buildRawRfc822(p: SendPayload): string {
-  const lines: string[] = [
-    `From: ${p.fromName ? `"${p.fromName}" ` : ""}<${p.fromEmail}>`,
-    `To: ${p.toEmails.join(", ")}`,
-  ];
-  if (p.ccEmails?.length) lines.push(`Cc: ${p.ccEmails.join(", ")}`);
-  lines.push(`Subject: ${p.subject}`);
-  lines.push(`Message-ID: <${p.rfcMessageId}>`);
-  if (p.inReplyToRfcId) lines.push(`In-Reply-To: <${p.inReplyToRfcId}>`);
-  if (p.references) lines.push(`References: ${p.references}`);
-  lines.push(`Date: ${new Date().toUTCString()}`);
-  lines.push(`Content-Type: text/plain; charset=utf-8`);
-  lines.push(`Content-Transfer-Encoding: 8bit`);
-  lines.push("");
-  lines.push(p.bodyText);
-  return lines.join("\r\n");
-}
 
 export async function createGmailClient(connection: MailConnection): Promise<MailClient> {
   const auth = await getAuthenticatedClientByConnection(connection);
@@ -69,7 +48,7 @@ export async function createGmailClient(connection: MailConnection): Promise<Mai
 
     async send(payload: SendPayload): Promise<SendResult> {
       // Build RFC822 raw message in base64url (Gmail requirement).
-      const raw = buildRawRfc822(payload);
+      const raw = renderRfc822(payload);
       const base64url = Buffer.from(raw, "utf-8").toString("base64url");
       const res = await gmail.users.messages.send({
         userId: "me",
