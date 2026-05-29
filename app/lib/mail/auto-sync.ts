@@ -64,6 +64,11 @@ const MAX_CONCURRENT = Math.max(
 const ZOMBIE_TIMEOUT_MS = 10 * 60_000;
 
 // ---------------------------------------------------------------------------
+// Send-timeout cleanup constants
+// ---------------------------------------------------------------------------
+const SEND_STALE_THRESHOLD_MS = 5 * 60 * 1000;
+
+// ---------------------------------------------------------------------------
 // Stale-unknown classify cron state
 // ---------------------------------------------------------------------------
 // In-memory throttle: scanned at most once per hour. Safe under leader-lock
@@ -204,6 +209,10 @@ async function tick(): Promise<void> {
   //     Best-effort; gated to once per hour in-memory and 24 h per thread in DB.
   await enqueueClassifyStaleUnknown().catch((err) =>
     console.error("[auto-sync] enqueueClassifyStaleUnknown failed:", err),
+  );
+  // 2c. Release drafts stuck in sendingStartedAt > 5 min (send timeout cleanup).
+  await releaseStaleSendingDrafts().catch((err) =>
+    console.error("[auto-sync] releaseStaleSendingDrafts failed:", err),
   );
   // 3. Enqueue a recompute job for any shop that still has threads stuck
   //    in the default "open" state (de-dup prevents duplicate jobs).
@@ -357,6 +366,32 @@ export async function enqueueClassifyStaleUnknown(now: Date = new Date()): Promi
     console.log(`[stale-classify] enqueued ${enqueued} analyze_thread job(s) for stale unknown threads`);
   }
   return enqueued;
+}
+
+/**
+ * Release drafts stuck in `sendingStartedAt` for more than 5 min.
+ * Sets sendingStartedAt = NULL and sendError = "send_timeout_released" so
+ * the next user click on Send can retry; the retry path checks the Sent
+ * folder via findSentByRfcMessageId to avoid double-send.
+ *
+ * Called once per auto-sync tick. Cheap: indexed partial lookup, narrow update.
+ */
+export async function releaseStaleSendingDrafts(): Promise<number> {
+  const cutoff = new Date(Date.now() - SEND_STALE_THRESHOLD_MS);
+  const released = await prisma.replyDraft.updateMany({
+    where: {
+      sendingStartedAt: { lt: cutoff, not: null },
+      sentAt: null,
+    },
+    data: {
+      sendingStartedAt: null,
+      sendError: "send_timeout_released",
+    },
+  });
+  if (released.count > 0) {
+    console.log(`[send-cleanup] released ${released.count} stuck draft(s)`);
+  }
+  return released.count;
 }
 
 /**
