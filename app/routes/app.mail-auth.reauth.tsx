@@ -1,5 +1,5 @@
 import { redirect, type LoaderFunctionArgs } from "react-router";
-import { useLoaderData } from "react-router";
+import { useLoaderData, Link } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { useTranslation } from "react-i18next";
@@ -131,8 +131,10 @@ export default function ReauthExplainer() {
         >
           {t("mail-auth.reauth.continue", { provider: providerName })}
         </a>
-        <a
-          href={returnTo}
+        {/* Use Link, not <a>, to keep SPA navigation inside the embedded
+            iframe and preserve shop/host/embedded query params. */}
+        <Link
+          to={returnTo}
           style={{
             padding: "10px 20px",
             color: "#1a1a1a",
@@ -143,7 +145,7 @@ export default function ReauthExplainer() {
           }}
         >
           {t("common.cancel")}
-        </a>
+        </Link>
       </div>
     </div>
   );
