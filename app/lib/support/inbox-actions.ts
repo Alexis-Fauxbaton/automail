@@ -1012,6 +1012,7 @@ export async function handleSendDraft(params: {
     },
     originalIncoming: {
       rfcMessageId: draft.email.rfcMessageId,
+      externalMessageId: draft.email.externalMessageId,
       receivedAt: draft.email.receivedAt,
       subject: draft.email.subject,
       bodyText: draft.email.bodyText,
@@ -1165,6 +1166,7 @@ async function runFakeSendForInternalShop(params: {
     customer: { email: draft.email.fromAddress, name: draft.email.fromName ?? "" },
     originalIncoming: {
       rfcMessageId: draft.email.rfcMessageId,
+      externalMessageId: draft.email.externalMessageId,
       receivedAt: draft.email.receivedAt,
       subject: draft.email.subject,
       bodyText: draft.email.bodyText,

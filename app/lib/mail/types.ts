@@ -45,6 +45,14 @@ export interface SendPayload {
   rfcMessageId: string;       // we generate and set this; provider may rewrite
   inReplyToRfcId: string;     // for threading
   references: string;         // space-separated chain of Message-IDs
+  /**
+   * Provider-internal ID of the original incoming message we're replying to.
+   * Outlook uses this with /me/messages/{id}/createReply to inherit
+   * Microsoft Graph's native conversationId — ensures customer replies
+   * chain back to the same thread even when our RFC headers are stripped.
+   * Optional: falls back to standalone create-draft when missing/invalid.
+   */
+  inReplyToExternalMessageId?: string;
   fromEmail: string;
   fromName?: string;
   toEmails: string[];

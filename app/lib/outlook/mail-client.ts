@@ -62,40 +62,54 @@ export async function createOutlookClient(connection: MailConnection): Promise<M
     async send(payload: SendPayload): Promise<SendResult> {
       const { accessToken } = await getAuthenticatedClientByConnection(connection);
 
-      // Step 1: Create a draft. We use the create-draft + send-draft pattern
-      // rather than /me/sendMail because sendMail returns 202 No Content —
-      // we'd lose the message ID needed for the pre-emptive outgoing insert.
-      //
       // Microsoft Graph rejects standard RFC headers (In-Reply-To, References,
       // Message-ID) in `internetMessageHeaders` — only `X-` prefixed custom
-      // headers are allowed. v1 trade-off: omit RFC threading headers on
-      // Outlook entirely. Subject "Re: …" preserves human-readable threading
-      // in customer mail clients, but customer replies may create a new
-      // canonical thread on our side instead of chaining to this one.
-      // v2 improvement: use POST /me/messages/{originalId}/createReply for
-      // native threading via Outlook's conversationId.
-      const draftBody = {
-        subject: payload.subject,
-        body: { contentType: "text", content: payload.bodyText },
-        toRecipients: payload.toEmails.map((e) => ({ emailAddress: { address: e } })),
-        ccRecipients: (payload.ccEmails ?? []).map((e) => ({ emailAddress: { address: e } })),
-        from: { emailAddress: { address: payload.fromEmail, name: payload.fromName } },
-      };
+      // headers are allowed. We therefore rely on Outlook's native conversation
+      // threading: create the draft via /me/messages/{originalId}/createReply
+      // which inherits the original message's `conversationId`. Customer
+      // replies then automatically chain back to the same conversation in
+      // Outlook, and our sync's incoming-side dedup also picks up the chain.
+      //
+      // Fallback to a standalone create-draft when the original message is no
+      // longer in the merchant's mailbox (404) — threading will degrade but
+      // the send still succeeds with subject "Re: …" preserving readability.
+      let internalId: string;
 
-      const createRes = await fetch("https://graph.microsoft.com/v1.0/me/messages", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(draftBody),
-      });
-      if (!createRes.ok) {
-        const text = await createRes.text();
-        throw new Error(`Outlook create draft failed: ${createRes.status} ${text}`);
+      const originalId = payload.inReplyToExternalMessageId;
+      if (originalId) {
+        const replyRes = await fetch(
+          `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(originalId)}/createReply`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              "Content-Type": "application/json",
+            },
+            // Microsoft pre-fills `toRecipients` (original sender), `subject`
+            // ("RE: …"), and an empty body scaffold. We override the body with
+            // our content. Leaving `toRecipients` to Microsoft is intentional —
+            // it inherits the canonical sender from the original message.
+            body: JSON.stringify({
+              message: {
+                body: { contentType: "text", content: payload.bodyText },
+              },
+            }),
+          },
+        );
+        if (replyRes.ok) {
+          const draft = await replyRes.json() as { id: string };
+          internalId = draft.id;
+        } else if (replyRes.status === 404) {
+          // Original deleted/archived — fall back to standalone draft.
+          internalId = await createStandaloneDraft(accessToken, payload);
+        } else {
+          const text = await replyRes.text();
+          throw new Error(`Outlook createReply failed: ${replyRes.status} ${text}`);
+        }
+      } else {
+        // No original message id available — use the standalone-draft path.
+        internalId = await createStandaloneDraft(accessToken, payload);
       }
-      const created = await createRes.json() as { id: string };
-      const internalId = created.id;
 
       // Step 2: Send the draft. Returns 202 Accepted with no body.
       const sendRes = await fetch(
@@ -152,4 +166,36 @@ export async function createOutlookClient(connection: MailConnection): Promise<M
       return { externalMessageId: msg.id, rfcMessageId };
     },
   };
+}
+
+/**
+ * Create a standalone (non-threaded) draft via POST /me/messages. Used as a
+ * fallback when the original message we'd reply to is no longer in the
+ * mailbox (404 from createReply), or when no original id was provided.
+ */
+async function createStandaloneDraft(
+  accessToken: string,
+  payload: SendPayload,
+): Promise<string> {
+  const draftBody = {
+    subject: payload.subject,
+    body: { contentType: "text", content: payload.bodyText },
+    toRecipients: payload.toEmails.map((e) => ({ emailAddress: { address: e } })),
+    ccRecipients: (payload.ccEmails ?? []).map((e) => ({ emailAddress: { address: e } })),
+    from: { emailAddress: { address: payload.fromEmail, name: payload.fromName } },
+  };
+  const res = await fetch("https://graph.microsoft.com/v1.0/me/messages", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(draftBody),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Outlook create draft failed: ${res.status} ${text}`);
+  }
+  const created = await res.json() as { id: string };
+  return created.id;
 }

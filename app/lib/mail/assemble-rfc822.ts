@@ -28,6 +28,9 @@ export interface AssembleInput {
   customer: { email: string; name?: string };
   originalIncoming: {
     rfcMessageId: string;
+    /** Provider-internal ID of the message we're replying to. Used by Outlook
+     *  to call /me/messages/{id}/createReply for native conversation threading. */
+    externalMessageId?: string;
     receivedAt: Date;
     subject: string;
     bodyText: string;
@@ -53,6 +56,7 @@ export function assembleRfc822(input: AssembleInput): SendPayload {
   return {
     rfcMessageId: generateMessageId(shop),
     inReplyToRfcId: originalIncoming.rfcMessageId,
+    inReplyToExternalMessageId: originalIncoming.externalMessageId,
     references: thread.references,
     fromEmail: mailbox.email,
     fromName: mailbox.fromName,
