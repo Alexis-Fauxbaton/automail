@@ -1,5 +1,6 @@
 import prisma from "../../db.server";
 import { encrypt, decrypt } from "../gmail/crypto";
+import { MailboxRevokedError } from "../gmail/auth";
 import type { MailConnection } from "@prisma/client";
 import { signOAuthState } from "../mail/oauth-state";
 
@@ -207,7 +208,6 @@ async function refreshAccessToken(refreshToken: string): Promise<{
     // app permissions). Surface a typed marker so callers prompt the
     // merchant to reconnect.
     if (err.error === "invalid_grant" || err.error === "interaction_required") {
-      const { MailboxRevokedError } = await import("../gmail/auth");
       throw new MailboxRevokedError("outlook", "unknown");
     }
     throw new Error(`Microsoft token refresh failed (${res.status})`);

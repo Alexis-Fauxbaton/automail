@@ -72,6 +72,15 @@ async function handleShutdown(signal: string) {
   } catch (err) {
     console.error("[shutdown] drain error:", err);
   }
+  // Close the Prisma pool AFTER drain completes — db.server.ts intentionally
+  // does NOT listen on SIGTERM/SIGINT precisely so we can control the order
+  // here. If we disconnect before drain, the drain queries hit a closed pool.
+  try {
+    const { default: prisma } = await import("./db.server");
+    await prisma.$disconnect();
+  } catch (err) {
+    console.error("[shutdown] prisma disconnect error:", err);
+  }
   process.exit(0);
 }
 process.on("SIGTERM", () => void handleShutdown("SIGTERM"));

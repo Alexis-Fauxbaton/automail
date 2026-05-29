@@ -45,7 +45,14 @@ function parseAliases(json: string): string[] {
       .filter((x): x is string => typeof x === "string")
       .map((s) => s.trim().toLowerCase())
       .filter((s) => s.length > 0);
-  } catch {
+  } catch (err) {
+    // Don't swallow silently — a corrupted outgoingAliases column would
+    // otherwise mark a merchant's own outgoing emails as customer mail
+    // for weeks until someone reads the metrics. Log the first 100 chars
+    // of the bad payload so ops can detect + repair the row.
+    console.error(
+      `[outgoing] parseAliases failed: ${err instanceof Error ? err.message : String(err)} payload=${json.slice(0, 100)}`,
+    );
     return [];
   }
 }

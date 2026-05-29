@@ -1,5 +1,6 @@
 import prisma from "../../db.server";
 import { encrypt, decrypt } from "../gmail/crypto";
+import { MailboxRevokedError } from "../gmail/auth";
 import { signOAuthState } from "../mail/oauth-state";
 import type { MailConnection } from "@prisma/client";
 
@@ -229,7 +230,6 @@ export async function getZohoAccessTokenByConnection(connection: MailConnection)
           data: { lastSyncError: "MAILBOX_REVOKED: please reconnect Zoho Mail" },
         })
         .catch(() => undefined);
-      const { MailboxRevokedError } = await import("../gmail/auth");
       throw new MailboxRevokedError("zoho", connection.shop);
     }
     throw new Error(`Zoho token refresh failed: ${data.error || "no token"}`);

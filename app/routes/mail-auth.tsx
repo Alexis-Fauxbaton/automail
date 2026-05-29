@@ -198,26 +198,48 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { provider, shop } = verified;
   console.log(`[mail-auth] ${provider} callback for shop=${shop}`);
 
-  // Enforce mailbox limit before any token exchange or DB write.
-  try {
-    const { unauthenticated } = await import("../shopify.server");
-    const { admin } = await unauthenticated.admin(shop);
-    const { resolveEntitlements } = await import("../lib/billing/entitlements");
-    const ent = await resolveEntitlements({ shop, admin });
-    if (!ent.canConnectMailbox) {
-      return errorPage(
-        locale,
-        t.mailboxLimit.title,
-        t.mailboxLimit.body(ent.mailboxStatus.used, ent.mailboxStatus.limit),
-      );
-    }
-  } catch (entErr) {
-    const correlationId = Date.now().toString(36);
-    console.error(`[mail-auth] entitlements check failed [ref=${correlationId}]:`, entErr);
-    return errorPage(locale, t.entitlements.title, t.entitlements.body(correlationId));
+  // Enforce mailbox limit BEFORE any token exchange or DB write.
+  // We hold a per-shop Postgres advisory lock from the canConnectMailbox
+  // check through to the save so two concurrent OAuth callbacks for the
+  // same shop cannot both pass the limit check and both create a
+  // connection — that race would let a merchant exceed their plan's
+  // mailbox limit by N (where N = number of concurrent callbacks).
+  const { default: prisma } = await import("../db.server");
+  const lockKey = await prisma.$queryRaw<Array<{ key: bigint }>>`
+    SELECT ('x' || substr(md5(${shop}), 1, 16))::bit(64)::bigint AS key
+  `;
+  const advisoryKey = lockKey[0]?.key ?? BigInt(0);
+  const acquired = await prisma.$queryRaw<Array<{ ok: boolean }>>`
+    SELECT pg_try_advisory_lock(${advisoryKey}) AS ok
+  `;
+  if (!acquired[0]?.ok) {
+    return errorPage(
+      locale,
+      t.mailboxLimit.title,
+      "Another mailbox connection for this shop is in progress. Please retry in a moment.",
+    );
   }
 
   try {
+    try {
+      const { unauthenticated } = await import("../shopify.server");
+      const { admin } = await unauthenticated.admin(shop);
+      const { resolveEntitlements } = await import("../lib/billing/entitlements");
+      const ent = await resolveEntitlements({ shop, admin });
+      if (!ent.canConnectMailbox) {
+        return errorPage(
+          locale,
+          t.mailboxLimit.title,
+          t.mailboxLimit.body(ent.mailboxStatus.used, ent.mailboxStatus.limit),
+        );
+      }
+    } catch (entErr) {
+      const correlationId = Date.now().toString(36);
+      console.error(`[mail-auth] entitlements check failed [ref=${correlationId}]:`, entErr);
+      return errorPage(locale, t.entitlements.title, t.entitlements.body(correlationId));
+    }
+
+    // Token exchange + save (lock still held).
     let savedConn: { id: string };
     if (provider === "zoho") {
       const { exchangeZohoCode, saveZohoConnection } = await import(
@@ -262,5 +284,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       t.tokenExchange.title(provider),
       t.tokenExchange.body(correlationId),
     );
+  } finally {
+    // Release the per-shop advisory lock so the next OAuth callback (or
+    // retry on error) can proceed. Best-effort: if the unlock query fails
+    // the lock will be released when this session's PG connection is
+    // recycled, which is fast in normal operation.
+    await prisma.$queryRaw`SELECT pg_advisory_unlock(${advisoryKey})`.catch(() => undefined);
   }
 };
