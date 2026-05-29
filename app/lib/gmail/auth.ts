@@ -57,6 +57,7 @@ export async function exchangeCodeForTokens(code: string) {
     expiry: tokens.expiry_date ? new Date(tokens.expiry_date) : new Date(Date.now() + 3600_000),
     email,
     aliases,
+    scope: tokens.scope ?? null,
   };
 }
 
@@ -94,6 +95,7 @@ export async function saveConnection(
     expiry: Date;
     email: string;
     aliases?: string[];
+    grantedScopes?: string | null;
   },
 ): Promise<{ id: string }> {
   const outgoingAliases = JSON.stringify(tokens.aliases ?? []);
@@ -107,6 +109,7 @@ export async function saveConnection(
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
       outgoingAliases,
+      grantedScopes: tokens.grantedScopes ?? null,
     },
     // Reconnect: wipe sync-state fields so the new connection starts clean.
     // Stale historyId / lastSyncError from a previous (possibly invalidated)
@@ -119,6 +122,7 @@ export async function saveConnection(
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
       outgoingAliases,
+      grantedScopes: tokens.grantedScopes ?? null,
       lastSyncError: null,
       lastSyncAt: null,
       historyId: null,

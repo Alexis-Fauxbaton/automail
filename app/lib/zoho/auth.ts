@@ -60,6 +60,7 @@ export async function exchangeZohoCode(code: string) {
     access_token?: string;
     refresh_token?: string;
     expires_in?: number;
+    scope?: string;
     error?: string;
   };
   if (data.error || !data.access_token || !data.refresh_token) {
@@ -76,6 +77,7 @@ export async function exchangeZohoCode(code: string) {
     email: accountInfo.email,
     accountId: accountInfo.accountId,
     aliases: accountInfo.aliases,
+    scope: data.scope ?? null,
   };
 }
 
@@ -123,6 +125,7 @@ export async function saveZohoConnection(
     email: string;
     accountId: string;
     aliases: string[];
+    grantedScopes?: string | null;
   },
 ): Promise<{ id: string }> {
   const allowList = buildAllowList(tokens.email, tokens.aliases);
@@ -138,6 +141,7 @@ export async function saveZohoConnection(
       tokenExpiry: tokens.expiry,
       outgoingAliases,
       zohoAccountId: tokens.accountId,
+      grantedScopes: tokens.grantedScopes ?? null,
     },
     // Reconnect: wipe sync-state fields so the new connection starts clean.
     // Stale historyId / lastSyncError from a prior session would otherwise
@@ -151,6 +155,7 @@ export async function saveZohoConnection(
       tokenExpiry: tokens.expiry,
       outgoingAliases,
       zohoAccountId: tokens.accountId,
+      grantedScopes: tokens.grantedScopes ?? null,
       lastSyncError: null,
       lastSyncAt: null,
       historyId: null,

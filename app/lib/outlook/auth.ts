@@ -75,6 +75,7 @@ export async function exchangeCodeForTokens(code: string) {
     access_token: string;
     refresh_token: string;
     expires_in: number;
+    scope?: string;
   };
 
   const meRes = await fetch(GRAPH_ME, {
@@ -137,6 +138,7 @@ export async function exchangeCodeForTokens(code: string) {
     expiry: new Date(Date.now() + tokenData.expires_in * 1000),
     email,
     aliases,
+    scope: tokenData.scope ?? null,
   };
 }
 
@@ -234,6 +236,7 @@ export async function saveConnection(
     expiry: Date;
     email: string;
     aliases?: string[];
+    grantedScopes?: string | null;
   },
 ): Promise<{ id: string }> {
   const outgoingAliases = JSON.stringify(tokens.aliases ?? []);
@@ -247,6 +250,7 @@ export async function saveConnection(
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
       outgoingAliases,
+      grantedScopes: tokens.grantedScopes ?? null,
     },
     // Reconnect: wipe sync-state fields so the new connection starts clean.
     // Stale state from a previous session (deltaToken, lastSyncError,
@@ -261,6 +265,7 @@ export async function saveConnection(
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
       outgoingAliases,
+      grantedScopes: tokens.grantedScopes ?? null,
       lastSyncError: null,
       lastSyncAt: null,
       historyId: null,

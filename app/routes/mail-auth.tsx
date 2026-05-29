@@ -4,6 +4,20 @@ import { verifyOAuthState } from "../lib/mail/oauth-state";
 import { checkRateLimit, getClientIp } from "../lib/rate-limit";
 
 /**
+ * Normalize a raw OAuth scope string to lowercase, comma-separated form.
+ * Handles both space-separated (Gmail, Outlook) and comma-separated (Zoho)
+ * inputs. Returns null when no scope is present.
+ */
+function normalizeScopes(raw?: string | null): string | null {
+  if (!raw) return null;
+  return raw
+    .toLowerCase()
+    .split(/[\s,]+/)
+    .filter(Boolean)
+    .join(",");
+}
+
+/**
  * Public OAuth callback for Gmail / Zoho.
  *
  * The route is necessarily public (Google/Zoho redirect here from outside
@@ -224,19 +238,28 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         "../lib/zoho/auth"
       );
       const tokens = await exchangeZohoCode(code);
-      savedConn = await saveZohoConnection(shop, tokens);
+      savedConn = await saveZohoConnection(shop, {
+        ...tokens,
+        grantedScopes: normalizeScopes(tokens.scope),
+      });
     } else if (provider === "outlook") {
       const { exchangeCodeForTokens, saveConnection } = await import(
         "../lib/outlook/auth"
       );
       const tokens = await exchangeCodeForTokens(code);
-      savedConn = await saveConnection(shop, tokens);
+      savedConn = await saveConnection(shop, {
+        ...tokens,
+        grantedScopes: normalizeScopes(tokens.scope),
+      });
     } else {
       const { exchangeCodeForTokens, saveConnection } = await import(
         "../lib/gmail/auth"
       );
       const tokens = await exchangeCodeForTokens(code);
-      savedConn = await saveConnection(shop, tokens);
+      savedConn = await saveConnection(shop, {
+        ...tokens,
+        grantedScopes: normalizeScopes(tokens.scope),
+      });
     }
 
     // Kick off the first sync immediately instead of waiting up to 60 s for
