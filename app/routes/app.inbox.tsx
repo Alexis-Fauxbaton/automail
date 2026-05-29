@@ -51,6 +51,7 @@ import {
   handleUpdateClassification,
   handleDismissAnalyzeQueue,
   handleDismissThreadFromAnalyze,
+  handleSendDraft,
 } from "../lib/support/inbox-actions";
 import type { ClassificationEdit } from "../lib/support/manual-classification";
 import {
@@ -65,6 +66,8 @@ import {
 import MailboxBadge from "../components/inbox/MailboxBadge";
 import MailboxFilter from "../components/inbox/MailboxFilter";
 import MailboxIndicator from "../components/inbox/MailboxIndicator";
+import SendButton from "../components/inbox/SendButton";
+import { canSend } from "../lib/mail/scopes";
 
 // Tracks email IDs for which an HTML body refresh was already submitted
 // this browser session, so we don't re-fetch on every remount.
@@ -271,6 +274,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         draftReplyMode: "thread",
         draftAttachments: [],
         replyDraftId: null,
+        draftSentAt: null,
         errorMessage: null,
       });
     }
@@ -315,6 +319,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       autoSyncEnabled: true,
       lastSyncError: true,
       lastSyncAt: true,
+      grantedScopes: true,
     },
   });
 
@@ -344,9 +349,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     priorContact,
     syncInProgress,
     onboardingChecklist,
+    shop,
     connections: connections.map((c) => ({
       ...c,
       lastSyncAt: c.lastSyncAt?.toISOString() ?? null,
+      canSend: canSend(c),
     })),
     threadCountsByMailbox,
     mailConnectionId: mailConnectionId ?? null,
@@ -388,7 +395,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
   const shop = session.shop;
   const formData = await request.formData();
-  const intent = String(formData.get("_action") ?? "");
+  const intent = String(formData.get("_action") || formData.get("intent") || "");
 
   if (intent === "disconnect") {
     const mailConnectionId = String(formData.get("mailConnectionId") ?? "");
@@ -537,6 +544,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return handleUpdateClassification({ shop, admin, threadId, edit, orderChangeType, orderId, candidateJson, orderNumber });
   }
 
+  if (intent === "send") {
+    const mailConnectionId = String(formData.get("mailConnectionId") ?? "");
+    const draftId = String(formData.get("draftId") ?? "");
+    if (!mailConnectionId || !draftId) {
+      return { error: "missing_params", report: null, disconnected: false, reanalyzed: null, refined: null };
+    }
+    return handleSendDraft({ shop, mailConnectionId, draftId });
+  }
+
   return { report: null, disconnected: false, reanalyzed: null, refined: null };
 };
 
@@ -638,6 +654,7 @@ interface SerializedEmail {
     threadAttachmentRef: string | null;
   }>;
   replyDraftId: string | null;
+  draftSentAt: string | null;
   errorMessage: string | null;
 }
 
@@ -681,6 +698,7 @@ function serializeEmail(row: {
     bcc: string | null;
     subject: string | null;
     replyMode: string;
+    sentAt?: Date | null;
     attachments: Array<{
       id: string;
       fileName: string;
@@ -726,6 +744,7 @@ function serializeEmail(row: {
     draftReplyMode: rd?.replyMode ?? "thread",
     draftAttachments: rd?.attachments ?? [],
     replyDraftId: rd?.id ?? null,
+    draftSentAt: rd?.sentAt ? rd.sentAt.toISOString() : null,
     errorMessage: row.errorMessage,
   };
 }
@@ -2550,6 +2569,7 @@ function ThreadDetailPanel({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  const loaderData = useLoaderData<typeof loader>();
   const { latest, emails } = thread;
   const noReplyNeeded = latest.analysisResult?.conversation?.noReplyNeeded === true;
   const reanalyzeFetcher = useFetcher();
@@ -2796,6 +2816,24 @@ function ThreadDetailPanel({
             </reanalyzeFetcher.Form>
           )}
           {isGenerating && <span style={{ fontSize: "0.8125rem", color: "var(--ui-slate-500)", alignSelf: "center" }}>{t("inbox.generating")}</span>}
+          {(() => {
+            const connection = loaderData.connections.find(
+              (c) => c.id === latest.mailConnectionId,
+            );
+            if (!connection || !latest.replyDraftId) return null;
+            return (
+              <SendButton
+                shop={loaderData.shop}
+                mailConnectionId={connection.id}
+                draftId={latest.replyDraftId}
+                customerEmail={latest.fromAddress}
+                canSend={connection.canSend}
+                reauthUrl={`/app/mail-auth/reauth?mailConnectionId=${connection.id}&returnTo=/app/inbox?thread=${latest.canonicalThreadId ?? ""}`}
+                initialSentAt={latest.draftSentAt ?? null}
+                disabled={!latest.draftReply}
+              />
+            );
+          })()}
         </div>
       </div>
 
