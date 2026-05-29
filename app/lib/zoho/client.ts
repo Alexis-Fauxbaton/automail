@@ -1,6 +1,6 @@
 import prisma from "../../db.server";
 import { getZohoAccessTokenByConnection, getZohoApiDomain } from "./auth";
-import type { MailAttachment, MailMessage, MailClient } from "../mail/types";
+import type { MailAttachment, MailMessage, MailClient, SendPayload, SendResult } from "../mail/types";
 import type { MailConnection } from "@prisma/client";
 
 // Reuse cleanHtml and decodeHtmlEntities from gmail client
@@ -391,6 +391,69 @@ export async function createZohoClient(connection: MailConnection): Promise<Mail
         console.error("[zoho] getThreadMessages failed, falling back:", err);
         return [];
       }
+    },
+
+    async send(payload: SendPayload): Promise<SendResult> {
+      const token = await getZohoAccessTokenByConnection(connection);
+      const domain = getApiDomain();
+      const body: Record<string, unknown> = {
+        fromAddress: payload.fromName
+          ? `${payload.fromName} <${payload.fromEmail}>`
+          : payload.fromEmail,
+        toAddress: payload.toEmails.join(","),
+        subject: payload.subject,
+        content: payload.bodyText,
+        mailFormat: "plaintext",
+      };
+      if (payload.ccEmails?.length) body.ccAddress = payload.ccEmails.join(",");
+      if (payload.inReplyToRfcId) body.inReplyTo = `<${payload.inReplyToRfcId}>`;
+
+      const res = await fetch(
+        `https://${domain}/api/accounts/${accountId}/messages`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Zoho-oauthtoken ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(30_000),
+        },
+      );
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Zoho send failed: ${res.status} ${text}`);
+      }
+      const data = await res.json() as { data?: { messageId?: unknown } };
+      // Zoho returns: { status: { code, description }, data: { messageId, ... } }
+      const internalId = String(data?.data?.messageId ?? "");
+      if (!internalId) {
+        throw new Error(
+          `Zoho send: response missing messageId — body: ${JSON.stringify(data).slice(0, 200)}`,
+        );
+      }
+      // Zoho doesn't echo the RFC Message-ID in the send response. Fall back to
+      // our pre-generated rfcMessageId; sync-side dedup will reconcile if Zoho
+      // silently rewrote it.
+      return { externalMessageId: internalId, rfcMessageId: payload.rfcMessageId };
+    },
+
+    async findSentByRfcMessageId(rfcMessageId: string): Promise<SendResult | null> {
+      const token = await getZohoAccessTokenByConnection(connection);
+      const domain = getApiDomain();
+      // Zoho search syntax for RFC Message-ID match: messageId:<id>
+      const url =
+        `https://${domain}/api/accounts/${accountId}/messages/search` +
+        `?searchKey=${encodeURIComponent(`messageId:${rfcMessageId}`)}&limit=1`;
+      const res = await fetch(url, {
+        headers: { Authorization: `Zoho-oauthtoken ${token}` },
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!res.ok) return null;
+      const data = await res.json() as { data?: Array<{ messageId?: unknown }> };
+      const msg = data?.data?.[0];
+      if (!msg?.messageId) return null;
+      return { externalMessageId: String(msg.messageId), rfcMessageId };
     },
   };
   return client;
