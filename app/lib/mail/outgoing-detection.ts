@@ -132,6 +132,14 @@ async function selfHealMisattributedOutgoing(
   if (allowList.size === 0) return 0;
 
   const allow = Array.from(allowList);
+  // Self-heal sets status to 'ingested' and clears analysis state. The
+  // emails will NOT be auto-re-classified by the next normal sync (that
+  // pipeline only processes newly-fetched messageIds), but they remain
+  // eligible for `refreshStaleAnalysesForShop` once their lastAnalyzedAt
+  // ages — which is fine for backfill but slow for hot threads.
+  // The metric `outgoing_self_heal_total` (incremented below) is the
+  // ops signal: if it stays > 0 across multiple ticks for the same shop,
+  // a `reclassify` job should be enqueued manually to force re-analysis.
   const fixed = await prisma.$executeRaw`
     UPDATE "IncomingEmail"
     SET "processingStatus" = 'ingested',

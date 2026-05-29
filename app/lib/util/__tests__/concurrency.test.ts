@@ -15,11 +15,24 @@ describe("semaphore under load", () => {
     const sem = createSemaphore(MAX);
     let inFlight = 0;
     let peak = 0;
+    // Read the semaphore's own counter inside the critical section so a
+    // buggy implementation that lets more than MAX run cannot pass just
+    // because the local `inFlight` increment landed too late.
+    let semPeak = 0;
+    const semInFlightSamples: number[] = [];
 
     async function worker() {
       const release = await sem.acquire();
       inFlight++;
       peak = Math.max(peak, inFlight);
+      const semNow = sem.stats().inFlight;
+      semPeak = Math.max(semPeak, semNow);
+      semInFlightSamples.push(semNow);
+      // Stronger invariant: per-worker assertion catches a violation as it
+      // happens, not just at the end. A buggy semaphore that briefly
+      // grants 10 leases and then drains back to 0 would otherwise pass
+      // the final-state checks.
+      expect(semNow).toBeLessThanOrEqual(MAX);
       // Tiny async pause so multiple workers genuinely overlap.
       await new Promise((r) => setTimeout(r, 1));
       inFlight--;
@@ -28,9 +41,14 @@ describe("semaphore under load", () => {
 
     await Promise.all(Array.from({ length: 100 }, () => worker()));
     expect(peak).toBeLessThanOrEqual(MAX);
+    expect(semPeak).toBeLessThanOrEqual(MAX);
     expect(inFlight).toBe(0);
     expect(sem.stats().inFlight).toBe(0);
     expect(sem.stats().queued).toBe(0);
+    // Workload should saturate the semaphore at some point — if peak stays
+    // at 1 the test is silently degenerate (e.g. setTimeout(0) batched all
+    // resolutions on the same microtask tick).
+    expect(semPeak).toBeGreaterThan(1);
   });
 
   it("processes all 100 acquirers eventually (no starvation / deadlock)", async () => {

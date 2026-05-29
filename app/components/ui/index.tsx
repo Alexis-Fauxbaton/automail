@@ -1,5 +1,5 @@
 /* eslint-disable react/no-unknown-property */
-import { Fragment } from "react";
+import { Fragment, useMemo } from "react";
 import type { CSSProperties, ReactNode, SVGProps } from "react";
 
 // ---------------------------------------------------------------------------
@@ -431,8 +431,16 @@ export function HeatMap({
   const dowLabels = ["Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"];
   // Display order: Mon first
   const dowOrder = [1, 2, 3, 4, 5, 6, 0];
-  const cellMap = new Map(cells.map((c) => [`${c.dow}-${c.hour}`, c.count]));
-  const max = maxCount ?? Math.max(1, ...cells.map((c) => c.count));
+  // Memoize the lookup Map so unrelated parent re-renders don't reallocate
+  // 168 entries on each pass. cells is the only relevant dependency.
+  const cellMap = useMemo(
+    () => new Map(cells.map((c) => [`${c.dow}-${c.hour}`, c.count])),
+    [cells],
+  );
+  const max = useMemo(
+    () => maxCount ?? Math.max(1, ...cells.map((c) => c.count)),
+    [cells, maxCount],
+  );
 
   return (
     <div style={{ overflowX: "auto" }}>

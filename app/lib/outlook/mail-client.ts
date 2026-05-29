@@ -9,12 +9,16 @@ import {
 } from "./client";
 import prisma from "../../db.server";
 
+// One day in milliseconds — shared by listRecentMessages default windows
+// and any caller computing "X days ago" bounds.
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
 export async function createOutlookClient(connection: MailConnection): Promise<MailClient> {
-  const { id: connectionId, shop } = connection;
+  const { id: connectionId } = connection;
 
   return {
     async listRecentMessages(opts) {
-      const afterDate = opts.afterDate ?? new Date(Date.now() - 7 * 24 * 3600_000);
+      const afterDate = opts.afterDate ?? new Date(Date.now() - 7 * MS_PER_DAY);
       const messages = await fetchHistoricalMessages(connectionId, afterDate);
       const limit = opts.maxResults ?? 100;
       return messages.slice(0, limit).map((m) => m.id);
@@ -35,7 +39,9 @@ export async function createOutlookClient(connection: MailConnection): Promise<M
         return { messageIds: [], latestCursor: null };
       }
 
-      if (result.nextDeltaLink) {
+      // Explicit `!== null` so an accidental empty-string deltaLink from a
+      // provider quirk doesn't get persisted as a non-null token.
+      if (result.nextDeltaLink !== null) {
         await prisma.mailConnection.update({
           where: { id: connectionId },
           data: { deltaToken: result.nextDeltaLink },
@@ -50,7 +56,10 @@ export async function createOutlookClient(connection: MailConnection): Promise<M
 
     async getSyncCursor() {
       const conn = await prisma.mailConnection.findUnique({ where: { id: connectionId } });
-      if (conn?.deltaToken) return conn.deltaToken;
+      // Explicit guard so a deleted-mid-sync row doesn't silently fall
+      // through to an extra Graph round-trip.
+      if (!conn) return null;
+      if (conn.deltaToken) return conn.deltaToken;
       return getCurrentDeltaLink(connectionId);
     },
 

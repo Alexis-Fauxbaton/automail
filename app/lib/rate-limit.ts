@@ -94,8 +94,14 @@ export async function pruneOldRateLimitBuckets(opts: {
 } = {}): Promise<void> {
   const batchSize = opts.batchSize ?? 1000;
   const maxBatches = opts.maxBatches ?? 5;
-  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const cutoffMs = Date.now() - 24 * 60 * 60 * 1000;
   for (let i = 0; i < maxBatches; i++) {
+    // Single atomic delete with the freshness filter re-applied at delete
+    // time. Without this, a row that was stale at SELECT could become
+    // fresh again (a concurrent checkRateLimit having just hit it) by the
+    // time the DELETE fires — we'd then wipe a live rate-limit entry.
+    // The extra `windowStart < cutoff` filter inside DELETE prevents that.
+    const cutoff = new Date(cutoffMs);
     const stale = await prisma.rateLimitBucket.findMany({
       where: { windowStart: { lt: cutoff } },
       take: batchSize,
@@ -103,7 +109,10 @@ export async function pruneOldRateLimitBuckets(opts: {
     });
     if (stale.length === 0) return;
     await prisma.rateLimitBucket.deleteMany({
-      where: { OR: stale.map((s) => ({ key: s.key, kind: s.kind })) },
+      where: {
+        windowStart: { lt: cutoff },
+        OR: stale.map((s) => ({ key: s.key, kind: s.kind })),
+      },
     });
     if (stale.length < batchSize) return;
   }

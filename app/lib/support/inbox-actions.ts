@@ -266,7 +266,8 @@ export async function handleBackfill(params: {
   days: number;
 }) {
   const { shop, mailConnectionId, days } = params;
-  const afterDate = new Date(Date.now() - Math.max(1, days) * 24 * 3600_000);
+  const MS_PER_DAY = 24 * 60 * 60 * 1000;
+  const afterDate = new Date(Date.now() - Math.max(1, days) * MS_PER_DAY);
   await enqueueJob({ shop, kind: "backfill", mailConnectionId, params: { afterDateIso: afterDate.toISOString() } });
   return {
     syncStarted: true,

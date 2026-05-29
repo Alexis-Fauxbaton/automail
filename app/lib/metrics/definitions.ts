@@ -29,6 +29,16 @@ export const autoSyncLeader = metrics.gauge(
   "1 when this worker holds the leader advisory lock, 0 otherwise.",
 );
 
+// --- Boot health ---
+// Set to 1 if the production boot detected missing/insecure env vars
+// (METRICS_LABEL_SALT, TRUSTED_PROXY, METRICS_TOKEN length). Useful for
+// dashboards to flag a "running but degraded" instance without the operator
+// having to grep stdout for [BOOT_DEGRADED] messages.
+export const bootDegraded = metrics.gauge(
+  "boot_degraded",
+  "1 when the process booted with one or more BOOT_DEGRADED warnings; 0 when fully configured.",
+);
+
 // --- LLM (OpenAI) ---
 export const llmCallsTotal = metrics.counter(
   "llm_calls_total",
