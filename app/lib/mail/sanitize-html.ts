@@ -1,5 +1,27 @@
 import sanitizeHtml from "sanitize-html";
 
+/**
+ * Strip all HTML tags from a string, returning plain text. Used to derive
+ * a bodyText snippet from an HTML message body (e.g. pre-emptive outgoing
+ * insert, where the merchant authored the body in HTML).
+ *
+ * `<br>` and `</p>` produce newlines for readability of the resulting
+ * plain text. Other tags are dropped, HTML entities are decoded.
+ */
+export function htmlToPlainText(html: string): string {
+  if (!html) return "";
+  // Insert newlines at <br>, </p>, </div>, </li> before stripping so the
+  // plain-text result preserves the structural breaks.
+  const withBreaks = html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|h[1-6])>/gi, "\n")
+    .replace(/<\/?(ul|ol)[^>]*>/gi, "\n");
+  return sanitizeHtml(withBreaks, { allowedTags: [], allowedAttributes: {} })
+    // sanitize-html keeps the original whitespace; collapse 3+ newlines.
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 export interface AttachmentForCidMap {
   id: string;
   contentId: string | null;

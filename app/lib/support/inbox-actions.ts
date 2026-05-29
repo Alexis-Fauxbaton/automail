@@ -2,6 +2,7 @@ import prisma from "../../db.server";
 import { canSend } from "../mail/scopes";
 import { createMailClient } from "../mail/client-factory";
 import { assembleRfc822 } from "../mail/assemble-rfc822";
+import { htmlToPlainText } from "../mail/sanitize-html";
 import { deleteConnection } from "../gmail/auth";
 import {
   reanalyzeEmail,
@@ -1069,7 +1070,11 @@ export async function handleSendDraft(params: {
         // IncomingEmail has no toAddresses column — recipient is implied by
         // the thread's canonicalThreadId (customer side).
         subject: payload.subject,
-        bodyText: payload.bodyText,
+        // payload.bodyText is HTML (assembleRfc822 produces HTML). Store it
+        // in bodyHtml so the inbox preview renders it natively; derive a
+        // plain-text fallback for snippets/search/older UI fallbacks.
+        bodyHtml: payload.bodyText,
+        bodyText: htmlToPlainText(payload.bodyText),
         receivedAt: now,
         canonicalThreadId: draft.email.canonicalThreadId!,
         processingStatus: "outgoing",
@@ -1193,7 +1198,8 @@ async function runFakeSendForInternalShop(params: {
         rfcReferences: payload.references,
         fromAddress: conn.email,
         subject: payload.subject,
-        bodyText: payload.bodyText,
+        bodyHtml: payload.bodyText,
+        bodyText: htmlToPlainText(payload.bodyText),
         receivedAt: now,
         canonicalThreadId: draft.email.canonicalThreadId!,
         processingStatus: "outgoing",
