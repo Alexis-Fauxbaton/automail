@@ -556,5 +556,15 @@
     "limitReachedBody": "You have reached the maximum number of mailboxes for your current plan. Upgrade to Pro to connect more.",
     "upgradeCta": "Upgrade to Pro",
     "softPauseBanner": "All {{pausedCount}} of your mailboxes have been automatically paused following a plan change. Your plan now allows {{limit}} mailbox. Resume the mailboxes you want to keep active."
+  },
+  "mail-auth": {
+    "reauth": {
+      "title": "Enable sending for {{email}} ({{provider}})",
+      "intro": "To send emails from Automail, we need an additional permission from {{provider}}.",
+      "bullet_no_auto": "No automatic sending — you keep full control.",
+      "bullet_each_click": "Every send requires your explicit click.",
+      "bullet_no_extra_read": "We access no emails beyond what you already see.",
+      "continue": "Continue to {{provider}}"
+    }
   }
 }

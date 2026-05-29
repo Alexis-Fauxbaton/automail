@@ -556,5 +556,15 @@
     "limitReachedBody": "Vous avez atteint le nombre maximum de boîtes mail autorisé par votre forfait. Passez au plan Pro pour en connecter davantage.",
     "upgradeCta": "Passer au plan Pro",
     "softPauseBanner": "Vos {{pausedCount}} boîte(s) mail ont été automatiquement mises en pause suite à un changement de forfait. Votre forfait autorise désormais {{limit}} boîte mail. Reprenez les boîtes que vous souhaitez conserver actives."
+  },
+  "mail-auth": {
+    "reauth": {
+      "title": "Activer l'envoi pour {{email}} ({{provider}})",
+      "intro": "Pour pouvoir envoyer des emails depuis Automail, nous avons besoin d'une permission supplémentaire de {{provider}}.",
+      "bullet_no_auto": "Aucun envoi automatique — vous gardez le contrôle total.",
+      "bullet_each_click": "Chaque envoi nécessite votre clic explicite.",
+      "bullet_no_extra_read": "Nous n'accédons à aucun mail au-delà de ce que vous voyez déjà.",
+      "continue": "Continuer vers {{provider}}"
+    }
   }
 }
