@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useFetcher } from "react-router";
+import { useFetcher, Link } from "react-router";
 import { useTranslation } from "react-i18next";
 
 type SendState = "idle" | "pending" | "sent" | "error" | "needs-reauth";
@@ -85,13 +85,17 @@ export default function SendButton(props: {
   }
 
   if (state === "needs-reauth") {
+    // Use react-router Link (not native <a>) so navigation stays in the
+    // embedded Shopify iframe and preserves shop/host/embedded query params.
+    // A native <a> triggers a full reload that drops those params, leading
+    // to a redirect to Shopify auth.
     return (
-      <a
-        href={reauthUrl ?? `/app/mail-auth/reauth?mailConnectionId=${mailConnectionId}`}
+      <Link
+        to={reauthUrl ?? `/app/mail-auth/reauth?mailConnectionId=${mailConnectionId}`}
         style={btnStyle({ variant: "reauth" })}
       >
         🔒 {t("inbox.send.activate")}
-      </a>
+      </Link>
     );
   }
 
