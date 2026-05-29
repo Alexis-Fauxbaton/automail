@@ -44,7 +44,20 @@ export async function upsertReplyDraftBody(
 
     await prisma.replyDraft.update({
       where: { emailId },
-      data: { body: newBody, bodyHistory: updatedHistory },
+      data: {
+        body: newBody,
+        bodyHistory: updatedHistory,
+        // Regenerating after a previous send: clear the send state so the
+        // new draft is treated as fresh (UI shows it, Send button enabled).
+        // The previous send's audit trail lives on the linked IncomingEmail
+        // (sourceMarker="sent_from_app") and the bodyHistory still includes
+        // the prior body we just appended.
+        sentAt: null,
+        sentRfcMessageId: null,
+        sendError: null,
+        sendingStartedAt: null,
+        linkedOutgoingEmailId: null,
+      },
     });
   } else {
     await prisma.replyDraft.create({

@@ -720,6 +720,12 @@ function serializeEmail(row: {
     try { parsed = JSON.parse(row.analysisResult); } catch { /* ignore */ }
   }
   const rd = row.replyDraft ?? null;
+  // Mask sent drafts in the preview: once a draft has been sent (sentAt set),
+  // we treat the email as having NO current draft. The DB row is preserved
+  // (audit, heuristic bucket, linkedOutgoingEmailId), but the UI's editor +
+  // Send button see a blank state — merchant clicks "Générer le brouillon"
+  // to produce a fresh one (upsertReplyDraftBody resets sentAt on update).
+  const draftIsSent = rd?.sentAt != null;
   const history: string[] = Array.isArray(rd?.bodyHistory) ? (rd!.bodyHistory as string[]) : [];
   return {
     id: row.id,
@@ -741,14 +747,16 @@ function serializeEmail(row: {
     processingStatus: row.processingStatus,
     analysisResult: parsed,
     lastAnalyzedAt: row.lastAnalyzedAt ? row.lastAnalyzedAt.toISOString() : null,
-    draftReply: rd?.body ?? null,
-    draftHistory: history,
-    draftCC: rd?.cc ?? null,
-    draftBCC: rd?.bcc ?? null,
-    draftSubject: rd?.subject ?? null,
-    draftReplyMode: rd?.replyMode ?? "thread",
-    draftAttachments: rd?.attachments ?? [],
-    replyDraftId: rd?.id ?? null,
+    draftReply: draftIsSent ? null : (rd?.body ?? null),
+    draftHistory: draftIsSent ? [] : history,
+    draftCC: draftIsSent ? null : (rd?.cc ?? null),
+    draftBCC: draftIsSent ? null : (rd?.bcc ?? null),
+    draftSubject: draftIsSent ? null : (rd?.subject ?? null),
+    draftReplyMode: draftIsSent ? "thread" : (rd?.replyMode ?? "thread"),
+    draftAttachments: draftIsSent ? [] : (rd?.attachments ?? []),
+    replyDraftId: draftIsSent ? null : (rd?.id ?? null),
+    // Keep the sent timestamp so the UI can render a "Envoyé le DATE"
+    // indicator near the Send button area instead of an empty editor.
     draftSentAt: rd?.sentAt ? rd.sentAt.toISOString() : null,
     errorMessage: row.errorMessage,
   };
