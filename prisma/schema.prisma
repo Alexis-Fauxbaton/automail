@@ -63,6 +63,9 @@ model MailConnection {
   // JSON-encoded String[] for cross-DB portability (Prisma's String[] is
   // postgres-only on this version, and the column is small).
   outgoingAliases String  @default("[]")
+  // CSV of OAuth scopes granted at the latest callback (lowercase, comma-separated).
+  // Authoritative source is the provider; this is a cached snapshot for fast canSend checks.
+  grantedScopes String?
   accessToken    String   // encrypted
   refreshToken   String   // encrypted
   tokenExpiry    DateTime
@@ -241,6 +244,8 @@ model IncomingEmail {
   tier2Result      String?  // "support_client" | "probable_non_client" | "incertain"
   isKnownCustomer  Boolean  @default(false)
   processingStatus String   @default("pending") // pending | filtering | classified | analyzed | error
+  // null = ingested by sync; "sent_from_app" = pre-emptive row created by handleSendDraft.
+  sourceMarker String?
   analysisResult   String?  // JSON blob
   // Top-level fields promoted out of analysisResult for cheap SQL
   // queries (dashboards, rule engines, QA). Must stay in sync with
@@ -284,6 +289,7 @@ model IncomingEmail {
   // to a heap scan.
   @@index([shop, processingStatus, lastAnalyzedAt])
   @@index([mailConnectionId])
+  @@index([sourceMarker])
 }
 
 // Attachments and inline images extracted from incoming emails.
@@ -335,8 +341,17 @@ model ReplyDraft {
   /// Timestamp of last heuristic computation.
   heuristicComputedAt  DateTime?
 
+  // --- Email send v1 ---
+  sendingStartedAt      DateTime?
+  sentAt                DateTime?
+  sentRfcMessageId      String?
+  sendError             String?
+  linkedOutgoingEmailId String?
+
   @@index([shop])
   @@index([shop, heuristicBucket, createdAt])
+  @@index([sendingStartedAt])
+  @@index([sentAt])
 }
 
 model DraftAttachment {
@@ -392,6 +407,7 @@ model ThreadStateHistory {
   fromState String?
   toState   String
   changedAt DateTime @default(now())
+  reason    String?  // e.g. "draft_sent", "auto_recompute", "manual_resolve"
 
   thread Thread @relation(fields: [threadId], references: [id], onDelete: Cascade)
 
