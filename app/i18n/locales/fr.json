@@ -547,6 +547,7 @@
     "emptyState": "Aucune boîte mail connectée. Connectez votre première boîte mail pour commencer à analyser vos emails de support.",
     "connectFirst": "Connecter une boîte mail",
     "lastSyncAt": "Dernière synchronisation : {{date}}",
+    "firstSyncInProgress": "Première synchronisation en cours… Cela peut prendre quelques minutes. Cette page se rafraîchit automatiquement.",
     "threadCount_one": "{{count}} conversation",
     "threadCount_other": "{{count}} conversations",
     "statusOk": "Actif",

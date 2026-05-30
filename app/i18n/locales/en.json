@@ -547,6 +547,7 @@
     "emptyState": "No mailbox connected yet. Connect your first mailbox to start analysing support emails.",
     "connectFirst": "Connect a mailbox",
     "lastSyncAt": "Last sync: {{date}}",
+    "firstSyncInProgress": "First sync in progress… This can take a few minutes. This page refreshes automatically.",
     "threadCount_one": "{{count}} conversation",
     "threadCount_other": "{{count}} conversations",
     "statusOk": "Active",

@@ -1,6 +1,6 @@
 import { redirect, type LoaderFunctionArgs, type ActionFunctionArgs } from "react-router";
-import { useLoaderData } from "react-router";
-import { useState } from "react";
+import { useLoaderData, useRevalidator } from "react-router";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { authenticate } from "../shopify.server";
@@ -146,6 +146,20 @@ export default function ConnectionsPage() {
   const [showAdd, setShowAdd] = useState(false);
 
   const allPaused = pausedCount > 0 && pausedCount === connections.length;
+
+  // While any connection is mid-first-sync (no lastSyncAt, no error), poll the
+  // loader every 10 s so the merchant sees the "Sync in progress" badge clear
+  // automatically without manual refresh. Stops as soon as everything is
+  // either synced or in error.
+  const revalidator = useRevalidator();
+  const hasPendingFirstSync = connections.some(
+    (c) => !c.lastSyncAt && !c.lastSyncError,
+  );
+  useEffect(() => {
+    if (!hasPendingFirstSync) return;
+    const interval = setInterval(() => revalidator.revalidate(), 10_000);
+    return () => clearInterval(interval);
+  }, [hasPendingFirstSync, revalidator]);
 
   return (
     <div style={{ padding: "2.5rem 1.5rem 4rem", fontFamily: "system-ui, -apple-system, sans-serif", maxWidth: 720, margin: "0 auto", color: "#0f172a" }}>
