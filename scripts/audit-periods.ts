@@ -2,7 +2,7 @@ import prisma from "../app/db.server.js";
 import {
   getPeriodBounds, getDashboardKpis, getResponseTimeDailyBreakdown,
   getTopIntentsWithPerf, getCurrentThreadStates, getReopenedThreads,
-  getDraftUsageDailyBreakdown, getHeatmap,
+  getHeatmap,
 } from "../app/lib/dashboard-stats.js";
 
 const SHOP = "2ed20e.myshopify.com";
@@ -12,14 +12,13 @@ for (const range of ["24h", "7d", "30d", "90d"]) {
   const b = getPeriodBounds(range, undefined, undefined, NOW);
   console.log(`\n========= ${range} (${b.start.toISOString().slice(0, 10)} → ${b.end.toISOString().slice(0, 10)}) =========`);
 
-  const [kpi, chart, heat, intents, states, reop, drafts] = await Promise.all([
+  const [kpi, chart, heat, intents, states, reop] = await Promise.all([
     getDashboardKpis(SHOP, b.start, b.end, b.prevStart, b.prevEnd),
     getResponseTimeDailyBreakdown(SHOP, b.start, b.end),
     getHeatmap(SHOP, b.start, b.end),
     getTopIntentsWithPerf(SHOP, b.start, b.end, 8),
     getCurrentThreadStates(SHOP),
     getReopenedThreads(SHOP, b.start, b.end, 10),
-    getDraftUsageDailyBreakdown(SHOP, b.start, b.end),
   ]);
 
   // Raw checks
@@ -45,9 +44,8 @@ for (const range of ["24h", "7d", "30d", "90d"]) {
   ];
 
   console.log(`  Volume KPI: ${kpi.volume.count} (prev ${kpi.volume.prevCount}) | Median: ${kpi.responseTime.medianMs ? (kpi.responseTime.medianMs / 3600000).toFixed(1) + "h" : "—"}`);
-  console.log(`  Reopened: ${kpi.reopened.count} | Drafts: ${kpi.draftUsage.asIs}/${kpi.draftUsage.edited}/${kpi.draftUsage.ignored} (sentPct: ${kpi.draftUsage.sentPct ?? "—"})`);
+  console.log(`  Reopened: ${kpi.reopened.count}`);
   console.log(`  Top intents: ${intents.length} | Reopened list: ${reop.length} | Daily chart days: ${chart.length}`);
-  console.log(`  Drafts daily: ${drafts.length} buckets, sum: ${drafts.reduce((s, p) => s + p.as_is + p.edited + p.ignored, 0)}`);
   checks.forEach(([name, pass, val]) => console.log(`  ${pass ? "✓" : "✗"} ${name}: ${val}`));
 }
 

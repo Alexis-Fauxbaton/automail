@@ -11,7 +11,6 @@ import {
   getPeriodBounds,
   getDashboardKpis,
   getResponseTimeDailyBreakdown,
-  getDraftUsageDailyBreakdown,
   getHeatmap,
   getTopIntentsWithPerf,
   getCurrentThreadStates,
@@ -19,7 +18,6 @@ import {
   getAlerts,
   type DashboardKpis,
   type ResponseTimeDailyPoint,
-  type ProductivityDailyPoint,
   type HeatmapCell,
   type IntentPerf,
   type ThreadStateCounts,
@@ -35,7 +33,6 @@ import {
   TopIntentsList,
   ClockIcon,
   RefreshIcon,
-  SparklesIcon,
   MailIcon,
   type AlertItem,
 } from "../components/ui";
@@ -72,7 +69,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const zeroedKpis: DashboardKpis = {
     responseTime: { medianMs: null, p90Ms: null, prevMedianMs: null },
-    draftUsage: { asIs: 0, edited: 0, ignored: 0, pending: 0, sentPct: null, prevSentPct: null },
     reopened: { count: 0, prevCount: 0 },
     volume: { count: 0, prevCount: 0 },
   };
@@ -80,10 +76,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
     open: 0, waiting_customer: 0, waiting_merchant: 0, resolved: 0, no_reply_needed: 0,
   };
 
-  const [kpis, qualityChart, productivityChart, threadStates] = await Promise.all([
+  const [kpis, qualityChart, threadStates] = await Promise.all([
     getDashboardKpis(shop, start, end, prevStart, prevEnd, mailConnectionId).catch(() => zeroedKpis),
     getResponseTimeDailyBreakdown(shop, start, end, mailConnectionId).catch(() => [] as ResponseTimeDailyPoint[]),
-    getDraftUsageDailyBreakdown(shop, start, end).catch(() => [] as ProductivityDailyPoint[]),
     getCurrentThreadStates(shop, mailConnectionId).catch(() => zeroedStates),
   ]);
 
@@ -112,7 +107,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
     connections,
     kpis,
     qualityChart,
-    productivityChart,
     heatmap,
     topIntents: topIntentsAll.slice(0, ent.canViewAdvancedDashboard ? 5 : 3),
     threadStates,
@@ -276,78 +270,6 @@ function QualityChartClient({ data }: { data: ResponseTimeDailyPoint[] }) {
 }
 
 // ---------------------------------------------------------------------------
-// Productivity chart (stacked bars by bucket) — SSR-safe lazy
-// ---------------------------------------------------------------------------
-
-type BucketLabels = { as_is: string; edited: string; ignored: string };
-
-const StackedDailyBars = lazy(() =>
-  import("recharts").then((mod) => ({
-    default: function StackedBarsInner({ data, labels }: { data: ProductivityDailyPoint[]; labels: BucketLabels }) {
-      const {
-        BarChart, Bar, XAxis, YAxis, Tooltip,
-        ResponsiveContainer, CartesianGrid, Legend,
-      } = mod;
-      return (
-        <ResponsiveContainer width="100%" height={260}>
-          <BarChart data={data} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-            <XAxis
-              dataKey="date"
-              tick={{ fontSize: 11, fill: "#64748b" }}
-              tickFormatter={(v: string) => v.slice(5)}
-              axisLine={false}
-              tickLine={false}
-            />
-            <YAxis
-              tick={{ fontSize: 11, fill: "#64748b" }}
-              allowDecimals={false}
-              axisLine={false}
-              tickLine={false}
-            />
-            <Tooltip
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              formatter={(value: any, name: any) => [
-                value,
-                name === "as_is" ? labels.as_is : name === "edited" ? labels.edited : labels.ignored,
-              ]}
-              contentStyle={{ fontSize: 12, borderRadius: 12, border: "1px solid #e2e8f0" }}
-            />
-            <Legend
-              formatter={(v: string) =>
-                v === "as_is" ? labels.as_is : v === "edited" ? labels.edited : labels.ignored
-              }
-              iconSize={10}
-              wrapperStyle={{ fontSize: 12 }}
-            />
-            <Bar dataKey="as_is" stackId="a" fill="#4f46e5" maxBarSize={32} />
-            <Bar dataKey="edited" stackId="a" fill="#a5b4fc" maxBarSize={32} />
-            <Bar dataKey="ignored" stackId="a" fill="#94a3b8" radius={[6, 6, 0, 0]} maxBarSize={32} />
-          </BarChart>
-        </ResponsiveContainer>
-      );
-    },
-  })),
-);
-
-function ProductivityChartClient({ data }: { data: ProductivityDailyPoint[] }) {
-  const [mounted, setMounted] = useState(false);
-  const { t } = useTranslation();
-  useEffect(() => setMounted(true), []);
-  const labels: BucketLabels = {
-    as_is: t("dashboard.draftAsIsLabel"),
-    edited: t("dashboard.draftEditedLabel"),
-    ignored: t("dashboard.draftIgnoredLabel"),
-  };
-  if (!mounted) return <div style={{ height: 260 }} />;
-  return (
-    <Suspense fallback={<div style={{ height: 260 }} />}>
-      <StackedDailyBars data={data} labels={labels} />
-    </Suspense>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Period selector
 // ---------------------------------------------------------------------------
 
@@ -414,7 +336,7 @@ type _Used = DashboardKpis | IntentPerf | ReopenedThread | Alert | HeatmapCell |
 
 export default function Dashboard() {
   const {
-    range, connections, kpis, qualityChart, productivityChart,
+    range, connections, kpis, qualityChart,
     heatmap, topIntents, threadStates, reopened, alerts,
     isAdvancedDashboard,
   } = useLoaderData<typeof loader>();
@@ -428,10 +350,6 @@ export default function Dashboard() {
       : null;
   const reopenVariation = variationLabel(kpis.reopened.count, kpis.reopened.prevCount);
   const volVariation = variationLabel(kpis.volume.count, kpis.volume.prevCount);
-  const draftVariation =
-    kpis.draftUsage.sentPct !== null && kpis.draftUsage.prevSentPct !== null
-      ? variationLabel(kpis.draftUsage.sentPct, kpis.draftUsage.prevSentPct)
-      : null;
 
   // Determine tone (up = good or bad depending on the metric)
   const respTone: "up" | "down" | "neutral" = respVariation
@@ -446,14 +364,6 @@ export default function Dashboard() {
     ? kpis.reopened.count < kpis.reopened.prevCount
       ? "down"
       : "up"
-    : "neutral";
-
-  const draftTone: "up" | "down" | "neutral" = draftVariation
-    ? kpis.draftUsage.sentPct !== null &&
-      kpis.draftUsage.prevSentPct !== null &&
-      kpis.draftUsage.sentPct > kpis.draftUsage.prevSentPct
-      ? "up"
-      : "down"
     : "neutral";
 
   const stateRows: { key: keyof ThreadStateCounts; label: string }[] = [
@@ -548,19 +458,6 @@ export default function Dashboard() {
           helperTone={reopenTone}
         />
         <MetricCard
-          icon={<SparklesIcon />}
-          label={t("dashboard.kpiDraftsSent", { defaultValue: "Drafts utilisés" })}
-          value={kpis.draftUsage.sentPct !== null ? `${kpis.draftUsage.sentPct}%` : "—"}
-          helper={
-            draftVariation
-              ? `${draftVariation} · ${kpis.draftUsage.asIs} ${t("dashboard.draftAsIs")} · ${kpis.draftUsage.edited} ${t("dashboard.draftEdited")} · ${kpis.draftUsage.ignored} ${t("dashboard.draftIgnored")}`
-              : kpis.draftUsage.sentPct !== null
-                ? `${kpis.draftUsage.asIs} ${t("dashboard.draftAsIs")} · ${kpis.draftUsage.edited} ${t("dashboard.draftEdited")} · ${kpis.draftUsage.ignored} ${t("dashboard.draftIgnored")}`
-                : t("dashboard.noData", { defaultValue: "Pas encore de données" })
-          }
-          helperTone={draftTone}
-        />
-        <MetricCard
           icon={<MailIcon />}
           label={t("dashboard.kpiVolume", { defaultValue: "Emails support" })}
           value={String(kpis.volume.count)}
@@ -576,14 +473,6 @@ export default function Dashboard() {
         <div data-testid="chart-quality-service">
           <QualityChartClient data={qualityChart} />
         </div>
-      </Card>
-
-      {/* Productivity chart */}
-      <Card
-        title={t("dashboard.productivityTitle", { defaultValue: "Productivité IA" })}
-        subtitle={t("dashboard.productivitySubtitle", { defaultValue: "Utilisation des drafts générés · calculé heuristiquement" })}
-      >
-        <ProductivityChartClient data={productivityChart} />
       </Card>
 
       {/* Patterns: heatmap + top intents */}

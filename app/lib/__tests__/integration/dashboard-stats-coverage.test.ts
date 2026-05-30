@@ -17,7 +17,6 @@ import {
   getCurrentThreadStates,
   getTopIntentsWithPerf,
   getResponseTimeDailyBreakdown,
-  getDraftUsageDailyBreakdown,
   getReopenedThreads,
   getHeatmap,
   getAlerts,
@@ -60,23 +59,6 @@ async function createIncoming(overrides: {
       processingStatus: overrides.processingStatus ?? "analyzed",
       tier2Result: overrides.tier2Result ?? null,
       detectedIntent: overrides.detectedIntent ?? null,
-    },
-  });
-}
-
-async function createDraft(opts: {
-  emailId: string;
-  bucket: "as_is" | "edited" | "ignored" | null;
-  createdAt: Date;
-}) {
-  return testDb.replyDraft.create({
-    data: {
-      shop: TEST_SHOP,
-      emailId: opts.emailId,
-      body: "draft body",
-      heuristicBucket: opts.bucket,
-      createdAt: opts.createdAt,
-      updatedAt: opts.createdAt,
     },
   });
 }
@@ -307,31 +289,6 @@ describe("Invariants — cross-helper consistency", () => {
     expect(list.length).toBeLessThanOrEqual(kpis.reopened.count);
   });
 
-  it("Daily drafts breakdown sums match getDraftUsageStats buckets", async () => {
-    const { start, end, prevStart, prevEnd } = getPeriodBounds("7d", undefined, undefined, NOW);
-    const t = await createTestThread();
-    for (let i = 0; i < 3; i++) {
-      const e = await createIncoming({
-        threadId: t.id, externalId: `de-${i}`,
-        receivedAt: new Date(start.getTime() + i * 60 * 60 * 1000),
-      });
-      await createDraft({
-        emailId: e.id,
-        bucket: i === 0 ? "as_is" : i === 1 ? "edited" : "ignored",
-        createdAt: new Date(start.getTime() + i * 60 * 60 * 1000),
-      });
-    }
-    const [kpis, daily] = await Promise.all([
-      getDashboardKpis(TEST_SHOP, start, end, prevStart, prevEnd),
-      getDraftUsageDailyBreakdown(TEST_SHOP, start, end),
-    ]);
-    const dailyAsIs = daily.reduce((s, p) => s + p.as_is, 0);
-    const dailyEd = daily.reduce((s, p) => s + p.edited, 0);
-    const dailyIg = daily.reduce((s, p) => s + p.ignored, 0);
-    expect(dailyAsIs).toBe(kpis.draftUsage.asIs);
-    expect(dailyEd).toBe(kpis.draftUsage.edited);
-    expect(dailyIg).toBe(kpis.draftUsage.ignored);
-  });
 });
 
 // ---------------------------------------------------------------------------
