@@ -620,12 +620,31 @@ async function fetchZohoMessageHeaders(
   if (!r.ok) {
     throw new Error(`Zoho /header ${r.status}`);
   }
-  const json = (await r.json()) as { data?: { content?: string } | string };
-  // Zoho sometimes returns data as a string (raw block), sometimes as object.
-  const raw = typeof json.data === "string"
-    ? json.data
-    : json.data?.content ?? "";
-  return parseRfc822Headers(raw);
+  const json = (await r.json()) as {
+    data?: string | { headerContent?: string; content?: string } | Record<string, unknown>;
+  };
+  if (!json.data) return {};
+
+  // Zoho's response shape (confirmed against the EU API):
+  //   data: { headerContent: "<raw RFC822 header block>" }
+  // We also accept data.content (older variants) and a raw-string `data`
+  // for forward compatibility.
+  if (typeof json.data === "string") {
+    return parseRfc822Headers(json.data);
+  }
+  const d = json.data as { headerContent?: string; content?: string };
+  if (typeof d.headerContent === "string") {
+    return parseRfc822Headers(d.headerContent);
+  }
+  if (typeof d.content === "string") {
+    return parseRfc822Headers(d.content);
+  }
+  // Last-resort: data is already an object of header-name → value pairs.
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(json.data as Record<string, unknown>)) {
+    if (typeof v === "string") out[k.toLowerCase()] = v;
+  }
+  return out;
 }
 
 /** Minimal RFC822 header parser: lowercase keys, folded-line support. */
