@@ -63,6 +63,9 @@ model MailConnection {
   // JSON-encoded String[] for cross-DB portability (Prisma's String[] is
   // postgres-only on this version, and the column is small).
   outgoingAliases String  @default("[]")
+  // CSV of OAuth scopes granted at the latest callback (lowercase, comma-separated).
+  // Authoritative source is the provider; this is a cached snapshot for fast canSend checks.
+  grantedScopes String?
   accessToken    String   // encrypted
   refreshToken   String   // encrypted
   tokenExpiry    DateTime
@@ -156,6 +159,12 @@ model Thread {
   // than a confusing gap. `redactedAt` non-null signals tombstone state.
   redactedAt     DateTime?
   redactedReason String?  // e.g. "gdpr_customer_request"
+  // --- Stale-classify cron gate ------------------------------------
+  // Set to NOW() immediately before each Tier 2 LLM call (even if the call
+  // crashes afterwards). The hourly enqueueClassifyStaleUnknown cron skips
+  // threads where this is within the last 24 h, preventing quota burn during
+  // LLM outages. null = never attempted.
+  lastClassifyAttemptAt DateTime?
   // --- Billing (per-conversation) -----------------------------------
   // Timestamp of the first successful Tier 3 analysis on this thread.
   // Used by the billing counter `markThreadAnalyzedIfFirst` to guarantee
@@ -185,6 +194,7 @@ model Thread {
   @@index([shop, provider, subjectKey])
   @@index([shop, analyzedAt])
   @@index([mailConnectionId])
+  @@index([supportNature, lastClassifyAttemptAt])
 }
 
 // Mapping from a provider-native threadId to the canonical Thread.id.
@@ -234,6 +244,8 @@ model IncomingEmail {
   tier2Result      String?  // "support_client" | "probable_non_client" | "incertain"
   isKnownCustomer  Boolean  @default(false)
   processingStatus String   @default("pending") // pending | filtering | classified | analyzed | error
+  // null = ingested by sync; "sent_from_app" = pre-emptive row created by handleSendDraft.
+  sourceMarker String?
   analysisResult   String?  // JSON blob
   // Top-level fields promoted out of analysisResult for cheap SQL
   // queries (dashboards, rule engines, QA). Must stay in sync with
@@ -277,6 +289,7 @@ model IncomingEmail {
   // to a heap scan.
   @@index([shop, processingStatus, lastAnalyzedAt])
   @@index([mailConnectionId])
+  @@index([sourceMarker])
 }
 
 // Attachments and inline images extracted from incoming emails.
@@ -328,8 +341,17 @@ model ReplyDraft {
   /// Timestamp of last heuristic computation.
   heuristicComputedAt  DateTime?
 
+  // --- Email send v1 ---
+  sendingStartedAt      DateTime?
+  sentAt                DateTime?
+  sentRfcMessageId      String?
+  sendError             String?
+  linkedOutgoingEmailId String?
+
   @@index([shop])
   @@index([shop, heuristicBucket, createdAt])
+  @@index([sendingStartedAt])
+  @@index([sentAt])
 }
 
 model DraftAttachment {
@@ -385,6 +407,7 @@ model ThreadStateHistory {
   fromState String?
   toState   String
   changedAt DateTime @default(now())
+  reason    String?  // e.g. "draft_sent", "auto_recompute", "manual_resolve"
 
   thread Thread @relation(fields: [threadId], references: [id], onDelete: Cascade)
 

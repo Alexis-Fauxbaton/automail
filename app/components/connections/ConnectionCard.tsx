@@ -49,6 +49,26 @@ export default function ConnectionCard(props: {
         <StatusPill status={status} />
       </div>
 
+      {/* First-sync banner: shown when the connection was just created and
+          the background sync job hasn't completed yet (no lastSyncAt, no error).
+          Auto-refresh suggestion is in the i18n copy. */}
+      {!connection.lastSyncAt && !connection.lastSyncError && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8,
+          padding: "8px 12px", marginBottom: 12,
+          background: "#eef6ff", border: "1px solid #b8d4f5",
+          borderRadius: 6, fontSize: 13, color: "#1e40af",
+        }}>
+          <span style={{
+            display: "inline-block", width: 12, height: 12, borderRadius: "50%",
+            border: "2px solid #1e40af", borderTopColor: "transparent",
+            animation: "spin 1s linear infinite",
+          }} aria-hidden />
+          <span>{t("connections.firstSyncInProgress")}</span>
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+      )}
+
       {/* Meta */}
       <div style={{ fontSize: 13, color: "#64748b", marginBottom: 14, display: "flex", flexDirection: "column", gap: 3 }}>
         {connection.lastSyncAt && (

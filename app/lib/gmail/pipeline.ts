@@ -34,7 +34,6 @@ import {
 } from "../mail/outgoing-detection";
 import { upsertReplyDraftBody } from "../support/reply-draft";
 import { generateLLMDraft } from "../support/llm-draft";
-import { evaluateThread } from "../support/draft-usage-heuristic";
 import { getSettings } from "../support/settings";
 import { createLogger } from "../log/logger";
 import { isWithinActiveZone, ACTIVE_ZONE_HOURS } from "../billing/catchup";
@@ -462,11 +461,6 @@ export async function ingestAndPrefilter(
       await evaluateHistoryStatus(canonicalThreadId, shop);
     } catch (err) {
       log.error({ err }, "state recompute (outgoing) failed");
-    }
-    try {
-      await evaluateThread(canonicalThreadId, shop);
-    } catch (err) {
-      log.error({ err }, "draft-usage heuristic failed");
     }
     return;
   }

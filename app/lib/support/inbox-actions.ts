@@ -1,4 +1,8 @@
 import prisma from "../../db.server";
+import { canSend } from "../mail/scopes";
+import { createMailClient } from "../mail/client-factory";
+import { assembleRfc822 } from "../mail/assemble-rfc822";
+import { htmlToPlainText } from "../mail/sanitize-html";
 import { deleteConnection } from "../gmail/auth";
 import {
   reanalyzeEmail,
@@ -927,4 +931,309 @@ export async function handleGenerateDraft(params: {
     admin: params.admin,
     emailId: params.emailId,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Email Send v1
+// ---------------------------------------------------------------------------
+
+export type SendDraftResult =
+  | { sent: true; sentAt: Date; rfcMessageId: string }
+  | { error: string }
+  | { needsReauth: true; reauthUrl: string };
+
+/**
+ * Send a draft via the merchant's connected mailbox.
+ *
+ * Safety properties:
+ *  - Atomic CAS on `sendingStartedAt` prevents double-send on concurrent
+ *    requests (double-click, retry).
+ *  - `findSentByRfcMessageId` check avoids re-sending when a previous attempt
+ *    timed out after the provider accepted the message.
+ *  - Pre-emptive `IncomingEmail` insert (sourceMarker="sent_from_app") lets the
+ *    outgoing-detection layer ignore the synced copy when it arrives.
+ *  - Transaction wraps the post-send DB writes so partial failure is impossible.
+ */
+export async function handleSendDraft(params: {
+  shop: string;
+  mailConnectionId: string;
+  draftId: string;
+}): Promise<SendDraftResult> {
+  const { shop, mailConnectionId, draftId } = params;
+
+  // 1. Load connection + check send scope
+  const conn = await prisma.mailConnection.findUnique({
+    where: { id: mailConnectionId, shop },
+  });
+  if (!conn) return { error: "connection_not_found" };
+
+  // Safety bypass: SEND_DISABLED_FOR_INTERNAL + isInternal short-circuits the
+  // actual provider API call but runs the entire DB flow with a fake SendResult.
+  // Lets internal shops test the UX/flow without real emails leaving.
+  if (process.env.SEND_DISABLED_FOR_INTERNAL === "true") {
+    const flag = await prisma.shopFlag.findUnique({ where: { shop } });
+    if (flag?.isInternal) {
+      return runFakeSendForInternalShop({ shop, conn, draftId });
+    }
+  }
+
+  if (!canSend(conn)) {
+    return {
+      needsReauth: true,
+      reauthUrl: `/app/mail-auth/reauth?mailConnectionId=${mailConnectionId}`,
+    };
+  }
+
+  // 2. Load draft + thread + original incoming
+  const draft = await prisma.replyDraft.findUnique({
+    where: { id: draftId, shop },
+    include: { email: { include: { thread: true } } },
+  });
+  if (!draft) return { error: "draft_not_found" };
+  if (draft.sentAt) return { error: "already_sent" };
+  if (!draft.email.canonicalThreadId) return { error: "thread_unresolved" };
+  const thread = draft.email.thread!;
+
+  // 3. Atomic CAS: reserve the draft for sending.
+  //    Clears any stale sendError on success so we can re-read it below.
+  const reserved = await prisma.replyDraft.updateMany({
+    where: { id: draftId, sentAt: null, sendingStartedAt: null },
+    data: { sendingStartedAt: new Date(), sendError: null },
+  });
+  if (reserved.count === 0) {
+    return { error: "already_sent_or_sending" };
+  }
+
+  // 4. Assemble RFC822 payload
+  const payload = assembleRfc822({
+    shop,
+    mailbox: { email: conn.email, fromName: "" },
+    customer: {
+      email: draft.email.fromAddress,
+      name: draft.email.fromName ?? "",
+    },
+    originalIncoming: {
+      rfcMessageId: draft.email.rfcMessageId,
+      externalMessageId: draft.email.externalMessageId,
+      receivedAt: draft.email.receivedAt,
+      subject: draft.email.subject,
+      bodyText: draft.email.bodyText,
+    },
+    thread: {
+      references: buildReferencesChain(draft.email.rfcReferences, draft.email.rfcMessageId),
+    },
+    draftBody: draft.body ?? "",
+  });
+
+  // 5. Call the provider.
+  //    When the previous attempt timed out after the provider accepted the
+  //    message (sendError === "send_timeout_released"), check the Sent folder
+  //    first to avoid a double-send. We read `draft.sendError` as loaded
+  //    before step 3 cleared it.
+  let sendResult: { externalMessageId: string; rfcMessageId: string };
+  try {
+    const client = await createMailClient(conn);
+    if (draft.sendError === "send_timeout_released") {
+      const existing = await client.findSentByRfcMessageId(payload.rfcMessageId);
+      if (existing) {
+        sendResult = existing;
+      } else {
+        sendResult = await client.send(payload);
+      }
+    } else {
+      sendResult = await client.send(payload);
+    }
+  } catch (err: any) {
+    // Release the CAS lock and store the error so the merchant can retry.
+    await prisma.replyDraft.update({
+      where: { id: draftId },
+      data: {
+        sendingStartedAt: null,
+        sendError: String(err?.message ?? err).slice(0, 500),
+      },
+    });
+    return { error: `send_failed: ${err?.message ?? err}` };
+  }
+
+  // 6. Insert pre-emptive outgoing IncomingEmail + finalize draft + transition
+  //    thread state — all in a single transaction so partial failure is impossible.
+  const now = new Date();
+  const result = await prisma.$transaction(async (tx) => {
+    const outgoing = await tx.incomingEmail.create({
+      data: {
+        shop,
+        mailConnectionId,
+        externalMessageId: sendResult.externalMessageId,
+        rfcMessageId: sendResult.rfcMessageId,
+        inReplyTo: draft.email.rfcMessageId,
+        rfcReferences: payload.references,
+        fromAddress: conn.email,
+        // IncomingEmail has no toAddresses column — recipient is implied by
+        // the thread's canonicalThreadId (customer side).
+        subject: payload.subject,
+        // payload.bodyText is HTML (assembleRfc822 produces HTML). Store it
+        // in bodyHtml so the inbox preview renders it natively; derive a
+        // plain-text fallback for snippets/search/older UI fallbacks.
+        bodyHtml: payload.bodyText,
+        bodyText: htmlToPlainText(payload.bodyText),
+        receivedAt: now,
+        canonicalThreadId: draft.email.canonicalThreadId!,
+        processingStatus: "outgoing",
+        tier1Result: "outgoing",
+        sourceMarker: "sent_from_app",
+      },
+    });
+
+    const updatedDraft = await tx.replyDraft.update({
+      where: { id: draftId },
+      data: {
+        sentAt: now,
+        sentRfcMessageId: sendResult.rfcMessageId,
+        sendingStartedAt: null,
+        sendError: null,
+        linkedOutgoingEmailId: outgoing.id,
+      },
+    });
+
+    await tx.thread.update({
+      where: { id: draft.email.canonicalThreadId! },
+      data: {
+        operationalState: "waiting_customer",
+        operationalStateUpdatedAt: now,
+      },
+    });
+
+    await tx.threadStateHistory.create({
+      data: {
+        shop,
+        threadId: draft.email.canonicalThreadId!,
+        fromState: thread.operationalState,
+        toState: "waiting_customer",
+        reason: "draft_sent",
+      },
+    });
+
+    return updatedDraft;
+  });
+
+  return {
+    sent: true,
+    sentAt: result.sentAt!,
+    rfcMessageId: result.sentRfcMessageId!,
+  };
+}
+
+function buildReferencesChain(existingRefs: string, latestRfcId: string): string {
+  const refs = existingRefs.trim();
+  if (!refs) return latestRfcId;
+  if (refs.includes(latestRfcId)) return refs;
+  return `${refs} ${latestRfcId}`;
+}
+
+/**
+ * Fake-send path for internal shops when SEND_DISABLED_FOR_INTERNAL=true.
+ * Mirrors the success path of handleSendDraft (CAS, pre-emptive insert,
+ * state transitions) but skips the actual provider API call entirely.
+ * Allows internal testers to validate the UX/flow in prod-pointing dev
+ * without real emails leaving the mailbox.
+ */
+async function runFakeSendForInternalShop(params: {
+  shop: string;
+  conn: Awaited<ReturnType<typeof prisma.mailConnection.findUnique>> & {};
+  draftId: string;
+}): Promise<SendDraftResult> {
+  const { shop, conn, draftId } = params;
+
+  // CAS reserve
+  const reserved = await prisma.replyDraft.updateMany({
+    where: { id: draftId, sentAt: null, sendingStartedAt: null },
+    data: { sendingStartedAt: new Date(), sendError: null },
+  });
+  if (reserved.count === 0) return { error: "already_sent_or_sending" };
+
+  // Load draft + thread + incoming
+  const draft = await prisma.replyDraft.findUnique({
+    where: { id: draftId },
+    include: { email: { include: { thread: true } } },
+  });
+  if (!draft || !draft.email.canonicalThreadId) {
+    await prisma.replyDraft.update({
+      where: { id: draftId },
+      data: { sendingStartedAt: null, sendError: "fake_send_missing_thread" },
+    });
+    return { error: "draft_not_found_or_thread_unresolved" };
+  }
+  const thread = draft.email.thread!;
+
+  // Assemble payload — same as real path
+  const payload = assembleRfc822({
+    shop,
+    mailbox: { email: conn.email, fromName: "" },
+    customer: { email: draft.email.fromAddress, name: draft.email.fromName ?? "" },
+    originalIncoming: {
+      rfcMessageId: draft.email.rfcMessageId,
+      externalMessageId: draft.email.externalMessageId,
+      receivedAt: draft.email.receivedAt,
+      subject: draft.email.subject,
+      bodyText: draft.email.bodyText,
+    },
+    thread: { references: buildReferencesChain(draft.email.rfcReferences, draft.email.rfcMessageId) },
+    draftBody: draft.body ?? "",
+  });
+
+  // Fake the provider response — no API call
+  const fakeResult = {
+    externalMessageId: `fake-internal-${Date.now()}`,
+    rfcMessageId: payload.rfcMessageId,
+  };
+
+  const now = new Date();
+  const result = await prisma.$transaction(async (tx) => {
+    const outgoing = await tx.incomingEmail.create({
+      data: {
+        shop,
+        mailConnectionId: conn.id,
+        externalMessageId: fakeResult.externalMessageId,
+        rfcMessageId: fakeResult.rfcMessageId,
+        inReplyTo: draft.email.rfcMessageId,
+        rfcReferences: payload.references,
+        fromAddress: conn.email,
+        subject: payload.subject,
+        bodyHtml: payload.bodyText,
+        bodyText: htmlToPlainText(payload.bodyText),
+        receivedAt: now,
+        canonicalThreadId: draft.email.canonicalThreadId!,
+        processingStatus: "outgoing",
+        tier1Result: "outgoing",
+        sourceMarker: "sent_from_app",
+      },
+    });
+    const updatedDraft = await tx.replyDraft.update({
+      where: { id: draftId },
+      data: {
+        sentAt: now,
+        sentRfcMessageId: fakeResult.rfcMessageId,
+        sendingStartedAt: null,
+        sendError: null,
+        linkedOutgoingEmailId: outgoing.id,
+      },
+    });
+    await tx.thread.update({
+      where: { id: draft.email.canonicalThreadId! },
+      data: { operationalState: "waiting_customer", operationalStateUpdatedAt: now },
+    });
+    await tx.threadStateHistory.create({
+      data: {
+        shop,
+        threadId: draft.email.canonicalThreadId!,
+        fromState: thread.operationalState,
+        toState: "waiting_customer",
+        reason: "draft_sent_fake_internal",
+      },
+    });
+    return updatedDraft;
+  });
+
+  console.log(`[send] FAKE SEND for internal shop ${shop} draftId=${draftId} (SEND_DISABLED_FOR_INTERNAL=true)`);
+  return { sent: true, sentAt: result.sentAt!, rfcMessageId: result.sentRfcMessageId! };
 }

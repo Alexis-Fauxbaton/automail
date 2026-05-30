@@ -41,7 +41,7 @@ Intent is classified at the **thread level**, not per message. `buildThreadConte
 ## Out of scope
 
 Do not build any of the following unless explicitly requested:
-- Automatic email sending (the merchant always reviews + sends manually)
+- **Auto-send** (sending without user click). User-triggered send IS supported via the "Envoyer" button (v1 shipped 2026-05-29) — see the Email Send section below for details. Auto-send remains out of scope.
 - Automatic refunds
 - Automatic order edits
 - Live chat
@@ -148,6 +148,21 @@ Drafts must always:
 - mention uncertainty when needed
 - avoid overpromising
 - avoid saying anything unsupported by data
+
+## Email Send v1
+
+The merchant can send a draft directly from the inbox via the « Envoyer » button. Implementation specifics:
+
+- **User-triggered only.** Click → 10s cancellable countdown toast → actual API send. No auto-send.
+- **Providers.** Gmail (gmail.send), Outlook (Mail.Send + create-draft/send pattern), Zoho (messages.ALL).
+- **Re-consent JIT.** Existing connections (read-only) trigger a redirect to `/app/mail-auth/reauth` on first Send click — explainer page + provider OAuth → adds the send scope.
+- **Idempotency.** Atomic CAS on `ReplyDraft.sendingStartedAt` blocks double-click. Cleanup cron in auto-sync tick releases stuck drafts after 5 min and sets `sendError = "send_timeout_released"`. Retry path checks the Sent folder via `findSentByRfcMessageId` before re-sending to avoid double-send.
+- **Pre-emptive outgoing insert.** On send success, we INSERT an `IncomingEmail` row immediately with `sourceMarker = "sent_from_app"` and `processingStatus = "outgoing"`. Customer replies arriving before the next sync still reconcile correctly to the same thread. The next sync ingests the real Sent-folder message and dedups via `externalMessageId`.
+- **Post-send state.** Thread `operationalState` → `waiting_customer` immediately, with a `ThreadStateHistory` entry (`reason = "draft_sent"`).
+- **Safety.** Env var `SEND_DISABLED_FOR_INTERNAL=true` + `ShopFlag.isInternal = true` short-circuits the actual provider call but runs the entire DB flow with a fake `SendResult`. UI shows a permanent yellow banner. Production sets this env var to false (or unset).
+- **What's NOT included v1.** HTML body (plain text only), attachments, CC/BCC, scheduled send beyond the 10s client-side delay, "send & resolve" toggle (always waiting_customer), bounce auto-handling, undo-after-send, newer-message-warning.
+
+Reference: [docs/superpowers/specs/2026-05-28-email-send-design.md](docs/superpowers/specs/2026-05-28-email-send-design.md) + [docs/superpowers/plans/2026-05-28-email-send.md](docs/superpowers/plans/2026-05-28-email-send.md)
 
 ## Shopify access rules
 

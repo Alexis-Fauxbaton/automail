@@ -2,6 +2,11 @@
 
 import { Prisma } from "@prisma/client";
 import prisma from "../db.server";
+import {
+  type OpsBucket,
+  classifyMessage,
+  getThreadOpsBucket,
+} from "./support/thread-bucket";
 
 // Timezone used for day bucketing (label display and chart grouping).
 // A mail received at 01:22 local time must not appear on the previous UTC day.
@@ -61,13 +66,10 @@ export function getPeriodBounds(
 // Return types
 // ---------------------------------------------------------------------------
 
-export type ThreadStateCounts = {
-  open: number;
-  waiting_customer: number;
-  waiting_merchant: number;
-  resolved: number;
-  no_reply_needed: number;
-};
+// Inbox bucket counts — same buckets the merchant sees in the inbox tabs.
+// Computed via the shared bucket lib so dashboard ↔ inbox numbers always
+// agree. See [app/lib/support/thread-bucket.ts](./support/thread-bucket.ts).
+export type InboxBucketCounts = Record<OpsBucket, number>;
 
 export type ResponseTimeStats = {
   medianMs: number | null;
@@ -79,22 +81,6 @@ export type ResponseTimeDailyPoint = {
   date: string;        // "YYYY-MM-DD"
   support: number;     // support thread count that day
   medianMs: number | null;
-};
-
-export type DraftUsageStats = {
-  asIs: number;
-  edited: number;
-  ignored: number;
-  pending: number;
-  sentPct: number | null;     // (asIs + edited) / (asIs + edited + ignored) * 100, null if denom=0
-  prevSentPct: number | null;
-};
-
-export type ProductivityDailyPoint = {
-  date: string;    // "YYYY-MM-DD"
-  as_is: number;
-  edited: number;
-  ignored: number;
 };
 
 export type HeatmapCell = {
@@ -127,7 +113,6 @@ export type Alert = {
 export type DashboardKpis = {
   responseTime: ResponseTimeStats;
   reopened: { count: number; prevCount: number };
-  draftUsage: DraftUsageStats;
   volume: { count: number; prevCount: number };
 };
 
@@ -135,37 +120,91 @@ export type DashboardKpis = {
 // Query functions
 // ---------------------------------------------------------------------------
 
-export async function getCurrentThreadStates(
+export async function getInboxBucketCounts(
   shop: string,
   mailConnectionId?: string,
-): Promise<ThreadStateCounts> {
-  // `messages: { some: {} }` exclut les Thread fantômes : un resync supprime
-  // les IncomingEmail mais conserve les Thread (pour préserver
-  // operationalState manuel, drafts, manualOverrides). Les threads dont
-  // tous les mails ont été purgés et jamais re-rattachés n'ont plus de
-  // conversation à compter.
-  const rows = await prisma.thread.groupBy({
-    by: ["operationalState"],
+): Promise<InboxBucketCounts> {
+  // `messages: { some: {} }` excludes phantom threads: a resync purges
+  // IncomingEmail rows but keeps the Thread (to preserve manual
+  // operationalState, drafts, overrides). Threads with zero messages have
+  // nothing to bucket.
+  const threads = await prisma.thread.findMany({
     where: {
       shop,
       ...(mailConnectionId ? { mailConnectionId } : {}),
-      supportNature: { not: "non_support" },
       messages: { some: {} },
     },
-    _count: { _all: true },
+    select: {
+      supportNature: true,
+      operationalState: true,
+      analyzedAt: true,
+      dismissedFromAnalyzeAt: true,
+      mailConnection: { select: { email: true } },
+      messages: {
+        orderBy: { receivedAt: "desc" },
+        // Load up to 5 most recent messages so we can find the most-recently
+        // classified one (the latest may be an outgoing reply with no tier
+        // results). 5 covers all realistic thread tails.
+        take: 5,
+        select: {
+          processingStatus: true,
+          fromAddress: true,
+          receivedAt: true,
+          tier1Result: true,
+          tier2Result: true,
+          analysisResult: true,
+        },
+      },
+    },
   });
 
-  const counts: ThreadStateCounts = {
-    open: 0,
+  const counts: InboxBucketCounts = {
+    to_process: 0,
+    to_analyze: 0,
     waiting_customer: 0,
     waiting_merchant: 0,
     resolved: 0,
-    no_reply_needed: 0,
+    other: 0,
   };
 
-  for (const row of rows) {
-    const state = row.operationalState as keyof ThreadStateCounts;
-    if (state in counts) counts[state] = row._count._all;
+  for (const t of threads) {
+    const latest = t.messages[0];
+    if (!latest) continue;
+
+    // Find the most-recently-CLASSIFIED message for thread classification
+    // (outgoing messages have no tier results).
+    const classifiedMsg = t.messages.find((m) => m.tier1Result || m.tier2Result) ?? latest;
+
+    let noReplyNeeded = false;
+    if (latest.analysisResult) {
+      try {
+        const parsed = JSON.parse(latest.analysisResult) as {
+          conversation?: { noReplyNeeded?: boolean };
+        };
+        noReplyNeeded = parsed?.conversation?.noReplyNeeded === true;
+      } catch {
+        /* ignore */
+      }
+    }
+
+    const bucket = getThreadOpsBucket({
+      latest: {
+        processingStatus: latest.processingStatus,
+        fromAddress: latest.fromAddress,
+        receivedAt: latest.receivedAt,
+      },
+      classification: classifyMessage(classifiedMsg),
+      noReplyNeeded,
+      state: {
+        supportNature: t.supportNature,
+        operationalState: t.operationalState,
+        analyzedAt: t.analyzedAt,
+        dismissedFromAnalyzeAt: t.dismissedFromAnalyzeAt,
+      },
+      connectedEmail: t.mailConnection?.email ?? null,
+    });
+
+    counts[bucket]++;
   }
 
   return counts;
@@ -337,94 +376,6 @@ export async function getResponseTimeDailyBreakdown(
 }
 
 // ---------------------------------------------------------------------------
-// Draft usage stats
-// ---------------------------------------------------------------------------
-
-async function _fetchDraftBuckets(shop: string, start: Date, end: Date) {
-  const rows = await prisma.replyDraft.groupBy({
-    by: ["heuristicBucket"],
-    where: { shop, createdAt: { gte: start, lt: end } },
-    _count: { _all: true },
-  });
-  const counts = { asIs: 0, edited: 0, ignored: 0, pending: 0 };
-  for (const row of rows) {
-    const bucket = row.heuristicBucket ?? "pending";
-    if (bucket === "as_is") counts.asIs = row._count._all;
-    else if (bucket === "edited") counts.edited = row._count._all;
-    else if (bucket === "ignored") counts.ignored = row._count._all;
-    else counts.pending += row._count._all;
-  }
-  return counts;
-}
-
-function _draftSentPct(c: { asIs: number; edited: number; ignored: number }): number | null {
-  const denom = c.asIs + c.edited + c.ignored;
-  if (denom === 0) return null;
-  return Math.round(((c.asIs + c.edited) / denom) * 100);
-}
-
-export async function getDraftUsageStats(
-  shop: string,
-  start: Date,
-  end: Date,
-  prevStart: Date,
-  prevEnd: Date,
-): Promise<DraftUsageStats> {
-  const [cur, prev] = await Promise.all([
-    _fetchDraftBuckets(shop, start, end),
-    _fetchDraftBuckets(shop, prevStart, prevEnd),
-  ]);
-  return {
-    ...cur,
-    sentPct: _draftSentPct(cur),
-    prevSentPct: _draftSentPct(prev),
-  };
-}
-
-export async function getDraftUsageDailyBreakdown(
-  shop: string,
-  start: Date,
-  end: Date,
-): Promise<ProductivityDailyPoint[]> {
-  type Row = { day: Date; bucket: string | null; count: bigint };
-  const rows = await prisma.$queryRaw<Row[]>`
-    SELECT
-      DATE_TRUNC('day', "createdAt" AT TIME ZONE ${TZ})::date AS day,
-      "heuristicBucket" AS bucket,
-      COUNT(*)::bigint AS count
-    FROM "ReplyDraft"
-    WHERE shop = ${shop}
-      AND "createdAt" >= ${start}
-      AND "createdAt" < ${end}
-      AND "heuristicBucket" IS NOT NULL
-    GROUP BY 1, 2
-    ORDER BY 1
-  `;
-
-  const byDay = new Map<string, ProductivityDailyPoint>();
-  for (const row of rows) {
-    const day = toLocalDay(row.day);
-    const existing = byDay.get(day) ?? { date: day, as_is: 0, edited: 0, ignored: 0 };
-    const n = Number(row.count);
-    if (row.bucket === "as_is") existing.as_is += n;
-    else if (row.bucket === "edited") existing.edited += n;
-    else if (row.bucket === "ignored") existing.ignored += n;
-    byDay.set(day, existing);
-  }
-
-  const points: ProductivityDailyPoint[] = [];
-  const cursor = new Date(start);
-  cursor.setUTCHours(0, 0, 0, 0);
-  const endDay = toLocalDay(end);
-  while (toLocalDay(cursor) <= endDay) {
-    const day = toLocalDay(cursor);
-    points.push(byDay.get(day) ?? { date: day, as_is: 0, edited: 0, ignored: 0 });
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
-  }
-  return points;
-}
-
-// ---------------------------------------------------------------------------
 // Aggregated KPI snapshot
 // ---------------------------------------------------------------------------
 
@@ -436,11 +387,9 @@ export async function getDashboardKpis(
   prevEnd: Date,
   mailConnectionId?: string,
 ): Promise<DashboardKpis> {
-  const [responseTime, draftUsage, reopened, prevReopened, volume, prevVolume] =
+  const [responseTime, reopened, prevReopened, volume, prevVolume] =
     await Promise.all([
       getResponseTimeStats(shop, start, end, prevStart, prevEnd, mailConnectionId),
-      // ReplyDraft has no mailConnectionId column — draft stats are not mailbox-filtered.
-      getDraftUsageStats(shop, start, end, prevStart, prevEnd),
       prisma.threadStateHistory.count({
         where: {
           shop,
@@ -487,7 +436,6 @@ export async function getDashboardKpis(
 
   return {
     responseTime,
-    draftUsage,
     reopened: { count: reopened, prevCount: prevReopened },
     volume: { count: volume, prevCount: prevVolume },
   };

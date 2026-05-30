@@ -37,6 +37,35 @@ export interface MailMessage {
   attachments: MailAttachment[];
 }
 
+/**
+ * Input to MailClient.send — fully-assembled message ready to ship.
+ * The assembler ensures From, headers, threading, and quote are correct.
+ */
+export interface SendPayload {
+  rfcMessageId: string;       // we generate and set this; provider may rewrite
+  inReplyToRfcId: string;     // for threading
+  references: string;         // space-separated chain of Message-IDs
+  /**
+   * Provider-internal ID of the original incoming message we're replying to.
+   * Outlook uses this with /me/messages/{id}/createReply to inherit
+   * Microsoft Graph's native conversationId — ensures customer replies
+   * chain back to the same thread even when our RFC headers are stripped.
+   * Optional: falls back to standalone create-draft when missing/invalid.
+   */
+  inReplyToExternalMessageId?: string;
+  fromEmail: string;
+  fromName?: string;
+  toEmails: string[];
+  ccEmails?: string[];
+  subject: string;
+  bodyText: string;           // plain text; provider adapter handles transport encoding
+}
+
+export interface SendResult {
+  externalMessageId: string;  // provider-internal id (Gmail message.id, Outlook id, Zoho messageId)
+  rfcMessageId: string;       // may differ from input if provider rewrote
+}
+
 export type MailProvider = "gmail" | "zoho" | "outlook";
 
 /**
@@ -96,6 +125,21 @@ export interface MailClient {
    * @returns empty array if the threadId is unknown.
    */
   getThreadMessages(threadId: string): Promise<MailMessage[]>;
+
+  /**
+   * Send an outbound message via the provider's API.
+   * @throws on auth/scope error (caller catches and triggers re-consent flow).
+   * @throws on transient errors (caller may retry).
+   */
+  send(payload: SendPayload): Promise<SendResult>;
+
+  /**
+   * Look up a previously-sent message by its RFC822 Message-ID in the Sent
+   * folder. Used by retry logic to detect "first attempt actually succeeded
+   * but we didn't get the response" cases.
+   * @returns null if not found.
+   */
+  findSentByRfcMessageId(rfcMessageId: string): Promise<SendResult | null>;
 }
 
 /**

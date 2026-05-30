@@ -89,3 +89,9 @@ jobs:
           DATABASE_URL: postgresql://test:test@localhost:5432/automail_test
           DIRECT_URL: postgresql://test:test@localhost:5432/automail_test
           GMAIL_TOKEN_SECRET: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          # shopify.server.ts is imported transitively (auto-sync → shopify.server)
+          # and shopifyApp() throws at module load if appUrl is empty. Dummy values
+          # are fine — these tests don't hit the Shopify API.
+          SHOPIFY_APP_URL: https://ci.test.invalid
+          SHOPIFY_API_KEY: ci-test-api-key
+          SHOPIFY_API_SECRET: ci-test-api-secret

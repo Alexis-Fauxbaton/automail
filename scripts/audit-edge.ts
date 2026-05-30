@@ -1,5 +1,5 @@
 import prisma from "../app/db.server.js";
-import { getPeriodBounds, getDashboardKpis, getCurrentThreadStates, getResponseTimeDailyBreakdown, getTopIntentsWithPerf, getReopenedThreads, getHeatmap, getDraftUsageDailyBreakdown, getAlerts } from "../app/lib/dashboard-stats.js";
+import { getPeriodBounds, getDashboardKpis, getInboxBucketCounts, getResponseTimeDailyBreakdown, getTopIntentsWithPerf, getReopenedThreads, getHeatmap, getAlerts } from "../app/lib/dashboard-stats.js";
 
 const SHOP = "2ed20e.myshopify.com";
 
@@ -31,21 +31,19 @@ const NOW = new Date("2026-05-07T22:00:00Z");
 const b = getPeriodBounds("30d", undefined, undefined, NOW);
 
 console.log("\n=== Empty shop test ===");
-const [k, c, h, i, s, r, d] = await Promise.all([
+const [k, c, h, i, s, r] = await Promise.all([
   getDashboardKpis(EMPTY_SHOP, b.start, b.end, b.prevStart, b.prevEnd),
   getResponseTimeDailyBreakdown(EMPTY_SHOP, b.start, b.end),
   getHeatmap(EMPTY_SHOP, b.start, b.end),
   getTopIntentsWithPerf(EMPTY_SHOP, b.start, b.end, 5),
-  getCurrentThreadStates(EMPTY_SHOP),
+  getInboxBucketCounts(EMPTY_SHOP),
   getReopenedThreads(EMPTY_SHOP, b.start, b.end, 10),
-  getDraftUsageDailyBreakdown(EMPTY_SHOP, b.start, b.end),
 ]);
 const a = await getAlerts(EMPTY_SHOP, "30d", b.start, b.end, i);
 console.log(`  KPIs: vol=${k.volume.count}, med=${k.responseTime.medianMs}, reop=${k.reopened.count}`);
 console.log(`  Chart len: ${c.length}, all support=0: ${c.every(p => p.support === 0)}`);
 console.log(`  Heatmap len: ${h.length}, intents: ${i.length}, reopened: ${r.length}`);
-console.log(`  States: open=${s.open}, all 0: ${[s.open, s.waiting_customer, s.waiting_merchant, s.resolved, s.no_reply_needed].every(v => v === 0)}`);
-console.log(`  Drafts daily: ${d.length}, all 0: ${d.every(p => p.as_is + p.edited + p.ignored === 0)}`);
+console.log(`  Buckets: all 0: ${[s.to_process, s.to_analyze, s.waiting_customer, s.waiting_merchant, s.resolved, s.other].every(v => v === 0)}`);
 console.log(`  Alerts: ${a.length}`);
 
 // 4. Median with 0 samples

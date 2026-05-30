@@ -198,15 +198,24 @@ export async function fetchDeltaMessages(
   return { messages, nextDeltaLink, staleDeltaToken: false };
 }
 
-export async function fetchHistoricalMessages(
+/**
+ * Fetch messages received after `afterDate` from a specific Outlook mail
+ * folder ("inbox" or "sentitems"). Pagination handled internally.
+ * Inbox path uses `receivedDateTime`; sentitems uses `sentDateTime` since
+ * Microsoft populates that for outgoing messages (receivedDateTime can be
+ * empty on locally-composed sends).
+ */
+async function fetchHistoricalFromFolder(
   connectionId: string,
+  folder: "inbox" | "sentitems",
   afterDate: Date,
 ): Promise<MailMessage[]> {
   const { accessToken } = await getAuthenticatedClientById(connectionId);
   const isoDate = afterDate.toISOString();
+  const dateField = folder === "inbox" ? "receivedDateTime" : "sentDateTime";
   let url =
-    `${GRAPH_BASE}/me/mailFolders/inbox/messages?$filter=receivedDateTime ge ${isoDate}` +
-    `&$select=${MSG_SELECT}&$top=50&$orderby=receivedDateTime asc`;
+    `${GRAPH_BASE}/me/mailFolders/${folder}/messages?$filter=${dateField} ge ${isoDate}` +
+    `&$select=${MSG_SELECT},sentDateTime&$top=50&$orderby=${dateField} asc`;
 
   const messages: MailMessage[] = [];
 
@@ -217,7 +226,7 @@ export async function fetchHistoricalMessages(
     }>(connectionId, accessToken, url);
 
     if (!res.ok) {
-      throw new Error(`Graph historical fetch failed (${res.status}): ${JSON.stringify(res.data)}`);
+      throw new Error(`Graph ${folder} historical fetch failed (${res.status}): ${JSON.stringify(res.data)}`);
     }
 
     for (const msg of res.data.value ?? []) {
@@ -228,6 +237,25 @@ export async function fetchHistoricalMessages(
   }
 
   return messages;
+}
+
+export async function fetchHistoricalMessages(
+  connectionId: string,
+  afterDate: Date,
+): Promise<MailMessage[]> {
+  // Query BOTH Inbox and Sent folders so that messages we sent from the
+  // app (which land only in Sent) are re-ingested on a resync. Without
+  // this the pre-emptive outgoing inserts created by handleSendDraft
+  // disappear forever after handleResync wipes IncomingEmail.
+  const [inboxMessages, sentMessages] = await Promise.all([
+    fetchHistoricalFromFolder(connectionId, "inbox", afterDate),
+    fetchHistoricalFromFolder(connectionId, "sentitems", afterDate).catch((err) => {
+      // Best-effort: a Sent-folder failure shouldn't block Inbox ingest.
+      console.warn(`[outlook] sentitems historical fetch failed:`, err);
+      return [] as MailMessage[];
+    }),
+  ]);
+  return [...inboxMessages, ...sentMessages];
 }
 
 export async function getMessageById(connectionId: string, messageId: string): Promise<MailMessage> {

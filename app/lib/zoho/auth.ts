@@ -61,6 +61,7 @@ export async function exchangeZohoCode(code: string) {
     access_token?: string;
     refresh_token?: string;
     expires_in?: number;
+    scope?: string;
     error?: string;
   };
   if (data.error || !data.access_token || !data.refresh_token) {
@@ -77,6 +78,7 @@ export async function exchangeZohoCode(code: string) {
     email: accountInfo.email,
     accountId: accountInfo.accountId,
     aliases: accountInfo.aliases,
+    scope: data.scope ?? null,
   };
 }
 
@@ -89,18 +91,33 @@ async function fetchZohoAccount(accessToken: string): Promise<{
   const res = await fetch(`https://${domain}/api/accounts`, {
     headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
   });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `Zoho /api/accounts failed: HTTP ${res.status} ${res.statusText}${text ? ` — ${text.slice(0, 200)}` : ""}`,
+    );
+  }
   const json = await res.json();
   const account = (json as any).data?.[0];
   if (!account) {
-    console.warn("[zoho] Could not fetch Mail account ID, will retry on first sync");
-    return { accountId: "", email: "unknown", aliases: [] };
+    // Throwing here instead of returning fallback "unknown" preserves the
+    // existing MailConnection row: the upsert won't run, so re-auth on a
+    // transient Zoho API blip won't create an orphan row keyed on
+    // (shop, "unknown") that overrides the real one.
+    throw new Error(
+      `Zoho /api/accounts returned empty data; cannot determine account ID. raw=${JSON.stringify(json).slice(0, 200)}`,
+    );
   }
 
   const email =
     account.primaryEmailAddress ||
     account.emailAddress?.find((e: any) => e.isPrimary === "true")?.mailId ||
-    account.incomingUserName ||
-    "unknown";
+    account.incomingUserName;
+  if (!email) {
+    throw new Error(
+      `Zoho /api/accounts returned an account with no email. accountId=${account.accountId}`,
+    );
+  }
 
   // Zoho's `emailAddress` is the list of addresses the account can send
   // from (primary + aliases). Captured here so the outgoing-detection
@@ -124,8 +141,20 @@ export async function saveZohoConnection(
     email: string;
     accountId: string;
     aliases: string[];
+    grantedScopes?: string | null;
   },
 ): Promise<{ id: string }> {
+  // Defence-in-depth: refuse to save with a placeholder email or empty
+  // accountId. fetchZohoAccount throws on these cases now, but a future
+  // caller could still pass through legacy "unknown" sentinels — refuse
+  // them here to avoid creating an orphan (shop, "unknown") row that
+  // shadows the real connection.
+  if (!tokens.email || tokens.email === "unknown" || tokens.email.trim() === "") {
+    throw new Error(`saveZohoConnection: refusing to save with empty/placeholder email '${tokens.email}'`);
+  }
+  if (!tokens.accountId || tokens.accountId.trim() === "") {
+    throw new Error(`saveZohoConnection: refusing to save with empty zohoAccountId for ${tokens.email}`);
+  }
   const allowList = buildAllowList(tokens.email, tokens.aliases);
   const outgoingAliases = JSON.stringify(allowList);
   const conn = await prisma.mailConnection.upsert({
@@ -139,6 +168,7 @@ export async function saveZohoConnection(
       tokenExpiry: tokens.expiry,
       outgoingAliases,
       zohoAccountId: tokens.accountId,
+      grantedScopes: tokens.grantedScopes ?? null,
     },
     // Reconnect: wipe sync-state fields so the new connection starts clean.
     // Stale historyId / lastSyncError from a prior session would otherwise
@@ -152,6 +182,7 @@ export async function saveZohoConnection(
       tokenExpiry: tokens.expiry,
       outgoingAliases,
       zohoAccountId: tokens.accountId,
+      grantedScopes: tokens.grantedScopes ?? null,
       lastSyncError: null,
       lastSyncAt: null,
       historyId: null,

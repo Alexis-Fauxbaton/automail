@@ -1,6 +1,6 @@
 import prisma from "../../db.server";
 import { getZohoAccessTokenByConnection, getZohoApiDomain } from "./auth";
-import type { MailAttachment, MailMessage, MailClient } from "../mail/types";
+import type { MailAttachment, MailMessage, MailClient, SendPayload, SendResult } from "../mail/types";
 import type { MailConnection } from "@prisma/client";
 
 // Reuse cleanHtml and decodeHtmlEntities from gmail client
@@ -283,6 +283,16 @@ export async function createZohoClient(connection: MailConnection): Promise<Mail
         token, accountId, folderId, String(detail.messageId),
       ).catch(() => []);
 
+      // Best-effort: fetch RFC822 headers so the thread resolver can chain
+      // outgoing → incoming via In-Reply-To. Zoho's /details endpoint omits
+      // these; a separate /header endpoint returns the raw header block.
+      const rfcHeaders = await fetchZohoMessageHeaders(
+        token, accountId, folderId, String(detail.messageId),
+      ).catch((err) => {
+        console.warn(`[zoho/getMessage] header fetch failed for ${detail.messageId}: ${err}`);
+        return {} as Record<string, string>;
+      });
+
       return {
         id: String(detail.messageId),
         threadId: String(detail.threadId ?? detail.messageId),
@@ -298,7 +308,7 @@ export async function createZohoClient(connection: MailConnection): Promise<Mail
         // message in (see comment above on folderCandidates). Alias-based
         // outgoing detection is handled downstream in outgoing-detection.ts.
         labelIds: (mailboxLower && fromAddress.toLowerCase() === mailboxLower) ? ["SENT"] : [],
-        headers: {},
+        headers: rfcHeaders,
         attachments: zohoAttachments,
       } satisfies MailMessage;
     },
@@ -391,6 +401,69 @@ export async function createZohoClient(connection: MailConnection): Promise<Mail
         console.error("[zoho] getThreadMessages failed, falling back:", err);
         return [];
       }
+    },
+
+    async send(payload: SendPayload): Promise<SendResult> {
+      const token = await getZohoAccessTokenByConnection(connection);
+      const domain = getApiDomain();
+      const body: Record<string, unknown> = {
+        fromAddress: payload.fromName
+          ? `${payload.fromName} <${payload.fromEmail}>`
+          : payload.fromEmail,
+        toAddress: payload.toEmails.join(","),
+        subject: payload.subject,
+        content: payload.bodyText,
+        mailFormat: "html",
+      };
+      if (payload.ccEmails?.length) body.ccAddress = payload.ccEmails.join(",");
+      if (payload.inReplyToRfcId) body.inReplyTo = `<${payload.inReplyToRfcId}>`;
+
+      const res = await fetch(
+        `https://${domain}/api/accounts/${accountId}/messages`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Zoho-oauthtoken ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(30_000),
+        },
+      );
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Zoho send failed: ${res.status} ${text}`);
+      }
+      const data = await res.json() as { data?: { messageId?: unknown } };
+      // Zoho returns: { status: { code, description }, data: { messageId, ... } }
+      const internalId = String(data?.data?.messageId ?? "");
+      if (!internalId) {
+        throw new Error(
+          `Zoho send: response missing messageId — body: ${JSON.stringify(data).slice(0, 200)}`,
+        );
+      }
+      // Zoho doesn't echo the RFC Message-ID in the send response. Fall back to
+      // our pre-generated rfcMessageId; sync-side dedup will reconcile if Zoho
+      // silently rewrote it.
+      return { externalMessageId: internalId, rfcMessageId: payload.rfcMessageId };
+    },
+
+    async findSentByRfcMessageId(rfcMessageId: string): Promise<SendResult | null> {
+      const token = await getZohoAccessTokenByConnection(connection);
+      const domain = getApiDomain();
+      // Zoho search syntax for RFC Message-ID match: messageId:<id>
+      const url =
+        `https://${domain}/api/accounts/${accountId}/messages/search` +
+        `?searchKey=${encodeURIComponent(`messageId:${rfcMessageId}`)}&limit=1`;
+      const res = await fetch(url, {
+        headers: { Authorization: `Zoho-oauthtoken ${token}` },
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!res.ok) return null;
+      const data = await res.json() as { data?: Array<{ messageId?: unknown }> };
+      const msg = data?.data?.[0];
+      if (!msg?.messageId) return null;
+      return { externalMessageId: String(msg.messageId), rfcMessageId };
     },
   };
   return client;
@@ -521,6 +594,76 @@ async function embedZohoInlineImages(
 }
 
 /** Fetch attachment metadata for a Zoho message using attachmentinfo endpoint. */
+/**
+ * Fetch the raw RFC822 headers for a Zoho message and parse them into a
+ * lowercase-keyed map. The thread resolver reads `headers["message-id"]`,
+ * `headers["in-reply-to"]`, `headers["references"]` — without these, the
+ * Zoho-ingested side of conversations can't be chained to merchant replies
+ * sent via our app (and vice-versa).
+ *
+ * Zoho's /details endpoint omits headers. The /header endpoint returns the
+ * raw header block as a string in data.content; we parse it minimally (one
+ * line = one header, continuation lines folded).
+ */
+async function fetchZohoMessageHeaders(
+  accessToken: string,
+  accountId: string,
+  folderId: string,
+  messageId: string,
+): Promise<Record<string, string>> {
+  const domain = getApiDomain();
+  const url = `https://${domain}/api/accounts/${accountId}/folders/${folderId}/messages/${messageId}/header`;
+  const r = await fetch(url, {
+    headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!r.ok) {
+    throw new Error(`Zoho /header ${r.status}`);
+  }
+  const json = (await r.json()) as {
+    data?: string | { headerContent?: string; content?: string } | Record<string, unknown>;
+  };
+  if (!json.data) return {};
+
+  // Zoho's response shape (confirmed against the EU API):
+  //   data: { headerContent: "<raw RFC822 header block>" }
+  // We also accept data.content (older variants) and a raw-string `data`
+  // for forward compatibility.
+  if (typeof json.data === "string") {
+    return parseRfc822Headers(json.data);
+  }
+  const d = json.data as { headerContent?: string; content?: string };
+  if (typeof d.headerContent === "string") {
+    return parseRfc822Headers(d.headerContent);
+  }
+  if (typeof d.content === "string") {
+    return parseRfc822Headers(d.content);
+  }
+  // Last-resort: data is already an object of header-name → value pairs.
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(json.data as Record<string, unknown>)) {
+    if (typeof v === "string") out[k.toLowerCase()] = v;
+  }
+  return out;
+}
+
+/** Minimal RFC822 header parser: lowercase keys, folded-line support. */
+function parseRfc822Headers(raw: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!raw) return out;
+  // Normalize line endings + unfold continuation lines (RFC 2822 §2.2.3:
+  // a header line continues on the next line if it starts with WSP).
+  const unfolded = raw.replace(/\r\n/g, "\n").replace(/\n[ \t]+/g, " ");
+  for (const line of unfolded.split("\n")) {
+    const colon = line.indexOf(":");
+    if (colon <= 0) continue;
+    const key = line.slice(0, colon).trim().toLowerCase();
+    const value = line.slice(colon + 1).trim();
+    if (key && value) out[key] = value;
+  }
+  return out;
+}
+
 async function fetchZohoAttachmentsMeta(
   accessToken: string,
   accountId: string,

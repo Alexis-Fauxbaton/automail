@@ -11,18 +11,16 @@ import {
   getPeriodBounds,
   getDashboardKpis,
   getResponseTimeDailyBreakdown,
-  getDraftUsageDailyBreakdown,
   getHeatmap,
   getTopIntentsWithPerf,
-  getCurrentThreadStates,
+  getInboxBucketCounts,
   getReopenedThreads,
   getAlerts,
   type DashboardKpis,
   type ResponseTimeDailyPoint,
-  type ProductivityDailyPoint,
   type HeatmapCell,
   type IntentPerf,
-  type ThreadStateCounts,
+  type InboxBucketCounts,
   type ReopenedThread,
   type Alert,
 } from "../lib/dashboard-stats";
@@ -35,7 +33,6 @@ import {
   TopIntentsList,
   ClockIcon,
   RefreshIcon,
-  SparklesIcon,
   MailIcon,
   type AlertItem,
 } from "../components/ui";
@@ -72,19 +69,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const zeroedKpis: DashboardKpis = {
     responseTime: { medianMs: null, p90Ms: null, prevMedianMs: null },
-    draftUsage: { asIs: 0, edited: 0, ignored: 0, pending: 0, sentPct: null, prevSentPct: null },
     reopened: { count: 0, prevCount: 0 },
     volume: { count: 0, prevCount: 0 },
   };
-  const zeroedStates: ThreadStateCounts = {
-    open: 0, waiting_customer: 0, waiting_merchant: 0, resolved: 0, no_reply_needed: 0,
+  const zeroedBuckets: InboxBucketCounts = {
+    to_process: 0, to_analyze: 0, waiting_customer: 0, waiting_merchant: 0, resolved: 0, other: 0,
   };
 
-  const [kpis, qualityChart, productivityChart, threadStates] = await Promise.all([
+  const [kpis, qualityChart, bucketCounts] = await Promise.all([
     getDashboardKpis(shop, start, end, prevStart, prevEnd, mailConnectionId).catch(() => zeroedKpis),
     getResponseTimeDailyBreakdown(shop, start, end, mailConnectionId).catch(() => [] as ResponseTimeDailyPoint[]),
-    getDraftUsageDailyBreakdown(shop, start, end).catch(() => [] as ProductivityDailyPoint[]),
-    getCurrentThreadStates(shop, mailConnectionId).catch(() => zeroedStates),
+    getInboxBucketCounts(shop, mailConnectionId).catch(() => zeroedBuckets),
   ]);
 
   const heatmap = ent.canViewAdvancedDashboard
@@ -112,10 +107,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
     connections,
     kpis,
     qualityChart,
-    productivityChart,
     heatmap,
     topIntents: topIntentsAll.slice(0, ent.canViewAdvancedDashboard ? 5 : 3),
-    threadStates,
+    bucketCounts,
     reopened,
     alerts,
     isAdvancedDashboard: ent.canViewAdvancedDashboard,
@@ -276,78 +270,6 @@ function QualityChartClient({ data }: { data: ResponseTimeDailyPoint[] }) {
 }
 
 // ---------------------------------------------------------------------------
-// Productivity chart (stacked bars by bucket) — SSR-safe lazy
-// ---------------------------------------------------------------------------
-
-type BucketLabels = { as_is: string; edited: string; ignored: string };
-
-const StackedDailyBars = lazy(() =>
-  import("recharts").then((mod) => ({
-    default: function StackedBarsInner({ data, labels }: { data: ProductivityDailyPoint[]; labels: BucketLabels }) {
-      const {
-        BarChart, Bar, XAxis, YAxis, Tooltip,
-        ResponsiveContainer, CartesianGrid, Legend,
-      } = mod;
-      return (
-        <ResponsiveContainer width="100%" height={260}>
-          <BarChart data={data} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-            <XAxis
-              dataKey="date"
-              tick={{ fontSize: 11, fill: "#64748b" }}
-              tickFormatter={(v: string) => v.slice(5)}
-              axisLine={false}
-              tickLine={false}
-            />
-            <YAxis
-              tick={{ fontSize: 11, fill: "#64748b" }}
-              allowDecimals={false}
-              axisLine={false}
-              tickLine={false}
-            />
-            <Tooltip
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              formatter={(value: any, name: any) => [
-                value,
-                name === "as_is" ? labels.as_is : name === "edited" ? labels.edited : labels.ignored,
-              ]}
-              contentStyle={{ fontSize: 12, borderRadius: 12, border: "1px solid #e2e8f0" }}
-            />
-            <Legend
-              formatter={(v: string) =>
-                v === "as_is" ? labels.as_is : v === "edited" ? labels.edited : labels.ignored
-              }
-              iconSize={10}
-              wrapperStyle={{ fontSize: 12 }}
-            />
-            <Bar dataKey="as_is" stackId="a" fill="#4f46e5" maxBarSize={32} />
-            <Bar dataKey="edited" stackId="a" fill="#a5b4fc" maxBarSize={32} />
-            <Bar dataKey="ignored" stackId="a" fill="#94a3b8" radius={[6, 6, 0, 0]} maxBarSize={32} />
-          </BarChart>
-        </ResponsiveContainer>
-      );
-    },
-  })),
-);
-
-function ProductivityChartClient({ data }: { data: ProductivityDailyPoint[] }) {
-  const [mounted, setMounted] = useState(false);
-  const { t } = useTranslation();
-  useEffect(() => setMounted(true), []);
-  const labels: BucketLabels = {
-    as_is: t("dashboard.draftAsIsLabel"),
-    edited: t("dashboard.draftEditedLabel"),
-    ignored: t("dashboard.draftIgnoredLabel"),
-  };
-  if (!mounted) return <div style={{ height: 260 }} />;
-  return (
-    <Suspense fallback={<div style={{ height: 260 }} />}>
-      <StackedDailyBars data={data} labels={labels} />
-    </Suspense>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Period selector
 // ---------------------------------------------------------------------------
 
@@ -410,12 +332,12 @@ function PlanGatePlaceholder({ feature }: { feature: string }) {
 }
 
 // Suppress unused-variable lint for types only used in the loader return shape
-type _Used = DashboardKpis | IntentPerf | ReopenedThread | Alert | HeatmapCell | ThreadStateCounts;
+type _Used = DashboardKpis | IntentPerf | ReopenedThread | Alert | HeatmapCell | InboxBucketCounts;
 
 export default function Dashboard() {
   const {
-    range, connections, kpis, qualityChart, productivityChart,
-    heatmap, topIntents, threadStates, reopened, alerts,
+    range, connections, kpis, qualityChart,
+    heatmap, topIntents, bucketCounts, reopened, alerts,
     isAdvancedDashboard,
   } = useLoaderData<typeof loader>();
   const { t } = useTranslation();
@@ -428,10 +350,6 @@ export default function Dashboard() {
       : null;
   const reopenVariation = variationLabel(kpis.reopened.count, kpis.reopened.prevCount);
   const volVariation = variationLabel(kpis.volume.count, kpis.volume.prevCount);
-  const draftVariation =
-    kpis.draftUsage.sentPct !== null && kpis.draftUsage.prevSentPct !== null
-      ? variationLabel(kpis.draftUsage.sentPct, kpis.draftUsage.prevSentPct)
-      : null;
 
   // Determine tone (up = good or bad depending on the metric)
   const respTone: "up" | "down" | "neutral" = respVariation
@@ -448,20 +366,35 @@ export default function Dashboard() {
       : "up"
     : "neutral";
 
-  const draftTone: "up" | "down" | "neutral" = draftVariation
-    ? kpis.draftUsage.sentPct !== null &&
-      kpis.draftUsage.prevSentPct !== null &&
-      kpis.draftUsage.sentPct > kpis.draftUsage.prevSentPct
-      ? "up"
-      : "down"
-    : "neutral";
-
-  const stateRows: { key: keyof ThreadStateCounts; label: string }[] = [
-    { key: "open", label: t("dashboard.stateOpen", { defaultValue: "Ouvert" }) },
-    { key: "waiting_customer", label: t("dashboard.stateWaitingCustomer", { defaultValue: "En attente client" }) },
-    { key: "waiting_merchant", label: t("dashboard.stateWaitingMerchant", { defaultValue: "À traiter" }) },
-    { key: "resolved", label: t("dashboard.stateResolved", { defaultValue: "Résolu" }) },
-    { key: "no_reply_needed", label: t("dashboard.stateNoReplyNeeded", { defaultValue: "Sans réponse" }) },
+  // Mirror the inbox primary tabs exactly — see app.inbox.tsx bucketCounts.
+  // "À traiter" merges to_process + waiting_merchant (same as the inbox's
+  // "to_handle" tab). Clicking a row jumps to the matching inbox bucket.
+  const stateRows: { label: string; value: number; inboxBucket: string }[] = [
+    {
+      label: t("dashboard.bucketToHandle", { defaultValue: "À traiter" }),
+      value: bucketCounts.to_process + bucketCounts.waiting_merchant,
+      inboxBucket: "to_handle",
+    },
+    {
+      label: t("dashboard.bucketToAnalyze", { defaultValue: "À analyser" }),
+      value: bucketCounts.to_analyze,
+      inboxBucket: "to_analyze",
+    },
+    {
+      label: t("dashboard.bucketWaitingCustomer", { defaultValue: "Attente client" }),
+      value: bucketCounts.waiting_customer,
+      inboxBucket: "waiting_customer",
+    },
+    {
+      label: t("dashboard.bucketResolved", { defaultValue: "Résolu" }),
+      value: bucketCounts.resolved,
+      inboxBucket: "resolved",
+    },
+    {
+      label: t("dashboard.bucketOther", { defaultValue: "Autre" }),
+      value: bucketCounts.other,
+      inboxBucket: "other",
+    },
   ];
 
   // Alert type is a superset of AlertItem — cast is safe (extra fields are ignored by AlertBanner)
@@ -548,19 +481,6 @@ export default function Dashboard() {
           helperTone={reopenTone}
         />
         <MetricCard
-          icon={<SparklesIcon />}
-          label={t("dashboard.kpiDraftsSent", { defaultValue: "Drafts utilisés" })}
-          value={kpis.draftUsage.sentPct !== null ? `${kpis.draftUsage.sentPct}%` : "—"}
-          helper={
-            draftVariation
-              ? `${draftVariation} · ${kpis.draftUsage.asIs} ${t("dashboard.draftAsIs")} · ${kpis.draftUsage.edited} ${t("dashboard.draftEdited")} · ${kpis.draftUsage.ignored} ${t("dashboard.draftIgnored")}`
-              : kpis.draftUsage.sentPct !== null
-                ? `${kpis.draftUsage.asIs} ${t("dashboard.draftAsIs")} · ${kpis.draftUsage.edited} ${t("dashboard.draftEdited")} · ${kpis.draftUsage.ignored} ${t("dashboard.draftIgnored")}`
-                : t("dashboard.noData", { defaultValue: "Pas encore de données" })
-          }
-          helperTone={draftTone}
-        />
-        <MetricCard
           icon={<MailIcon />}
           label={t("dashboard.kpiVolume", { defaultValue: "Emails support" })}
           value={String(kpis.volume.count)}
@@ -576,14 +496,6 @@ export default function Dashboard() {
         <div data-testid="chart-quality-service">
           <QualityChartClient data={qualityChart} />
         </div>
-      </Card>
-
-      {/* Productivity chart */}
-      <Card
-        title={t("dashboard.productivityTitle", { defaultValue: "Productivité IA" })}
-        subtitle={t("dashboard.productivitySubtitle", { defaultValue: "Utilisation des drafts générés · calculé heuristiquement" })}
-      >
-        <ProductivityChartClient data={productivityChart} />
       </Card>
 
       {/* Patterns: heatmap + top intents */}
@@ -618,8 +530,14 @@ export default function Dashboard() {
           title={t("dashboard.stateCardTitle", { date: todayLabel, defaultValue: "État de la file" })}
           subtitle={t("dashboard.stateCardSubtitle", { defaultValue: "Snapshot actuel — non filtré par période" })}
         >
-          {stateRows.map(({ key, label }) => (
-            <StatRow key={key} label={label} value={threadStates[key]} />
+          {stateRows.map(({ label, value, inboxBucket }) => (
+            <Link
+              key={inboxBucket}
+              to={`/app/inbox?bucket=${inboxBucket}`}
+              style={{ display: "block", textDecoration: "none", color: "inherit" }}
+            >
+              <StatRow label={label} value={value} />
+            </Link>
           ))}
         </Card>
         <Card

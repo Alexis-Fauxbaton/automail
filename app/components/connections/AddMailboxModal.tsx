@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import ProviderLogo, { type Provider } from "./ProviderLogo";
 
 export default function AddMailboxModal(props: {
   onClose: () => void;
@@ -46,10 +47,10 @@ export default function AddMailboxModal(props: {
     );
   }
 
-  const providers: Array<{ label: string; icon: string; bg: string; url: string | null }> = [
-    { label: "Gmail", icon: "G", bg: "#ea4335", url: gmailAuthUrl },
-    { label: "Outlook", icon: "O", bg: "#0078d4", url: outlookAuthUrl },
-    { label: "Zoho", icon: "Z", bg: "#e42527", url: zohoAuthUrl },
+  const providers: Array<{ label: string; provider: Provider; url: string | null }> = [
+    { label: "Gmail", provider: "gmail", url: gmailAuthUrl },
+    { label: "Outlook", provider: "outlook", url: outlookAuthUrl },
+    { label: "Zoho Mail", provider: "zoho", url: zohoAuthUrl },
   ];
 
   return (
@@ -65,7 +66,7 @@ export default function AddMailboxModal(props: {
           {t("connections.pickProvider")}
         </h2>
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
-          {providers.map(({ label, icon, bg, url }) => (
+          {providers.map(({ label, provider, url }) => (
             url ? (
               <a
                 key={label}
@@ -90,22 +91,8 @@ export default function AddMailboxModal(props: {
                   transition: "background 0.15s",
                 }}
               >
-                <span
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    width: 34,
-                    height: 34,
-                    borderRadius: "50%",
-                    background: bg,
-                    color: "#fff",
-                    fontWeight: 700,
-                    fontSize: 15,
-                    flexShrink: 0,
-                  }}
-                >
-                  {icon}
+                <span style={{ display: "inline-flex", flexShrink: 0 }}>
+                  <ProviderLogo provider={provider} size={32} />
                 </span>
                 {label}
               </a>

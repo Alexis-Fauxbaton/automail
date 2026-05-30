@@ -27,6 +27,11 @@ import type { MailProvider } from "../lib/mail/types";
 import { decodeHtmlEntities } from "../lib/gmail/client";
 import { sanitizeEmailHtml, buildCidMap } from "../lib/mail/sanitize-html";
 import { buildReplySubject } from "../lib/support/draft-subject";
+import {
+  type OpsBucket,
+  getThreadOpsBucket,
+  getMessageDirection as libGetMessageDirection,
+} from "../lib/support/thread-bucket";
 import { RichDraftEditor } from "../components/RichDraftEditor";
 import { QuotaExceededModal } from "../components/billing/QuotaExceededModal";
 import { useEntitlements } from "../lib/billing/entitlements-context";
@@ -51,6 +56,7 @@ import {
   handleUpdateClassification,
   handleDismissAnalyzeQueue,
   handleDismissThreadFromAnalyze,
+  handleSendDraft,
 } from "../lib/support/inbox-actions";
 import type { ClassificationEdit } from "../lib/support/manual-classification";
 import {
@@ -65,6 +71,8 @@ import {
 import MailboxBadge from "../components/inbox/MailboxBadge";
 import MailboxFilter from "../components/inbox/MailboxFilter";
 import MailboxIndicator from "../components/inbox/MailboxIndicator";
+import SendButton from "../components/inbox/SendButton";
+import { canSend } from "../lib/mail/scopes";
 
 // Tracks email IDs for which an HTML body refresh was already submitted
 // this browser session, so we don't re-fetch on every remount.
@@ -99,6 +107,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   const onboardingFlag = await getShopFlag(shop);
+  const shopFlagRaw = process.env.SEND_DISABLED_FOR_INTERNAL === "true"
+    ? await prisma.shopFlag.findUnique({ where: { shop }, select: { isInternal: true } })
+    : null;
+  const sendDisabled = process.env.SEND_DISABLED_FOR_INTERNAL === "true" && shopFlagRaw?.isInternal === true;
   const checklistState = deriveChecklistState({
     hasDraft: await hasGeneratedAnyDraft(shop),
     hasCustomizedSettings: await hasCustomizedSupportSettings(shop),
@@ -271,6 +283,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         draftReplyMode: "thread",
         draftAttachments: [],
         replyDraftId: null,
+        draftSentAt: null,
         errorMessage: null,
       });
     }
@@ -315,6 +328,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       autoSyncEnabled: true,
       lastSyncError: true,
       lastSyncAt: true,
+      grantedScopes: true,
     },
   });
 
@@ -344,12 +358,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     priorContact,
     syncInProgress,
     onboardingChecklist,
+    shop,
     connections: connections.map((c) => ({
       ...c,
       lastSyncAt: c.lastSyncAt?.toISOString() ?? null,
+      canSend: canSend(c),
     })),
     threadCountsByMailbox,
     mailConnectionId: mailConnectionId ?? null,
+    sendDisabled,
   };
 };
 
@@ -388,7 +405,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
   const shop = session.shop;
   const formData = await request.formData();
-  const intent = String(formData.get("_action") ?? "");
+  const intent = String(formData.get("_action") || formData.get("intent") || "");
 
   if (intent === "disconnect") {
     const mailConnectionId = String(formData.get("mailConnectionId") ?? "");
@@ -537,6 +554,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return handleUpdateClassification({ shop, admin, threadId, edit, orderChangeType, orderId, candidateJson, orderNumber });
   }
 
+  if (intent === "send") {
+    const mailConnectionId = String(formData.get("mailConnectionId") ?? "");
+    const draftId = String(formData.get("draftId") ?? "");
+    if (!mailConnectionId || !draftId) {
+      return { error: "missing_params", report: null, disconnected: false, reanalyzed: null, refined: null };
+    }
+    return handleSendDraft({ shop, mailConnectionId, draftId });
+  }
+
   return { report: null, disconnected: false, reanalyzed: null, refined: null };
 };
 
@@ -638,6 +664,7 @@ interface SerializedEmail {
     threadAttachmentRef: string | null;
   }>;
   replyDraftId: string | null;
+  draftSentAt: string | null;
   errorMessage: string | null;
 }
 
@@ -681,6 +708,7 @@ function serializeEmail(row: {
     bcc: string | null;
     subject: string | null;
     replyMode: string;
+    sentAt?: Date | null;
     attachments: Array<{
       id: string;
       fileName: string;
@@ -697,6 +725,12 @@ function serializeEmail(row: {
     try { parsed = JSON.parse(row.analysisResult); } catch { /* ignore */ }
   }
   const rd = row.replyDraft ?? null;
+  // Mask sent drafts in the preview: once a draft has been sent (sentAt set),
+  // we treat the email as having NO current draft. The DB row is preserved
+  // (audit, heuristic bucket, linkedOutgoingEmailId), but the UI's editor +
+  // Send button see a blank state — merchant clicks "Générer le brouillon"
+  // to produce a fresh one (upsertReplyDraftBody resets sentAt on update).
+  const draftIsSent = rd?.sentAt != null;
   const history: string[] = Array.isArray(rd?.bodyHistory) ? (rd!.bodyHistory as string[]) : [];
   return {
     id: row.id,
@@ -718,14 +752,17 @@ function serializeEmail(row: {
     processingStatus: row.processingStatus,
     analysisResult: parsed,
     lastAnalyzedAt: row.lastAnalyzedAt ? row.lastAnalyzedAt.toISOString() : null,
-    draftReply: rd?.body ?? null,
-    draftHistory: history,
-    draftCC: rd?.cc ?? null,
-    draftBCC: rd?.bcc ?? null,
-    draftSubject: rd?.subject ?? null,
-    draftReplyMode: rd?.replyMode ?? "thread",
-    draftAttachments: rd?.attachments ?? [],
-    replyDraftId: rd?.id ?? null,
+    draftReply: draftIsSent ? null : (rd?.body ?? null),
+    draftHistory: draftIsSent ? [] : history,
+    draftCC: draftIsSent ? null : (rd?.cc ?? null),
+    draftBCC: draftIsSent ? null : (rd?.bcc ?? null),
+    draftSubject: draftIsSent ? null : (rd?.subject ?? null),
+    draftReplyMode: draftIsSent ? "thread" : (rd?.replyMode ?? "thread"),
+    draftAttachments: draftIsSent ? [] : (rd?.attachments ?? []),
+    replyDraftId: draftIsSent ? null : (rd?.id ?? null),
+    // Keep the sent timestamp so the UI can render a "Envoyé le DATE"
+    // indicator near the Send button area instead of an empty editor.
+    draftSentAt: rd?.sentAt ? rd.sentAt.toISOString() : null,
     errorMessage: row.errorMessage,
   };
 }
@@ -746,82 +783,21 @@ function getClassification(email: SerializedEmail): NatureFilter {
   return "all";
 }
 
-// Primary inbox bucket derived from the thread's operational state +
-// whether the latest message needs a reply. This is the view a merchant
-// actually cares about ("what do I have to do next?").
-type OpsBucket =
-  | "to_process"       // support thread waiting for a human reply
-  | "to_analyze"       // support thread, Tier 3 never ran (suspended sync), waiting for explicit analysis
-  | "waiting_customer" // we replied, awaiting customer
-  | "waiting_merchant" // internal / data action required on our side
-  | "resolved"         // closed, no reply needed, or conversation ended
-  | "other";           // filtered / non-support / unknown
-
-// Threads with no recent activity for this many ms are auto-bucketed as resolved.
-const AUTO_RESOLVE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-
+// Thin wrapper around the shared bucket lib — the dashboard uses the same
+// function so counts never disagree between surfaces. See
+// [app/lib/support/thread-bucket.ts](../lib/support/thread-bucket.ts).
 function getOpsBucket(
   thread: EmailThread,
   state: SerializedThreadState | null,
   connectedEmail: string | null,
 ): OpsBucket {
-  // Threads explicitly classified as non-support by Tier 2 never belong
-  // in actionable or resolved buckets — they have nothing to do in a support inbox.
-  if (state?.supportNature === "non_support") return "other";
-  // A manual "resolved" set by the agent always wins — never override it
-  // with automatic signal (e.g. last message incoming). This lets agents
-  // explicitly close a thread even when the customer has the last word.
-  if (state?.operationalState === "resolved" || state?.operationalState === "no_reply_needed") {
-    return "resolved";
-  }
-  // À analyser bucket: support threads that never ran Tier 3 (typically
-  // accumulated while the shop was suspended) and haven't been dismissed
-  // by the merchant. They wait for an explicit "Analyser" click. Once Tier 3
-  // runs (analyzedAt set) the thread falls through to the regular buckets.
-  const isSupportStance =
-    state?.supportNature === "confirmed_support" ||
-    state?.supportNature === "probable_support" ||
-    state?.supportNature === "mixed";
-  if (isSupportStance && !state?.analyzedAt) {
-    if (!state?.dismissedFromAnalyzeAt) return "to_analyze";
-    // Dismissed unanalyzed support thread → "Autre". The merchant explicitly
-    // chose not to deal with it through the AI flow, so keep it out of the
-    // primary actionable buckets. A new incoming customer message clears
-    // dismissedFromAnalyzeAt server-side (see ingestAndPrefilter) and the
-    // thread comes back to À analyser automatically.
-    return "other";
-  }
-  if (threadNeedsReply(thread, connectedEmail)) return "to_process";
-  const op = state?.operationalState;
-  // Before trusting the DB operational state, check message direction.
-  // If the last message is outgoing but DB says "waiting_merchant", the
-  // DB state is stale (thread was not recomputed after we sent a reply).
-  // Override to a direction-consistent bucket so the UI is never wrong.
-  const lastDir = getMessageDirection(thread.latest, connectedEmail);
-  const ageMs = Date.now() - new Date(thread.latest.receivedAt).getTime();
-  if (op === "waiting_merchant" && lastDir === "outgoing") {
-    return ageMs >= AUTO_RESOLVE_AGE_MS ? "resolved" : "waiting_customer";
-  }
-  if (op === "waiting_merchant") return "waiting_merchant";
-  if (op === "waiting_customer") {
-    return ageMs >= AUTO_RESOLVE_AGE_MS ? "resolved" : "waiting_customer";
-  }
-  if (thread.latest.analysisResult?.conversation?.noReplyNeeded === true) return "resolved";
-  // Support/uncertain threads with no explicit operational state yet
-  // (e.g. old threads before state tracking, or threads where recompute
-  // hasn't run). Infer from the last message direction so the bucket is
-  // at least plausible while the background recompute job catches up.
-  const isLikelySupport =
-    state?.supportNature === "confirmed_support" ||
-    state?.supportNature === "needs_review" ||
-    (!state && getThreadClassification(thread) === "support");
-  if (isLikelySupport) {
-    if (lastDir === "outgoing") {
-      return ageMs >= AUTO_RESOLVE_AGE_MS ? "resolved" : "waiting_customer";
-    }
-    return "waiting_merchant";
-  }
-  return "other";
+  return getThreadOpsBucket({
+    latest: thread.latest,
+    classification: getThreadClassification(thread),
+    noReplyNeeded: thread.latest.analysisResult?.conversation?.noReplyNeeded === true,
+    state,
+    connectedEmail,
+  });
 }
 
 function hasLinkedOrder(state: SerializedThreadState | null): boolean {
@@ -954,16 +930,7 @@ function getMessageDirection(
   email: SerializedEmail,
   connectedEmail: string | null,
 ): "incoming" | "outgoing" | "unknown" {
-  // Trust the backend's processingStatus first — it's computed against the
-  // CORRECT mailbox's outgoingAliases at ingest time and works for multi-mailbox.
-  // Falling back to a fromAddress comparison against `connectedEmail` (a single
-  // primary mailbox) misclassifies replies sent from a different mailbox of the
-  // same shop as "incoming".
-  if (email.processingStatus === "outgoing") return "outgoing";
-  const from = email.fromAddress.trim().toLowerCase();
-  const mailbox = (connectedEmail ?? "").trim().toLowerCase();
-  if (!from || !mailbox) return "unknown";
-  return from === mailbox ? "outgoing" : "incoming";
+  return libGetMessageDirection(email, connectedEmail);
 }
 
 function threadNeedsReply(
@@ -2556,6 +2523,7 @@ function ThreadDetailPanel({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  const loaderData = useLoaderData<typeof loader>();
   const { latest, emails } = thread;
   const noReplyNeeded = latest.analysisResult?.conversation?.noReplyNeeded === true;
   const reanalyzeFetcher = useFetcher();
@@ -2802,6 +2770,24 @@ function ThreadDetailPanel({
             </reanalyzeFetcher.Form>
           )}
           {isGenerating && <span style={{ fontSize: "0.8125rem", color: "var(--ui-slate-500)", alignSelf: "center" }}>{t("inbox.generating")}</span>}
+          {(() => {
+            const connection = loaderData.connections.find(
+              (c) => c.id === latest.mailConnectionId,
+            );
+            if (!connection || !latest.replyDraftId) return null;
+            return (
+              <SendButton
+                shop={loaderData.shop}
+                mailConnectionId={connection.id}
+                draftId={latest.replyDraftId}
+                customerEmail={latest.fromAddress}
+                canSend={connection.canSend}
+                reauthUrl={`/app/mail-auth/reauth?mailConnectionId=${connection.id}&returnTo=/app/inbox?thread=${latest.canonicalThreadId ?? ""}`}
+                initialSentAt={latest.draftSentAt ?? null}
+                disabled={!latest.draftReply}
+              />
+            );
+          })()}
         </div>
       </div>
 
@@ -3167,7 +3153,19 @@ export default function InboxPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bgSyncActive]);
 
-  const [activeBucket, setActiveBucket] = useState<OpsBucket | "all" | "to_handle">("to_handle");
+  // Initial bucket selection can be driven by the URL (e.g. dashboard
+  // links: /app/inbox?bucket=resolved). Keep state local afterwards so
+  // tab clicks stay snappy without pushing a history entry per click.
+  type BucketKey = OpsBucket | "all" | "to_handle";
+  const validBuckets = new Set<BucketKey>([
+    "all", "to_handle", "to_process", "to_analyze", "waiting_customer", "waiting_merchant", "resolved", "other",
+  ]);
+  const initialBucket = (() => {
+    if (typeof window === "undefined") return "to_handle";
+    const fromUrl = new URLSearchParams(window.location.search).get("bucket") as BucketKey | null;
+    return fromUrl && validBuckets.has(fromUrl) ? fromUrl : "to_handle";
+  })();
+  const [activeBucket, setActiveBucket] = useState<BucketKey>(initialBucket);
   const [filters, setFilters] = useState<InboxFilters>({
     search: "",
     orderLinked: "any",
@@ -3411,6 +3409,16 @@ export default function InboxPage() {
         <h1 style={{ margin: 0 }}>{t("nav.emailInbox")}</h1>
         <MailboxIndicator connections={loaderData.connections} />
       </div>
+
+      {/* Safety bypass banner: shown when SEND_DISABLED_FOR_INTERNAL=true on an internal shop */}
+      {loaderData.sendDisabled && (
+        <div style={{
+          padding: "10px 16px", background: "#fff3cd", border: "1px solid #ffeeba",
+          borderRadius: 6, marginBottom: 16, color: "#856404", fontFamily: "system-ui",
+        }}>
+          🧪 {t("inbox.send.internal_banner")}
+        </div>
+      )}
 
       {/* Onboarding checklist (auto-hides when dismissed or complete) */}
       <div className="ui-inbox-section">

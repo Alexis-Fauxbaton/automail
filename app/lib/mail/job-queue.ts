@@ -84,11 +84,18 @@ export async function enqueueJob(opts: EnqueueOptions): Promise<string> {
   // two different mailboxes of the same shop can each have one pending job of
   // the same kind. Shop-wide kinds (recompute/reclassify) deduplicate by
   // (shop, kind) only (mailConnectionId is null on those rows).
+  //
+  // analyze_thread carries per-thread granularity in params.threadId — two
+  // analyze_thread jobs for DIFFERENT threads in the same mailbox must not
+  // collapse into one. Include params in the dedup key for that kind.
   const statusFilter = { in: ["pending", "running"] };
+  const paramsJson = opts.params ? JSON.stringify(opts.params) : null;
   const existing = await prisma.syncJob.findFirst({
-    where: MAILBOX_SCOPED_KINDS.includes(opts.kind)
-      ? { shop: opts.shop, kind: opts.kind, mailConnectionId: opts.mailConnectionId ?? null, status: statusFilter }
-      : { shop: opts.shop, kind: opts.kind, status: statusFilter },
+    where: opts.kind === "analyze_thread"
+      ? { shop: opts.shop, kind: opts.kind, mailConnectionId: opts.mailConnectionId ?? null, params: paramsJson ?? undefined, status: statusFilter }
+      : MAILBOX_SCOPED_KINDS.includes(opts.kind)
+        ? { shop: opts.shop, kind: opts.kind, mailConnectionId: opts.mailConnectionId ?? null, status: statusFilter }
+        : { shop: opts.shop, kind: opts.kind, status: statusFilter },
     select: { id: true },
   });
   if (existing) return existing.id;

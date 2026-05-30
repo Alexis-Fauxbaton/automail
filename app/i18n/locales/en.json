@@ -191,8 +191,7 @@
     "kpiEmailsSent": "Emails sent",
     "kpiMedianResponse": "Median 1st response",
     "kpiReopened": "Reopened threads",
-    "kpiDraftsSent": "Drafts used",
-    "kpiVolume": "Support emails",
+    "kpiVolume": "Support emails received",
     "comingSoon": "Coming soon",
     "chartTitle": "Trends over the period",
     "chartSubtitle": "Emails received · Drafts generated and sent",
@@ -207,6 +206,11 @@
     "stateWaitingMerchant": "To handle",
     "stateResolved": "Resolved",
     "stateNoReplyNeeded": "No reply needed",
+    "bucketToHandle": "To handle",
+    "bucketToAnalyze": "To analyze",
+    "bucketWaitingCustomer": "Waiting customer",
+    "bucketResolved": "Resolved",
+    "bucketOther": "Other",
     "stateCardTitle": "Current state · {{date}}",
     "stateCardSubtitle": "Operational status of all conversations",
     "conversationsTitle": "Conversations (period)",
@@ -217,14 +221,6 @@
     "qualitySubtitle": "Support volume + median response time per day",
     "qualityTabVolume": "Support emails per day",
     "qualityTabTime": "Median 1st response time",
-    "draftAsIs": "as-is",
-    "draftEdited": "edited",
-    "draftIgnored": "ignored",
-    "draftAsIsLabel": "Sent as-is",
-    "draftEditedLabel": "Edited",
-    "draftIgnoredLabel": "Ignored",
-    "productivityTitle": "AI productivity",
-    "productivitySubtitle": "Draft usage breakdown · heuristic until native send",
     "heatmapTitle": "Activity peaks",
     "heatmapSubtitle": "Support emails received by day × hour",
     "topIntents": "Top intents",
@@ -395,7 +391,17 @@
     "mailboxCount_one": "{{count}} mailbox",
     "mailboxCount_other": "{{count}} mailboxes",
     "errorCount_one": "{{count}} error",
-    "errorCount_other": "{{count}} errors"
+    "errorCount_other": "{{count}} errors",
+    "send": {
+      "cta": "Send",
+      "disabled_no_draft": "Generate a draft first",
+      "activate": "Activate sending for this mailbox",
+      "pending": "Sending to {{customer}} in {{seconds}}s",
+      "cancel": "Cancel",
+      "sent": "Sent",
+      "retry": "Retry",
+      "internal_banner": "Sends disabled (internal store) — click anyway to test the flow"
+    }
   },
   "login": {
     "heading": "Log in",
@@ -537,6 +543,7 @@
     "emptyState": "No mailbox connected yet. Connect your first mailbox to start analysing support emails.",
     "connectFirst": "Connect a mailbox",
     "lastSyncAt": "Last sync: {{date}}",
+    "firstSyncInProgress": "First sync in progress… This can take a few minutes. This page refreshes automatically.",
     "threadCount_one": "{{count}} conversation",
     "threadCount_other": "{{count}} conversations",
     "statusOk": "Active",
@@ -556,5 +563,15 @@
     "limitReachedBody": "You have reached the maximum number of mailboxes for your current plan. Upgrade to Pro to connect more.",
     "upgradeCta": "Upgrade to Pro",
     "softPauseBanner": "All {{pausedCount}} of your mailboxes have been automatically paused following a plan change. Your plan now allows {{limit}} mailbox. Resume the mailboxes you want to keep active."
+  },
+  "mail-auth": {
+    "reauth": {
+      "title": "Enable sending for {{email}} ({{provider}})",
+      "intro": "To send emails from Automail, we need an additional permission from {{provider}}.",
+      "bullet_no_auto": "No automatic sending — you keep full control.",
+      "bullet_each_click": "Every send requires your explicit click.",
+      "bullet_no_extra_read": "We access no emails beyond what you already see.",
+      "continue": "Continue to {{provider}}"
+    }
   }
 }

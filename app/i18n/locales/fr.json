@@ -191,8 +191,7 @@
     "kpiEmailsSent": "Mails envoyés",
     "kpiMedianResponse": "Délai 1re réponse",
     "kpiReopened": "Threads ré-ouverts",
-    "kpiDraftsSent": "Brouillons utilisés",
-    "kpiVolume": "Emails support",
+    "kpiVolume": "Emails support reçus",
     "comingSoon": "Bientôt disponible",
     "chartTitle": "Tendances sur la période",
     "chartSubtitle": "Emails reçus · Brouillons générés et envoyés",
@@ -207,6 +206,11 @@
     "stateWaitingMerchant": "À traiter",
     "stateResolved": "Résolu",
     "stateNoReplyNeeded": "Sans réponse requise",
+    "bucketToHandle": "À traiter",
+    "bucketToAnalyze": "À analyser",
+    "bucketWaitingCustomer": "Attente client",
+    "bucketResolved": "Résolu",
+    "bucketOther": "Autre",
     "stateCardTitle": "État actuel · {{date}}",
     "stateCardSubtitle": "Statut opérationnel de toutes les conversations",
     "conversationsTitle": "Conversations (période)",
@@ -217,14 +221,6 @@
     "qualitySubtitle": "Volume support + délai médian de réponse par jour",
     "qualityTabVolume": "Emails support par jour",
     "qualityTabTime": "Délai médian de 1re réponse",
-    "draftAsIs": "tel quel",
-    "draftEdited": "modifié",
-    "draftIgnored": "ignoré",
-    "draftAsIsLabel": "Envoyé tel quel",
-    "draftEditedLabel": "Modifié",
-    "draftIgnoredLabel": "Ignoré",
-    "productivityTitle": "Productivité IA",
-    "productivitySubtitle": "Utilisation des brouillons générés · calculé heuristiquement jusqu'à l'envoi natif",
     "heatmapTitle": "Pics d'activité",
     "heatmapSubtitle": "Emails support reçus par jour × heure",
     "topIntents": "Top intentions",
@@ -395,7 +391,17 @@
     "mailboxCount_one": "{{count}} boîte",
     "mailboxCount_other": "{{count}} boîtes",
     "errorCount_one": "{{count}} erreur",
-    "errorCount_other": "{{count}} erreurs"
+    "errorCount_other": "{{count}} erreurs",
+    "send": {
+      "cta": "Envoyer",
+      "disabled_no_draft": "Générez d'abord un brouillon",
+      "activate": "Activer l'envoi pour cette boîte",
+      "pending": "Envoi à {{customer}} dans {{seconds}}s",
+      "cancel": "Annuler",
+      "sent": "Envoyé",
+      "retry": "Réessayer",
+      "internal_banner": "Envois désactivés (boutique interne) — cliquez quand même pour tester le flow"
+    }
   },
   "login": {
     "heading": "Connexion",
@@ -537,6 +543,7 @@
     "emptyState": "Aucune boîte mail connectée. Connectez votre première boîte mail pour commencer à analyser vos emails de support.",
     "connectFirst": "Connecter une boîte mail",
     "lastSyncAt": "Dernière synchronisation : {{date}}",
+    "firstSyncInProgress": "Première synchronisation en cours… Cela peut prendre quelques minutes. Cette page se rafraîchit automatiquement.",
     "threadCount_one": "{{count}} conversation",
     "threadCount_other": "{{count}} conversations",
     "statusOk": "Actif",
@@ -556,5 +563,15 @@
     "limitReachedBody": "Vous avez atteint le nombre maximum de boîtes mail autorisé par votre forfait. Passez au plan Pro pour en connecter davantage.",
     "upgradeCta": "Passer au plan Pro",
     "softPauseBanner": "Vos {{pausedCount}} boîte(s) mail ont été automatiquement mises en pause suite à un changement de forfait. Votre forfait autorise désormais {{limit}} boîte mail. Reprenez les boîtes que vous souhaitez conserver actives."
+  },
+  "mail-auth": {
+    "reauth": {
+      "title": "Activer l'envoi pour {{email}} ({{provider}})",
+      "intro": "Pour pouvoir envoyer des emails depuis Automail, nous avons besoin d'une permission supplémentaire de {{provider}}.",
+      "bullet_no_auto": "Aucun envoi automatique — vous gardez le contrôle total.",
+      "bullet_each_click": "Chaque envoi nécessite votre clic explicite.",
+      "bullet_no_extra_read": "Nous n'accédons à aucun mail au-delà de ce que vous voyez déjà.",
+      "continue": "Continuer vers {{provider}}"
+    }
   }
 }
