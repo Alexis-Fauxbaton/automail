@@ -76,7 +76,13 @@ const SEND_STALE_THRESHOLD_MS = 5 * 60 * 1000;
 const STALE_CLASSIFY_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 h gate per thread
 const STALE_CLASSIFY_BATCH = 50;                          // max threads per tick
 const STALE_CLASSIFY_SCAN_INTERVAL_MS = 60 * 60 * 1000;  // 1 h between scans
-export let _lastStaleClassifyScanAt = 0; // exported for tests
+let _lastStaleClassifyScanAt = 0;
+/** Test-only: reset the in-memory throttle. Module exports are read-only
+ *  in strict ESM, so we expose a setter instead of letting tests poke the
+ *  let binding directly. */
+export function _resetStaleClassifyThrottleForTest(): void {
+  _lastStaleClassifyScanAt = 0;
+}
 
 let started = false;
 let _intervalHandle: ReturnType<typeof setInterval> | null = null;

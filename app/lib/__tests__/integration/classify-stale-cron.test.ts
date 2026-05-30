@@ -89,12 +89,10 @@ async function createIncomingEmail(
   });
 }
 
-/** Reset the in-memory throttle by mutating the exported variable. */
+/** Reset the in-memory throttle so each test starts from a clean slate. */
 async function resetThrottle() {
-  // Dynamically import so we can reset between tests without module caching issues.
-  // Vitest re-uses modules by default — the export is the live binding.
   const mod = await import("../../mail/auto-sync");
-  mod._lastStaleClassifyScanAt = 0;
+  mod._resetStaleClassifyThrottleForTest();
 }
 
 // ---------------------------------------------------------------------------
