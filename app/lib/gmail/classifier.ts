@@ -24,7 +24,16 @@ If a THREAD STATE block is provided, use it as a strong prior:
   - a thread already confirmed_support stays support unless the new message is clearly off-topic spam;
   - a thread already non_support: classify as probable_non_client unless there is a very clear customer support request (e.g. mentions an order, a delivery problem, a refund);
   - a thread with only outgoing messages (merchant replies) and no new customer signal is not a new support request by itself.
-When the content is vague but doesn't mention orders, products, or a specific customer problem, prefer probable_non_client over incertain.
+
+The SUBJECT is a strong signal of intent. When the subject clearly indicates a customer support topic
+("Where is my order", "Ma commande est où", "Refund", "Remboursement", "Damaged product", "Produit cassé",
+"Order #1234 issue", "Delivery delay", "Retard livraison", "Cancel my order", etc.), classify as
+support_client even when the body is vague, casual, terse ("bon ?", "ok", "?", "and?"), or only a one-line
+follow-up. The customer's intent is already established by the subject + the fact they're following up in
+the same thread.
+
+When the content is vague AND the subject doesn't mention any order/product/customer problem, prefer
+probable_non_client over incertain.
 
 Reply with JSON only: {"classification":"..."}`;
 
