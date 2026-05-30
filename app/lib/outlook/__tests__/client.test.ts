@@ -128,23 +128,32 @@ describe("fetchDeltaMessages", () => {
 describe("fetchHistoricalMessages", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("fetches messages after a given date with pagination", async () => {
-    mockFetch
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          value: [SAMPLE_GRAPH_MSG],
-          "@odata.nextLink": "https://graph.microsoft.com/next",
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ value: [] }),
-      });
+  it("fetches messages from both Inbox and Sent folders with pagination", async () => {
+    // fetchHistoricalMessages queries Inbox and Sent folders in parallel; the
+    // call order isn't deterministic. Route responses by URL instead of order.
+    mockFetch.mockImplementation(async (url: string) => {
+      if (url.includes("mailFolders/inbox/messages") && !url.includes("nextLink")) {
+        return {
+          ok: true,
+          json: async () => ({
+            value: [SAMPLE_GRAPH_MSG],
+            "@odata.nextLink": "https://graph.microsoft.com/v1.0/inboxPage2?nextLink=1",
+          }),
+        };
+      }
+      if (url.includes("inboxPage2")) {
+        return { ok: true, json: async () => ({ value: [] }) };
+      }
+      if (url.includes("mailFolders/sentitems/messages")) {
+        return { ok: true, json: async () => ({ value: [] }) };
+      }
+      throw new Error(`unexpected fetch URL: ${url}`);
+    });
 
     const afterDate = new Date("2026-04-01T00:00:00Z");
     const messages = await fetchHistoricalMessages("conn-test-1", afterDate);
     expect(messages).toHaveLength(1);
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    // 2 inbox pages + 1 sentitems page
+    expect(mockFetch).toHaveBeenCalledTimes(3);
   });
 });
