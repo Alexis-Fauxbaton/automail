@@ -1,4 +1,4 @@
-import { getPeriodBounds, getDashboardKpis, getReopenedThreads, getCurrentThreadStates } from "../app/lib/dashboard-stats.js";
+import { getPeriodBounds, getDashboardKpis, getReopenedThreads, getInboxBucketCounts } from "../app/lib/dashboard-stats.js";
 
 const SHOP = "2ed20e.myshopify.com";
 const now = new Date("2026-05-07T22:00:00Z"); // ~midnight Paris time (UTC+2)
@@ -10,7 +10,7 @@ console.log("Prev  :", bounds.prevStart.toISOString(), "->", bounds.prevEnd.toIS
 const [kpis, reopened, states] = await Promise.all([
   getDashboardKpis(SHOP, bounds.start, bounds.end, bounds.prevStart, bounds.prevEnd),
   getReopenedThreads(SHOP, bounds.start, bounds.end, 10),
-  getCurrentThreadStates(SHOP),
+  getInboxBucketCounts(SHOP),
 ]);
 
 const fmt = (ms: number | null) => ms ? (ms / 3600000).toFixed(1) + "h" : "null";
@@ -34,12 +34,13 @@ console.log("Draft ignored   :", kpis.draftUsage.ignored);
 console.log("Draft pending   :", kpis.draftUsage.pending);
 console.log("Draft sentPct   :", kpis.draftUsage.sentPct !== null ? kpis.draftUsage.sentPct + "%" : "null — no classified drafts");
 console.log("");
-console.log("=== Thread states (snapshot actuel) ===");
-console.log("  open            :", states.open);
+console.log("=== Inbox buckets (snapshot actuel) ===");
+console.log("  to_process      :", states.to_process);
+console.log("  to_analyze      :", states.to_analyze);
 console.log("  waiting_customer:", states.waiting_customer);
 console.log("  waiting_merchant:", states.waiting_merchant);
 console.log("  resolved        :", states.resolved);
-console.log("  no_reply_needed :", states.no_reply_needed);
+console.log("  other           :", states.other);
 console.log("");
 console.log("=== Reopened threads (" + reopened.length + ") ===");
 for (const r of reopened) {

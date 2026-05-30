@@ -1,4 +1,4 @@
-import { getPeriodBounds, getTopIntentsWithPerf, getCurrentThreadStates, getReopenedThreads } from "../app/lib/dashboard-stats.js";
+import { getPeriodBounds, getTopIntentsWithPerf, getInboxBucketCounts, getReopenedThreads } from "../app/lib/dashboard-stats.js";
 
 const SHOP = "2ed20e.myshopify.com";
 const now = new Date("2026-05-07T22:00:00Z");
@@ -6,7 +6,7 @@ const bounds = getPeriodBounds("30d", undefined, undefined, now);
 
 const [intents, states, reopened] = await Promise.all([
   getTopIntentsWithPerf(SHOP, bounds.start, bounds.end, 8),
-  getCurrentThreadStates(SHOP),
+  getInboxBucketCounts(SHOP),
   getReopenedThreads(SHOP, bounds.start, bounds.end, 10),
 ]);
 
@@ -17,12 +17,12 @@ intents.forEach((i, idx) => {
 });
 
 console.log("");
-console.log("=== État actuel de la file ===");
-console.log("  Ouvert            :", states.open);
-console.log("  Attente client    :", states.waiting_customer);
-console.log("  À traiter         :", states.waiting_merchant);
-console.log("  Résolu            :", states.resolved);
-console.log("  Sans réponse req. :", states.no_reply_needed);
+console.log("=== Inbox buckets (snapshot) ===");
+console.log("  À traiter (to_process+merchant):", states.to_process + states.waiting_merchant);
+console.log("  À analyser                     :", states.to_analyze);
+console.log("  Attente client                 :", states.waiting_customer);
+console.log("  Résolu                         :", states.resolved);
+console.log("  Autre                          :", states.other);
 
 console.log("");
 console.log("=== Threads ré-ouverts récents (top 6) ===");

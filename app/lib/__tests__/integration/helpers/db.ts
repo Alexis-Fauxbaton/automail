@@ -46,6 +46,8 @@ export async function createTestThread(overrides: Partial<{
   lastMessageAt: Date;
   firstMessageAt: Date;
   operationalStateUpdatedAt: Date;
+  analyzedAt: Date;
+  dismissedFromAnalyzeAt: Date;
 }> = {}) {
   let mailConnectionId = overrides.mailConnectionId;
   if (!mailConnectionId) {

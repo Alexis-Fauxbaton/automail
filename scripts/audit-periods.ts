@@ -1,7 +1,7 @@
 import prisma from "../app/db.server.js";
 import {
   getPeriodBounds, getDashboardKpis, getResponseTimeDailyBreakdown,
-  getTopIntentsWithPerf, getCurrentThreadStates, getReopenedThreads,
+  getTopIntentsWithPerf, getInboxBucketCounts, getReopenedThreads,
   getHeatmap,
 } from "../app/lib/dashboard-stats.js";
 
@@ -17,7 +17,7 @@ for (const range of ["24h", "7d", "30d", "90d"]) {
     getResponseTimeDailyBreakdown(SHOP, b.start, b.end),
     getHeatmap(SHOP, b.start, b.end),
     getTopIntentsWithPerf(SHOP, b.start, b.end, 8),
-    getCurrentThreadStates(SHOP),
+    getInboxBucketCounts(SHOP),
     getReopenedThreads(SHOP, b.start, b.end, 10),
   ]);
 

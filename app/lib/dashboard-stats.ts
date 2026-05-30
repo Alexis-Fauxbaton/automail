@@ -2,6 +2,11 @@
 
 import { Prisma } from "@prisma/client";
 import prisma from "../db.server";
+import {
+  type OpsBucket,
+  classifyMessage,
+  getThreadOpsBucket,
+} from "./support/thread-bucket";
 
 // Timezone used for day bucketing (label display and chart grouping).
 // A mail received at 01:22 local time must not appear on the previous UTC day.
@@ -61,13 +66,10 @@ export function getPeriodBounds(
 // Return types
 // ---------------------------------------------------------------------------
 
-export type ThreadStateCounts = {
-  open: number;
-  waiting_customer: number;
-  waiting_merchant: number;
-  resolved: number;
-  no_reply_needed: number;
-};
+// Inbox bucket counts — same buckets the merchant sees in the inbox tabs.
+// Computed via the shared bucket lib so dashboard ↔ inbox numbers always
+// agree. See [app/lib/support/thread-bucket.ts](./support/thread-bucket.ts).
+export type InboxBucketCounts = Record<OpsBucket, number>;
 
 export type ResponseTimeStats = {
   medianMs: number | null;
@@ -118,37 +120,91 @@ export type DashboardKpis = {
 // Query functions
 // ---------------------------------------------------------------------------
 
-export async function getCurrentThreadStates(
+export async function getInboxBucketCounts(
   shop: string,
   mailConnectionId?: string,
-): Promise<ThreadStateCounts> {
-  // `messages: { some: {} }` exclut les Thread fantômes : un resync supprime
-  // les IncomingEmail mais conserve les Thread (pour préserver
-  // operationalState manuel, drafts, manualOverrides). Les threads dont
-  // tous les mails ont été purgés et jamais re-rattachés n'ont plus de
-  // conversation à compter.
-  const rows = await prisma.thread.groupBy({
-    by: ["operationalState"],
+): Promise<InboxBucketCounts> {
+  // `messages: { some: {} }` excludes phantom threads: a resync purges
+  // IncomingEmail rows but keeps the Thread (to preserve manual
+  // operationalState, drafts, overrides). Threads with zero messages have
+  // nothing to bucket.
+  const threads = await prisma.thread.findMany({
     where: {
       shop,
       ...(mailConnectionId ? { mailConnectionId } : {}),
-      supportNature: { not: "non_support" },
       messages: { some: {} },
     },
-    _count: { _all: true },
+    select: {
+      supportNature: true,
+      operationalState: true,
+      analyzedAt: true,
+      dismissedFromAnalyzeAt: true,
+      mailConnection: { select: { email: true } },
+      messages: {
+        orderBy: { receivedAt: "desc" },
+        // Load up to 5 most recent messages so we can find the most-recently
+        // classified one (the latest may be an outgoing reply with no tier
+        // results). 5 covers all realistic thread tails.
+        take: 5,
+        select: {
+          processingStatus: true,
+          fromAddress: true,
+          receivedAt: true,
+          tier1Result: true,
+          tier2Result: true,
+          analysisResult: true,
+        },
+      },
+    },
   });
 
-  const counts: ThreadStateCounts = {
-    open: 0,
+  const counts: InboxBucketCounts = {
+    to_process: 0,
+    to_analyze: 0,
     waiting_customer: 0,
     waiting_merchant: 0,
     resolved: 0,
-    no_reply_needed: 0,
+    other: 0,
   };
 
-  for (const row of rows) {
-    const state = row.operationalState as keyof ThreadStateCounts;
-    if (state in counts) counts[state] = row._count._all;
+  for (const t of threads) {
+    const latest = t.messages[0];
+    if (!latest) continue;
+
+    // Find the most-recently-CLASSIFIED message for thread classification
+    // (outgoing messages have no tier results).
+    const classifiedMsg = t.messages.find((m) => m.tier1Result || m.tier2Result) ?? latest;
+
+    let noReplyNeeded = false;
+    if (latest.analysisResult) {
+      try {
+        const parsed = JSON.parse(latest.analysisResult) as {
+          conversation?: { noReplyNeeded?: boolean };
+        };
+        noReplyNeeded = parsed?.conversation?.noReplyNeeded === true;
+      } catch {
+        /* ignore */
+      }
+    }
+
+    const bucket = getThreadOpsBucket({
+      latest: {
+        processingStatus: latest.processingStatus,
+        fromAddress: latest.fromAddress,
+        receivedAt: latest.receivedAt,
+      },
+      classification: classifyMessage(classifiedMsg),
+      noReplyNeeded,
+      state: {
+        supportNature: t.supportNature,
+        operationalState: t.operationalState,
+        analyzedAt: t.analyzedAt,
+        dismissedFromAnalyzeAt: t.dismissedFromAnalyzeAt,
+      },
+      connectedEmail: t.mailConnection?.email ?? null,
+    });
+
+    counts[bucket]++;
   }
 
   return counts;

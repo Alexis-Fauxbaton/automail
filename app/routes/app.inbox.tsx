@@ -27,6 +27,11 @@ import type { MailProvider } from "../lib/mail/types";
 import { decodeHtmlEntities } from "../lib/gmail/client";
 import { sanitizeEmailHtml, buildCidMap } from "../lib/mail/sanitize-html";
 import { buildReplySubject } from "../lib/support/draft-subject";
+import {
+  type OpsBucket,
+  getThreadOpsBucket,
+  getMessageDirection as libGetMessageDirection,
+} from "../lib/support/thread-bucket";
 import { RichDraftEditor } from "../components/RichDraftEditor";
 import { QuotaExceededModal } from "../components/billing/QuotaExceededModal";
 import { useEntitlements } from "../lib/billing/entitlements-context";
@@ -778,82 +783,21 @@ function getClassification(email: SerializedEmail): NatureFilter {
   return "all";
 }
 
-// Primary inbox bucket derived from the thread's operational state +
-// whether the latest message needs a reply. This is the view a merchant
-// actually cares about ("what do I have to do next?").
-type OpsBucket =
-  | "to_process"       // support thread waiting for a human reply
-  | "to_analyze"       // support thread, Tier 3 never ran (suspended sync), waiting for explicit analysis
-  | "waiting_customer" // we replied, awaiting customer
-  | "waiting_merchant" // internal / data action required on our side
-  | "resolved"         // closed, no reply needed, or conversation ended
-  | "other";           // filtered / non-support / unknown
-
-// Threads with no recent activity for this many ms are auto-bucketed as resolved.
-const AUTO_RESOLVE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-
+// Thin wrapper around the shared bucket lib — the dashboard uses the same
+// function so counts never disagree between surfaces. See
+// [app/lib/support/thread-bucket.ts](../lib/support/thread-bucket.ts).
 function getOpsBucket(
   thread: EmailThread,
   state: SerializedThreadState | null,
   connectedEmail: string | null,
 ): OpsBucket {
-  // Threads explicitly classified as non-support by Tier 2 never belong
-  // in actionable or resolved buckets — they have nothing to do in a support inbox.
-  if (state?.supportNature === "non_support") return "other";
-  // A manual "resolved" set by the agent always wins — never override it
-  // with automatic signal (e.g. last message incoming). This lets agents
-  // explicitly close a thread even when the customer has the last word.
-  if (state?.operationalState === "resolved" || state?.operationalState === "no_reply_needed") {
-    return "resolved";
-  }
-  // À analyser bucket: support threads that never ran Tier 3 (typically
-  // accumulated while the shop was suspended) and haven't been dismissed
-  // by the merchant. They wait for an explicit "Analyser" click. Once Tier 3
-  // runs (analyzedAt set) the thread falls through to the regular buckets.
-  const isSupportStance =
-    state?.supportNature === "confirmed_support" ||
-    state?.supportNature === "probable_support" ||
-    state?.supportNature === "mixed";
-  if (isSupportStance && !state?.analyzedAt) {
-    if (!state?.dismissedFromAnalyzeAt) return "to_analyze";
-    // Dismissed unanalyzed support thread → "Autre". The merchant explicitly
-    // chose not to deal with it through the AI flow, so keep it out of the
-    // primary actionable buckets. A new incoming customer message clears
-    // dismissedFromAnalyzeAt server-side (see ingestAndPrefilter) and the
-    // thread comes back to À analyser automatically.
-    return "other";
-  }
-  if (threadNeedsReply(thread, connectedEmail)) return "to_process";
-  const op = state?.operationalState;
-  // Before trusting the DB operational state, check message direction.
-  // If the last message is outgoing but DB says "waiting_merchant", the
-  // DB state is stale (thread was not recomputed after we sent a reply).
-  // Override to a direction-consistent bucket so the UI is never wrong.
-  const lastDir = getMessageDirection(thread.latest, connectedEmail);
-  const ageMs = Date.now() - new Date(thread.latest.receivedAt).getTime();
-  if (op === "waiting_merchant" && lastDir === "outgoing") {
-    return ageMs >= AUTO_RESOLVE_AGE_MS ? "resolved" : "waiting_customer";
-  }
-  if (op === "waiting_merchant") return "waiting_merchant";
-  if (op === "waiting_customer") {
-    return ageMs >= AUTO_RESOLVE_AGE_MS ? "resolved" : "waiting_customer";
-  }
-  if (thread.latest.analysisResult?.conversation?.noReplyNeeded === true) return "resolved";
-  // Support/uncertain threads with no explicit operational state yet
-  // (e.g. old threads before state tracking, or threads where recompute
-  // hasn't run). Infer from the last message direction so the bucket is
-  // at least plausible while the background recompute job catches up.
-  const isLikelySupport =
-    state?.supportNature === "confirmed_support" ||
-    state?.supportNature === "needs_review" ||
-    (!state && getThreadClassification(thread) === "support");
-  if (isLikelySupport) {
-    if (lastDir === "outgoing") {
-      return ageMs >= AUTO_RESOLVE_AGE_MS ? "resolved" : "waiting_customer";
-    }
-    return "waiting_merchant";
-  }
-  return "other";
+  return getThreadOpsBucket({
+    latest: thread.latest,
+    classification: getThreadClassification(thread),
+    noReplyNeeded: thread.latest.analysisResult?.conversation?.noReplyNeeded === true,
+    state,
+    connectedEmail,
+  });
 }
 
 function hasLinkedOrder(state: SerializedThreadState | null): boolean {
@@ -986,16 +930,7 @@ function getMessageDirection(
   email: SerializedEmail,
   connectedEmail: string | null,
 ): "incoming" | "outgoing" | "unknown" {
-  // Trust the backend's processingStatus first — it's computed against the
-  // CORRECT mailbox's outgoingAliases at ingest time and works for multi-mailbox.
-  // Falling back to a fromAddress comparison against `connectedEmail` (a single
-  // primary mailbox) misclassifies replies sent from a different mailbox of the
-  // same shop as "incoming".
-  if (email.processingStatus === "outgoing") return "outgoing";
-  const from = email.fromAddress.trim().toLowerCase();
-  const mailbox = (connectedEmail ?? "").trim().toLowerCase();
-  if (!from || !mailbox) return "unknown";
-  return from === mailbox ? "outgoing" : "incoming";
+  return libGetMessageDirection(email, connectedEmail);
 }
 
 function threadNeedsReply(
@@ -3212,7 +3147,19 @@ export default function InboxPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bgSyncActive]);
 
-  const [activeBucket, setActiveBucket] = useState<OpsBucket | "all" | "to_handle">("to_handle");
+  // Initial bucket selection can be driven by the URL (e.g. dashboard
+  // links: /app/inbox?bucket=resolved). Keep state local afterwards so
+  // tab clicks stay snappy without pushing a history entry per click.
+  type BucketKey = OpsBucket | "all" | "to_handle";
+  const validBuckets = new Set<BucketKey>([
+    "all", "to_handle", "to_process", "to_analyze", "waiting_customer", "waiting_merchant", "resolved", "other",
+  ]);
+  const initialBucket = (() => {
+    if (typeof window === "undefined") return "to_handle";
+    const fromUrl = new URLSearchParams(window.location.search).get("bucket") as BucketKey | null;
+    return fromUrl && validBuckets.has(fromUrl) ? fromUrl : "to_handle";
+  })();
+  const [activeBucket, setActiveBucket] = useState<BucketKey>(initialBucket);
   const [filters, setFilters] = useState<InboxFilters>({
     search: "",
     orderLinked: "any",

@@ -14,7 +14,7 @@ import {
 import {
   getPeriodBounds,
   getDashboardKpis,
-  getCurrentThreadStates,
+  getInboxBucketCounts,
   getTopIntentsWithPerf,
   getResponseTimeDailyBreakdown,
   getReopenedThreads,
@@ -64,14 +64,15 @@ async function createIncoming(overrides: {
 }
 
 // ---------------------------------------------------------------------------
-// REGRESSION: bug #1 — getCurrentThreadStates included non_support
+// REGRESSION: bug #1 — non_support threads must never appear in actionable buckets
+// (Now enforced through getInboxBucketCounts → getThreadOpsBucket, which sends
+// supportNature='non_support' straight to the 'other' bucket.)
 // ---------------------------------------------------------------------------
 
-describe("getCurrentThreadStates — non_support exclusion", () => {
-  it("REG-1: ne compte pas les threads non_support dans 'open'", async () => {
-    // 2 confirmed_support open + 3 non_support open + 1 unknown open
-    // getCurrentThreadStates requires messages: { some: {} } to exclude ghost
-    // threads, so each thread must have at least one IncomingEmail.
+describe("getInboxBucketCounts — non_support exclusion", () => {
+  it("REG-1: non_support threads atterrissent dans 'other', pas dans les actionables", async () => {
+    // 2 confirmed_support + 3 non_support + 1 unknown. seedIncomingEmail is
+    // required because getInboxBucketCounts excludes phantom threads (no messages).
     const threads = await Promise.all([
       createTestThread({ supportNature: "confirmed_support", operationalState: "open" }),
       createTestThread({ supportNature: "confirmed_support", operationalState: "open" }),
@@ -81,26 +82,34 @@ describe("getCurrentThreadStates — non_support exclusion", () => {
       createTestThread({ supportNature: "unknown", operationalState: "open" }),
     ]);
     await Promise.all(threads.map((t) => seedIncomingEmail({ shop: TEST_SHOP, mailConnectionId: t.mailConnectionId, canonicalThreadId: t.id })));
-    const states = await getCurrentThreadStates(TEST_SHOP);
-    // 3 = 2 confirmed + 1 unknown (non_support excluded)
-    expect(states.open).toBe(3);
+    const counts = await getInboxBucketCounts(TEST_SHOP);
+    // confirmed_support with no analyzedAt + no dismissedFromAnalyzeAt → 'to_analyze'.
+    expect(counts.to_analyze).toBe(2);
+    // 3 non_support + 1 unknown (op=open, no support stance) → 'other'.
+    expect(counts.other).toBe(4);
   });
 
-  it("REG-1bis: no_reply_needed n'inclut pas les non_support", async () => {
-    // getCurrentThreadStates requires messages: { some: {} } — seed one email per thread.
+  it("REG-1bis: 'resolved' n'inclut pas les non_support", async () => {
     const threads = await Promise.all([
       createTestThread({ supportNature: "non_support", operationalState: "no_reply_needed" }),
       createTestThread({ supportNature: "non_support", operationalState: "no_reply_needed" }),
-      createTestThread({ supportNature: "confirmed_support", operationalState: "no_reply_needed" }),
+      createTestThread({ supportNature: "confirmed_support", operationalState: "no_reply_needed", analyzedAt: NOW }),
     ]);
     await Promise.all(threads.map((t) => seedIncomingEmail({ shop: TEST_SHOP, mailConnectionId: t.mailConnectionId, canonicalThreadId: t.id })));
-    const states = await getCurrentThreadStates(TEST_SHOP);
-    expect(states.no_reply_needed).toBe(1);
+    const counts = await getInboxBucketCounts(TEST_SHOP);
+    expect(counts.resolved).toBe(1);
   });
 
   it("retourne des zéros pour une boutique vide", async () => {
-    const states = await getCurrentThreadStates(TEST_SHOP);
-    expect(states).toEqual({ open: 0, waiting_customer: 0, waiting_merchant: 0, resolved: 0, no_reply_needed: 0 });
+    const counts = await getInboxBucketCounts(TEST_SHOP);
+    expect(counts).toEqual({
+      to_process: 0,
+      to_analyze: 0,
+      waiting_customer: 0,
+      waiting_merchant: 0,
+      resolved: 0,
+      other: 0,
+    });
   });
 });
 

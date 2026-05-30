@@ -13,14 +13,14 @@ import {
   getResponseTimeDailyBreakdown,
   getHeatmap,
   getTopIntentsWithPerf,
-  getCurrentThreadStates,
+  getInboxBucketCounts,
   getReopenedThreads,
   getAlerts,
   type DashboardKpis,
   type ResponseTimeDailyPoint,
   type HeatmapCell,
   type IntentPerf,
-  type ThreadStateCounts,
+  type InboxBucketCounts,
   type ReopenedThread,
   type Alert,
 } from "../lib/dashboard-stats";
@@ -72,14 +72,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
     reopened: { count: 0, prevCount: 0 },
     volume: { count: 0, prevCount: 0 },
   };
-  const zeroedStates: ThreadStateCounts = {
-    open: 0, waiting_customer: 0, waiting_merchant: 0, resolved: 0, no_reply_needed: 0,
+  const zeroedBuckets: InboxBucketCounts = {
+    to_process: 0, to_analyze: 0, waiting_customer: 0, waiting_merchant: 0, resolved: 0, other: 0,
   };
 
-  const [kpis, qualityChart, threadStates] = await Promise.all([
+  const [kpis, qualityChart, bucketCounts] = await Promise.all([
     getDashboardKpis(shop, start, end, prevStart, prevEnd, mailConnectionId).catch(() => zeroedKpis),
     getResponseTimeDailyBreakdown(shop, start, end, mailConnectionId).catch(() => [] as ResponseTimeDailyPoint[]),
-    getCurrentThreadStates(shop, mailConnectionId).catch(() => zeroedStates),
+    getInboxBucketCounts(shop, mailConnectionId).catch(() => zeroedBuckets),
   ]);
 
   const heatmap = ent.canViewAdvancedDashboard
@@ -109,7 +109,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     qualityChart,
     heatmap,
     topIntents: topIntentsAll.slice(0, ent.canViewAdvancedDashboard ? 5 : 3),
-    threadStates,
+    bucketCounts,
     reopened,
     alerts,
     isAdvancedDashboard: ent.canViewAdvancedDashboard,
@@ -332,12 +332,12 @@ function PlanGatePlaceholder({ feature }: { feature: string }) {
 }
 
 // Suppress unused-variable lint for types only used in the loader return shape
-type _Used = DashboardKpis | IntentPerf | ReopenedThread | Alert | HeatmapCell | ThreadStateCounts;
+type _Used = DashboardKpis | IntentPerf | ReopenedThread | Alert | HeatmapCell | InboxBucketCounts;
 
 export default function Dashboard() {
   const {
     range, connections, kpis, qualityChart,
-    heatmap, topIntents, threadStates, reopened, alerts,
+    heatmap, topIntents, bucketCounts, reopened, alerts,
     isAdvancedDashboard,
   } = useLoaderData<typeof loader>();
   const { t } = useTranslation();
@@ -366,12 +366,35 @@ export default function Dashboard() {
       : "up"
     : "neutral";
 
-  const stateRows: { key: keyof ThreadStateCounts; label: string }[] = [
-    { key: "open", label: t("dashboard.stateOpen", { defaultValue: "Ouvert" }) },
-    { key: "waiting_customer", label: t("dashboard.stateWaitingCustomer", { defaultValue: "En attente client" }) },
-    { key: "waiting_merchant", label: t("dashboard.stateWaitingMerchant", { defaultValue: "À traiter" }) },
-    { key: "resolved", label: t("dashboard.stateResolved", { defaultValue: "Résolu" }) },
-    { key: "no_reply_needed", label: t("dashboard.stateNoReplyNeeded", { defaultValue: "Sans réponse" }) },
+  // Mirror the inbox primary tabs exactly — see app.inbox.tsx bucketCounts.
+  // "À traiter" merges to_process + waiting_merchant (same as the inbox's
+  // "to_handle" tab). Clicking a row jumps to the matching inbox bucket.
+  const stateRows: { label: string; value: number; inboxBucket: string }[] = [
+    {
+      label: t("dashboard.bucketToHandle", { defaultValue: "À traiter" }),
+      value: bucketCounts.to_process + bucketCounts.waiting_merchant,
+      inboxBucket: "to_handle",
+    },
+    {
+      label: t("dashboard.bucketToAnalyze", { defaultValue: "À analyser" }),
+      value: bucketCounts.to_analyze,
+      inboxBucket: "to_analyze",
+    },
+    {
+      label: t("dashboard.bucketWaitingCustomer", { defaultValue: "Attente client" }),
+      value: bucketCounts.waiting_customer,
+      inboxBucket: "waiting_customer",
+    },
+    {
+      label: t("dashboard.bucketResolved", { defaultValue: "Résolu" }),
+      value: bucketCounts.resolved,
+      inboxBucket: "resolved",
+    },
+    {
+      label: t("dashboard.bucketOther", { defaultValue: "Autre" }),
+      value: bucketCounts.other,
+      inboxBucket: "other",
+    },
   ];
 
   // Alert type is a superset of AlertItem — cast is safe (extra fields are ignored by AlertBanner)
@@ -507,8 +530,14 @@ export default function Dashboard() {
           title={t("dashboard.stateCardTitle", { date: todayLabel, defaultValue: "État de la file" })}
           subtitle={t("dashboard.stateCardSubtitle", { defaultValue: "Snapshot actuel — non filtré par période" })}
         >
-          {stateRows.map(({ key, label }) => (
-            <StatRow key={key} label={label} value={threadStates[key]} />
+          {stateRows.map(({ label, value, inboxBucket }) => (
+            <Link
+              key={inboxBucket}
+              to={`/app/inbox?bucket=${inboxBucket}`}
+              style={{ display: "block", textDecoration: "none", color: "inherit" }}
+            >
+              <StatRow label={label} value={value} />
+            </Link>
           ))}
         </Card>
         <Card
