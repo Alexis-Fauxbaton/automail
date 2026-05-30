@@ -1091,6 +1091,14 @@ export async function handleSendDraft(params: {
         sendingStartedAt: null,
         sendError: null,
         linkedOutgoingEmailId: outgoing.id,
+        // App-triggered send → the draft was shipped exactly as authored.
+        // Set the heuristic bucket directly so the dashboard "Brouillons
+        // utilisés" KPI counts this send. The sync-side evaluateThread
+        // would skip this row anyway (the externalMessageId already exists
+        // from the pre-emptive insert, so the sync's _processSingleMessage
+        // doesn't re-process it).
+        heuristicBucket: "as_is",
+        heuristicComputedAt: now,
       },
     });
 
@@ -1215,6 +1223,10 @@ async function runFakeSendForInternalShop(params: {
         sendingStartedAt: null,
         sendError: null,
         linkedOutgoingEmailId: outgoing.id,
+        // Same heuristic-bucket marker as the real send path — the fake
+        // bypass still represents a sent draft from the merchant's POV.
+        heuristicBucket: "as_is",
+        heuristicComputedAt: now,
       },
     });
     await tx.thread.update({
