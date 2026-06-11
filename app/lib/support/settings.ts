@@ -20,6 +20,8 @@ export interface SupportSettings {
   customerGreetingStyle: CustomerGreetingStyle;
   /** Free-text refund / return policy shown to the LLM when handling refund requests. */
   refundPolicy: string;
+  /** When true, the « Envoyer » button sends in one click with no countdown. */
+  immediateSend: boolean;
 }
 
 export const DEFAULT_SETTINGS: Omit<SupportSettings, "shop"> = {
@@ -31,6 +33,7 @@ export const DEFAULT_SETTINGS: Omit<SupportSettings, "shop"> = {
   shareTrackingNumber: true,
   customerGreetingStyle: "auto",
   refundPolicy: "",
+  immediateSend: false,
 };
 
 const VALID_TONES: Tone[] = ["friendly", "formal", "neutral"];
@@ -59,6 +62,7 @@ export async function getSettings(shop: string): Promise<SupportSettings> {
     shareTrackingNumber: row.shareTrackingNumber,
     customerGreetingStyle: (row.customerGreetingStyle as CustomerGreetingStyle) ?? DEFAULT_SETTINGS.customerGreetingStyle,
     refundPolicy: row.refundPolicy ?? "",
+    immediateSend: row.immediateSend ?? false,
   };
 }
 
@@ -71,6 +75,7 @@ export interface SaveSettingsInput {
   shareTrackingNumber: boolean;
   customerGreetingStyle: string;
   refundPolicy: string;
+  immediateSend: boolean;
 }
 
 /** Sanitize and persist settings. Unknown tone/language values fall back to defaults. */
@@ -100,6 +105,7 @@ export async function saveSettings(
     shareTrackingNumber: input.shareTrackingNumber,
     customerGreetingStyle,
     refundPolicy: input.refundPolicy.trim().slice(0, 2000),
+    immediateSend: input.immediateSend,
   };
 
   const row = await prisma.supportSettings.upsert({
@@ -118,5 +124,6 @@ export async function saveSettings(
     shareTrackingNumber: row.shareTrackingNumber,
     customerGreetingStyle: (row.customerGreetingStyle as CustomerGreetingStyle) ?? DEFAULT_SETTINGS.customerGreetingStyle,
     refundPolicy: row.refundPolicy ?? "",
+    immediateSend: row.immediateSend ?? false,
   };
 }

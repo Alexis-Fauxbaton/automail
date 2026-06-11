@@ -40,6 +40,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     shareTrackingNumber: formData.get("shareTrackingNumber") === "true",
     customerGreetingStyle: String(formData.get("customerGreetingStyle") ?? "auto"),
     refundPolicy: String(formData.get("refundPolicy") ?? ""),
+    immediateSend: formData.get("immediateSend") === "true",
   });
 
   return { settings: saved, saved: true };
