@@ -180,6 +180,7 @@
     "refundPolicyPlaceholder": "ex. Nous acceptons les retours sous 30 jours pour les articles non utilisés dans leur emballage d'origine. Les remboursements sont traités sous 5 jours ouvrables après réception du retour. Les articles soldés sont non échangeables.",
     "saveSettings": "Enregistrer les paramètres",
     "settingsSaved": "Paramètres enregistrés.",
+    "settingsError": "Les paramètres n'ont pas pu être enregistrés. Veuillez réessayer.",
     "uiLanguageSection": "Interface",
     "uiLanguageLabel": "Langue de l'interface",
     "uiLanguageDetails": "Change la langue de l'application immédiatement. Enregistré par utilisateur.",

@@ -180,6 +180,7 @@
     "refundPolicyPlaceholder": "e.g. We offer a 30-day return window for unused items in original packaging. Refunds are processed within 5 business days of receiving the return. Items on sale are final sale.",
     "saveSettings": "Save settings",
     "settingsSaved": "Settings saved.",
+    "settingsError": "Settings could not be saved. Please try again.",
     "uiLanguageSection": "Interface",
     "uiLanguageLabel": "Interface language",
     "uiLanguageDetails": "Changes the language of the app immediately. Saved per user.",
