@@ -220,6 +220,20 @@ export default function SettingsPage() {
             </CharacterCount>
           </s-section>
 
+          <s-section heading={t("settings.sendSection")}>
+            <s-paragraph>{t("settings.sendSectionDesc")}</s-paragraph>
+
+            <s-select
+              label={t("settings.immediateSend")}
+              name="immediateSend"
+              value={settings.immediateSend ? "true" : "false"}
+              details={t("settings.immediateSendDetails")}
+            >
+              <s-option value="false">{t("settings.immediateSendOff")}</s-option>
+              <s-option value="true">{t("settings.immediateSendOn")}</s-option>
+            </s-select>
+          </s-section>
+
           <s-section>
             <s-stack direction="inline" gap="base">
               <s-button
