@@ -59,6 +59,7 @@ import {
   handleSendDraft,
 } from "../lib/support/inbox-actions";
 import type { ClassificationEdit } from "../lib/support/manual-classification";
+import { getSettings } from "../lib/support/settings";
 import {
   MetricCard,
   SegmentedTabs,
@@ -341,6 +342,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     threadCountsRaw.map((r) => [r.mailConnectionId, r._count._all]),
   );
 
+  const supportSettings = await getSettings(shop);
+
   return {
     connected: !!connection,
     connectionId: connection?.id ?? null,
@@ -367,6 +370,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     threadCountsByMailbox,
     mailConnectionId: mailConnectionId ?? null,
     sendDisabled,
+    immediateSend: supportSettings.immediateSend,
   };
 };
 
