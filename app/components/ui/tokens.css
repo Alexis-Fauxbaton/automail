@@ -614,9 +614,11 @@ s-page::part(header) {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  background: var(--ui-emerald-600);
+  /* emerald-700 (not 600) as the base so white text clears WCAG AA 4.5:1
+     for small/bold 13px text — App Store accessibility posture. */
+  background: var(--ui-emerald-700);
   color: #fff;
-  border: 1px solid var(--ui-emerald-600);
+  border: 1px solid var(--ui-emerald-700);
   /* 4px vertical → 18px line + 8px padding + 2px border = 28px, matching the
      Polaris <s-button> neighbours in the action row. */
   padding: 4px 14px;
@@ -629,8 +631,8 @@ s-page::part(header) {
   text-decoration: none;
 }
 .am-send-btn:hover {
-  background: var(--ui-emerald-700);
-  border-color: var(--ui-emerald-700);
+  background: #065f46;
+  border-color: #065f46;
 }
 .am-send-btn:focus-visible {
   outline: 2px solid var(--ui-emerald-700);
