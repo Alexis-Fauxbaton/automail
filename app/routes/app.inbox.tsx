@@ -2780,6 +2780,7 @@ function ThreadDetailPanel({
                 draftId={latest.replyDraftId}
                 customerEmail={latest.fromAddress}
                 canSend={connection.canSend}
+                immediateSend={loaderData.immediateSend}
                 reauthUrl={`/app/mail-auth/reauth?mailConnectionId=${connection.id}&returnTo=/app/inbox?thread=${latest.canonicalThreadId ?? ""}`}
                 initialSentAt={latest.draftSentAt ?? null}
                 disabled={!latest.draftReply}

@@ -405,6 +405,7 @@
       "pending": "Envoi à {{customer}} dans {{seconds}}s",
       "cancel": "Annuler",
       "sent": "Envoyé",
+      "sending": "Envoi en cours…",
       "retry": "Réessayer",
       "internal_banner": "Envois désactivés (boutique interne) — cliquez quand même pour tester le flow"
     }
