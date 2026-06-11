@@ -176,6 +176,7 @@ function resolveSettings(partial?: Partial<SupportSettings>): SupportSettings {
     shareTrackingNumber: partial?.shareTrackingNumber ?? DEFAULT_SETTINGS.shareTrackingNumber,
     customerGreetingStyle: partial?.customerGreetingStyle ?? DEFAULT_SETTINGS.customerGreetingStyle,
     refundPolicy: partial?.refundPolicy ?? DEFAULT_SETTINGS.refundPolicy,
+    immediateSend: partial?.immediateSend ?? DEFAULT_SETTINGS.immediateSend,
   };
 }
 

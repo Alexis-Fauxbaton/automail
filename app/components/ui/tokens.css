@@ -606,3 +606,51 @@ s-page::part(header) {
     width: 100%;
   }
 }
+
+/* ── Inbox « Envoyer » button ──────────────────────────────────────────────
+   Custom green action aligned to the Polaris <s-button> neighbours
+   (height/corners) since Polaris has no green button tone. */
+.am-send-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  /* emerald-700 (not 600) as the base so white text clears WCAG AA 4.5:1
+     for small/bold 13px text — App Store accessibility posture. */
+  background: var(--ui-emerald-700);
+  color: #fff;
+  border: 1px solid var(--ui-emerald-700);
+  /* 4px vertical → 18px line + 8px padding + 2px border = 28px, matching the
+     Polaris <s-button> neighbours in the action row. */
+  padding: 4px 14px;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  cursor: pointer;
+  text-decoration: none;
+}
+.am-send-btn:hover {
+  background: #065f46;
+  border-color: #065f46;
+}
+.am-send-btn:focus-visible {
+  outline: 2px solid var(--ui-emerald-700);
+  outline-offset: 2px;
+}
+.am-send-btn:disabled {
+  background: #e3e6e8;
+  border-color: #e3e6e8;
+  color: #9ca3af;
+  cursor: not-allowed;
+}
+/* Neutral variant for the « Activer l'envoi » re-consent link. */
+.am-send-btn--reauth {
+  background: #fff;
+  border-color: #c9cccf;
+  color: #1a1a1a;
+}
+.am-send-btn--reauth:hover {
+  background: #f6f6f7;
+  border-color: #c9cccf;
+}

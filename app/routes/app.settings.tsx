@@ -7,6 +7,7 @@ import { authenticate } from "../shopify.server";
 import { requireOnboardingComplete } from "../lib/onboarding/guard";
 import { getSettings, saveSettings } from "../lib/support/settings";
 import { getUiLanguage, saveUiLanguage } from "../lib/user-preferences";
+import { createLogger } from "../lib/log/logger";
 import { SettingsIcon } from "../components/ui";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -28,21 +29,33 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (userId) {
       await saveUiLanguage(userId, session.shop, String(formData.get("uiLanguage") ?? "en"));
     }
-    return { saved: false, settings: null };
+    return { saved: false, settings: null, error: false };
   }
 
-  const saved = await saveSettings(session.shop, {
-    signatureName: String(formData.get("signatureName") ?? ""),
-    brandName: String(formData.get("brandName") ?? ""),
-    tone: String(formData.get("tone") ?? "friendly"),
-    language: String(formData.get("language") ?? "auto"),
-    closingPhrase: String(formData.get("closingPhrase") ?? ""),
-    shareTrackingNumber: formData.get("shareTrackingNumber") === "true",
-    customerGreetingStyle: String(formData.get("customerGreetingStyle") ?? "auto"),
-    refundPolicy: String(formData.get("refundPolicy") ?? ""),
-  });
+  try {
+    const saved = await saveSettings(session.shop, {
+      signatureName: String(formData.get("signatureName") ?? ""),
+      brandName: String(formData.get("brandName") ?? ""),
+      tone: String(formData.get("tone") ?? "friendly"),
+      language: String(formData.get("language") ?? "auto"),
+      closingPhrase: String(formData.get("closingPhrase") ?? ""),
+      shareTrackingNumber: formData.get("shareTrackingNumber") === "true",
+      customerGreetingStyle: String(formData.get("customerGreetingStyle") ?? "auto"),
+      refundPolicy: String(formData.get("refundPolicy") ?? ""),
+      immediateSend: formData.get("immediateSend") === "true",
+    });
 
-  return { settings: saved, saved: true };
+    return { settings: saved, saved: true, error: false };
+  } catch (err) {
+    // Never surface raw persistence errors (e.g. a stale Prisma client or a DB
+    // hiccup) to the merchant — Prisma validation messages echo the full query
+    // back, including their settings data. Log it, return a clean error state.
+    createLogger({ shop: session.shop, mod: "settings" }).error(
+      { err },
+      "saveSettings failed",
+    );
+    return { settings: null, saved: false, error: true };
+  }
 };
 
 function CharacterCount({ children, max, initial, hasDetails = false }: { children: React.ReactNode; max: number; initial: string; hasDetails?: boolean }) {
@@ -219,6 +232,20 @@ export default function SettingsPage() {
             </CharacterCount>
           </s-section>
 
+          <s-section heading={t("settings.sendSection")}>
+            <s-paragraph>{t("settings.sendSectionDesc")}</s-paragraph>
+
+            <s-select
+              label={t("settings.immediateSend")}
+              name="immediateSend"
+              value={settings.immediateSend ? "true" : "false"}
+              details={t("settings.immediateSendDetails")}
+            >
+              <s-option value="false">{t("settings.immediateSendOff")}</s-option>
+              <s-option value="true">{t("settings.immediateSendOn")}</s-option>
+            </s-select>
+          </s-section>
+
           <s-section>
             <s-stack direction="inline" gap="base">
               <s-button
@@ -230,6 +257,10 @@ export default function SettingsPage() {
 
               {actionData?.saved && (
                 <s-banner tone="success">{t("settings.settingsSaved")}</s-banner>
+              )}
+
+              {actionData?.error && (
+                <s-banner tone="critical">{t("settings.settingsError")}</s-banner>
               )}
             </s-stack>
           </s-section>
