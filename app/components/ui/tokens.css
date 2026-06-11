@@ -617,7 +617,9 @@ s-page::part(header) {
   background: var(--ui-emerald-600);
   color: #fff;
   border: 1px solid var(--ui-emerald-600);
-  padding: 7px 15px;
+  /* 4px vertical → 18px line + 8px padding + 2px border = 28px, matching the
+     Polaris <s-button> neighbours in the action row. */
+  padding: 4px 14px;
   border-radius: 8px;
   font-family: inherit;
   font-size: 13px;
