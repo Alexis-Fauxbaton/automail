@@ -158,13 +158,17 @@ export default function SendButton(props: {
     return (
       <div
         style={{
-          display: "flex",
+          display: "inline-flex",
           alignItems: "center",
-          gap: 12,
-          padding: "7px 12px",
+          gap: 8,
+          height: 28,
+          padding: "0 6px 0 10px",
+          boxSizing: "border-box",
           background: "#eef6ff",
           border: "1px solid #b8d4f5",
           borderRadius: 8,
+          fontSize: 13,
+          whiteSpace: "nowrap",
         }}
       >
         <span>
@@ -176,11 +180,13 @@ export default function SendButton(props: {
             background: "#fff",
             border: "1px solid #c9cccf",
             color: "#1a1a1a",
-            padding: "5px 11px",
-            borderRadius: 7,
+            height: 20,
+            padding: "0 9px",
+            borderRadius: 6,
             cursor: "pointer",
             fontFamily: "inherit",
-            fontSize: 12.5,
+            fontSize: 12,
+            lineHeight: "18px",
           }}
         >
           {t("inbox.send.cancel")}
