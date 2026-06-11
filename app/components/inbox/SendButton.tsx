@@ -6,7 +6,7 @@ type SendState = "idle" | "pending" | "sending" | "sent" | "error" | "needs-reau
 
 // Safety countdown for the delayed-send mode. Immediate mode bypasses it.
 const COUNTDOWN_MS = 5_000;
-const COUNTDOWN_SECONDS = 5;
+const COUNTDOWN_SECONDS = COUNTDOWN_MS / 1000;
 
 function PlaneIcon({ color = "#fff" }: { color?: string }) {
   return (
@@ -28,7 +28,6 @@ function PlaneIcon({ color = "#fff" }: { color?: string }) {
 }
 
 export default function SendButton(props: {
-  shop: string;
   mailConnectionId: string;
   draftId: string;
   customerEmail: string;
@@ -169,7 +168,7 @@ export default function SendButton(props: {
         }}
       >
         <span>
-          ✓ {t("inbox.send.pending", { customer: customerEmail, seconds: countdown })}
+          {t("inbox.send.pending", { customer: customerEmail, seconds: countdown })}
         </span>
         <button
           onClick={cancelCountdown}

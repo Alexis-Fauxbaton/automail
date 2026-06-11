@@ -2775,7 +2775,6 @@ function ThreadDetailPanel({
             if (!connection || !latest.replyDraftId) return null;
             return (
               <SendButton
-                shop={loaderData.shop}
                 mailConnectionId={connection.id}
                 draftId={latest.replyDraftId}
                 customerEmail={latest.fromAddress}
