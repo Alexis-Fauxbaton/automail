@@ -350,12 +350,12 @@ export function ClassificationEditModal({
         <div style={styles.body}>
           {/* Intents editor */}
           <section style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-            <h3 style={styles.sectionTitle}>{t("classification.intents", "Intentions")}</h3>
+            <h3 style={styles.sectionTitle}>{t("classification.intents", "Motifs")}</h3>
 
             <div style={styles.chipRow}>
               {intents.length === 0 && (
                 <span style={{ fontSize: "13px", color: "var(--ui-slate-500)", fontStyle: "italic" }}>
-                  {t("classification.noIntent", "Aucune intention sélectionnée")}
+                  {t("classification.noIntent", "Aucun motif sélectionné")}
                 </span>
               )}
               {intents.map((value, idx) => {
@@ -374,7 +374,7 @@ export function ClassificationEditModal({
                     <ChipIconBtn
                       label={
                         idx === 0
-                          ? t("classification.alreadyPrimary", "Déjà l'intention principale")
+                          ? t("classification.alreadyPrimary", "Déjà le motif principal")
                           : isPrimary
                             ? t("classification.demoteIntent", "Rétrograder")
                             : t("classification.moveIntentUp", "Monter (rendre principal si en tête)")
@@ -396,7 +396,7 @@ export function ClassificationEditModal({
                       ↓
                     </ChipIconBtn>
                     <ChipIconBtn
-                      label={t("classification.removeIntent", "Retirer cette intention")}
+                      label={t("classification.removeIntent", "Retirer ce motif")}
                       onClick={() => removeIntent(idx)}
                     >
                       ×
@@ -414,7 +414,7 @@ export function ClassificationEditModal({
                 }}
                 style={styles.select}
               >
-                <option value="">+ {t("classification.addIntent", "Ajouter une intention")}</option>
+                <option value="">+ {t("classification.addIntent", "Ajouter un motif")}</option>
                 {available.map((v) => (
                   <option key={v} value={v}>{intentLabel(v)}</option>
                 ))}
@@ -430,7 +430,7 @@ export function ClassificationEditModal({
                 }}
                 style={styles.resetLink}
               >
-                {t("classification.resetIntents", "Réinitialiser les intentions")}
+                {t("classification.resetIntents", "Réinitialiser les motifs")}
               </button>
             )}
           </section>
