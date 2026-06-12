@@ -875,7 +875,7 @@ function SignalPill() {
   return (
     <span
       role="img"
-      aria-label="Warning: thread has a signal (replied elsewhere, ambiguous order, etc)"
+      aria-label="Warning: conversation has a signal (replied elsewhere, ambiguous order, etc)"
       style={{
         display: "inline-flex",
         alignItems: "center",

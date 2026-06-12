@@ -538,7 +538,7 @@ export function TopIntentsList({
             {t(`analysis.intent_${item.intent}`, { defaultValue: item.intent })}
           </Pill>
           <span style={{ flex: 1, fontSize: 13, color: "#334155" }}>
-            {item.count} thread{item.count !== 1 ? "s" : ""}
+            {t("dashboard.conversationCount", { count: item.count })}
           </span>
           <span style={{ fontSize: 12, color: "#64748b" }}>
             {formatDuration(item.medianMs)}

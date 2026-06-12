@@ -475,7 +475,7 @@ export default function Dashboard() {
         />
         <MetricCard
           icon={<RefreshIcon />}
-          label={t("dashboard.kpiReopened", { defaultValue: "Threads ré-ouverts" })}
+          label={t("dashboard.kpiReopened", { defaultValue: "Conversations rouvertes" })}
           value={String(kpis.reopened.count)}
           helper={reopenVariation ?? undefined}
           helperTone={reopenTone}
@@ -512,7 +512,7 @@ export default function Dashboard() {
         </Card>
         <Card
           title={t("dashboard.topIntentsTitle", { defaultValue: "Top motifs" })}
-          subtitle={t("dashboard.topIntentsSubtitle", { defaultValue: "Par nombre de threads · médian de réponse" })}
+          subtitle={t("dashboard.topIntentsSubtitle", { defaultValue: "Par nombre de conversations · médian de réponse" })}
         >
           {topIntents.length === 0 ? (
             <p style={{ fontSize: 13, color: "#94a3b8" }}>
@@ -541,7 +541,7 @@ export default function Dashboard() {
           ))}
         </Card>
         <Card
-          title={t("dashboard.reopenedTitle", { defaultValue: "Threads ré-ouverts récents" })}
+          title={t("dashboard.reopenedTitle", { defaultValue: "Conversations rouvertes récentes" })}
           subtitle={t("dashboard.reopenedSubtitle", { defaultValue: "Signal qualité : resolved puis ré-ouverts sur la période" })}
         >
           {!isAdvancedDashboard ? (
