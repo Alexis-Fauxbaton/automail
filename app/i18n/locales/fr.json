@@ -2,7 +2,7 @@
   "nav": {
     "home": "Accueil",
     "supportCopilot": "Copilot support",
-    "emailInbox": "Boîte mail",
+    "emailInbox": "Boîte de réception",
     "dashboard": "Dashboard",
     "settings": "Paramètres",
     "billing": "Abonnement",
@@ -20,7 +20,7 @@
     "contactBody1": "Une question, un bug ou une suggestion ? Écrivez-nous à",
     "contactBody2": ". Nous vous répondons sous 1 jour ouvré.",
     "quickStartHeading": "Démarrage rapide",
-    "quickStartStep1": "Connectez votre boîte mail (Gmail, Zoho ou Outlook) depuis l'onglet Inbox.",
+    "quickStartStep1": "Connectez votre boîte mail (Gmail, Zoho ou Outlook) depuis l'onglet Boîte de réception.",
     "quickStartStep2": "Configurez votre signature et votre ton dans les Paramètres.",
     "quickStartStep3": "Automail analyse les emails entrants et propose un brouillon. Vous gardez toujours la main pour valider et envoyer.",
     "privacyHeading": "Confidentialité",
@@ -233,7 +233,7 @@
     "alertVolumeSurge": "Volume en hausse",
     "alertIntentSurge": "Motif inhabituel",
     "alertDelayDegraded": "Délai dégradé",
-    "alertReopenedSpike": "Ré-ouvertures en hausse",
+    "alertReopenedSpike": "Rouvertures en hausse",
     "noData": "Aucune donnée sur la période.",
     "preset24h": "24h",
     "preset7d": "7 jours",
@@ -418,6 +418,7 @@
   "common": {
     "cancel": "Annuler",
     "save": "Enregistrer",
+    "saving": "Enregistrement…",
     "dismiss": "Fermer"
   },
   "billing": {
@@ -508,6 +509,18 @@
     "otherOrderNumber": "Autre numéro de commande",
     "detach": "Aucune commande (détacher)",
     "manuallyEdited": "Modifié manuellement",
+    "primary": "Principal",
+    "noIntent": "Aucun motif sélectionné",
+    "alreadyPrimary": "Déjà le motif principal",
+    "demoteIntent": "Rétrograder",
+    "moveIntentUp": "Monter (rendre principal si en tête)",
+    "moveIntentDown": "Descendre",
+    "alreadyLast": "Déjà en dernière position",
+    "removeIntent": "Retirer ce motif",
+    "currentOrder": "actuelle",
+    "regenerateNow": "Régénérer le brouillon",
+    "savedToast": "Classification enregistrée",
+    "regenerateDraftHint": "Pensez à régénérer le brouillon pour refléter les changements.",
     "errors": {
       "missing_thread_id": "Erreur interne : identifiant de conversation manquant.",
       "invalid_intents_payload": "Données de motifs invalides.",

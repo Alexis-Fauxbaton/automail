@@ -2,7 +2,7 @@
   "nav": {
     "home": "Home",
     "supportCopilot": "Support copilot",
-    "emailInbox": "Email inbox",
+    "emailInbox": "Inbox",
     "dashboard": "Dashboard",
     "settings": "Settings",
     "billing": "Billing",
@@ -130,7 +130,7 @@
     "intent_package_stuck": "Delivery delay",
     "intent_refund_request": "Refund request",
     "intent_pre_purchase_question": "Pre-purchase question",
-    "intent_unknown": "Unknown"
+    "intent_unknown": "Other"
   },
   "settings": {
     "pageHeading": "Reply settings",
@@ -418,6 +418,7 @@
   "common": {
     "cancel": "Cancel",
     "save": "Save",
+    "saving": "Saving…",
     "dismiss": "Dismiss"
   },
   "billing": {
@@ -508,6 +509,18 @@
     "otherOrderNumber": "Other order number",
     "detach": "No order (detach)",
     "manuallyEdited": "Manually edited",
+    "primary": "Primary",
+    "noIntent": "No reason selected",
+    "alreadyPrimary": "Already the primary reason",
+    "demoteIntent": "Demote",
+    "moveIntentUp": "Move up (becomes primary if first)",
+    "moveIntentDown": "Move down",
+    "alreadyLast": "Already last",
+    "removeIntent": "Remove this reason",
+    "currentOrder": "current",
+    "regenerateNow": "Regenerate draft",
+    "savedToast": "Classification saved",
+    "regenerateDraftHint": "Remember to regenerate the draft to reflect the changes.",
     "errors": {
       "missing_thread_id": "Internal error: missing conversation id.",
       "invalid_intents_payload": "Invalid reasons data.",
