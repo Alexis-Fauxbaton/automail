@@ -2034,6 +2034,9 @@ const ThreadCard = memo(function ThreadCard({
             previousOperationalState={threadState?.previousOperationalState ?? null}
           />
         )}
+        {bucket === "other" && latest.canonicalThreadId && (
+          <MarkThreadSupportButton canonicalThreadId={latest.canonicalThreadId} />
+        )}
         {(bucket === "to_process" || bucket === "waiting_merchant" || bucket === "to_analyze") &&
           !latest.draftReply &&
           !noReplyNeeded &&
@@ -2774,6 +2777,9 @@ function ThreadDetailPanel({
               previousOperationalState={threadState?.previousOperationalState ?? null}
             />
           )}
+          {bucket === "other" && latest.canonicalThreadId && (
+            <MarkThreadSupportButton canonicalThreadId={latest.canonicalThreadId} />
+          )}
           {!noReplyNeeded &&
             !latest.tier1Result?.startsWith("filtered:") &&
             latest.tier2Result !== "probable_non_client" && (
@@ -3105,6 +3111,28 @@ function ClearAnalyzeQueueButton({ count }: { count: number }) {
         </button>
       </fetcher.Form>
     </div>
+  );
+}
+
+/**
+ * Per-thread "Treat as support" button shown on non-support cards/detail.
+ * Reuses the bulk handler (mark_support) with a single thread id, so the
+ * behaviour matches the bulk path exactly: reclassify to confirmed_support
+ * with no analysis / quota — the thread lands in the "To analyse" bucket.
+ */
+function MarkThreadSupportButton({ canonicalThreadId }: { canonicalThreadId: string }) {
+  const { t } = useTranslation();
+  const fetcher = useFetcher();
+  const isSubmitting = fetcher.state === "submitting" || fetcher.state === "loading";
+  return (
+    <fetcher.Form method="post">
+      <input type="hidden" name="_action" value="bulkThreadAction" />
+      <input type="hidden" name="bulkAction" value="mark_support" />
+      <input type="hidden" name="threadIds" value={JSON.stringify([canonicalThreadId])} />
+      <s-button type="submit" variant="secondary" {...(isSubmitting ? { loading: true } : {})}>
+        {t("inbox.bulkMarkSupport")}
+      </s-button>
+    </fetcher.Form>
   );
 }
 
