@@ -24,6 +24,91 @@ const CONFIRM_KEY: Record<BulkAction, string> = {
   non_support: "inbox.bulkConfirmNonSupport",
 };
 
+// Scoped styles — kept here so the bar carries its own hover/focus polish
+// without depending on a global stylesheet. Colours mirror the app's design
+// tokens (ui-slate / ui-emerald) so the bar reads as part of the same system.
+const STYLES = `
+.bulkbar {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 10px 12px; margin-bottom: 4px;
+  background: #ffffff;
+  border: 1px solid var(--ui-slate-200, #e2e8f0);
+  border-radius: 16px;
+  box-shadow: var(--ui-shadow-card, 0 8px 24px rgba(15, 23, 42, 0.05));
+}
+.bulkbar__chip {
+  display: inline-flex; align-items: center;
+  font-size: 13px; font-weight: 600;
+  color: var(--ui-emerald-700, #047857);
+  background: var(--ui-emerald-50, #ecfdf5);
+  border: 1px solid var(--ui-emerald-200, #a7f3d0);
+  border-radius: 999px; padding: 3px 11px;
+}
+.bulkbar__btn {
+  background: #ffffff; color: var(--ui-slate-700, #334155);
+  border: 1px solid var(--ui-slate-200, #e2e8f0);
+  border-radius: 8px; padding: 5px 11px;
+  font-size: 13px; font-weight: 500; cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.bulkbar__btn:hover {
+  background: var(--ui-slate-50, #f8fafc);
+  border-color: var(--ui-slate-400, #94a3b8);
+  color: var(--ui-slate-900, #0f172a);
+}
+.bulkbar__clear {
+  margin-left: auto; background: none; border: none;
+  color: var(--ui-slate-500, #64748b); font-size: 13px; cursor: pointer;
+}
+.bulkbar__clear:hover { color: var(--ui-slate-700, #334155); text-decoration: underline; }
+.bulkbar-overlay {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(2px);
+}
+.bulkbar-modal {
+  background: #ffffff; border-radius: 20px;
+  padding: 24px; max-width: 440px; width: 90%;
+  box-shadow: var(--ui-shadow-card-strong, 0 12px 30px rgba(15, 23, 42, 0.18));
+}
+.bulkbar-modal__title {
+  font-size: 15px; font-weight: 600; line-height: 1.4;
+  color: var(--ui-slate-900, #0f172a); margin: 0 0 12px;
+}
+.bulkbar-modal__warning {
+  display: flex; gap: 8px; align-items: flex-start;
+  color: #92400e; background: #fffbeb;
+  border: 1px solid #fde68a; border-radius: 10px;
+  padding: 10px 12px; font-size: 13px; line-height: 1.45; margin: 0;
+}
+.bulkbar-modal__actions {
+  display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px;
+}
+.bulkbar-modal__cancel {
+  background: #ffffff; color: var(--ui-slate-700, #334155);
+  border: 1px solid var(--ui-slate-200, #e2e8f0);
+  border-radius: 8px; padding: 7px 14px; font-size: 13px; font-weight: 500; cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.bulkbar-modal__cancel:hover:not(:disabled) { background: var(--ui-slate-50, #f8fafc); border-color: var(--ui-slate-400, #94a3b8); }
+.bulkbar-modal__confirm {
+  background: var(--ui-emerald-700, #047857); color: #ffffff;
+  border: none; border-radius: 8px; padding: 7px 16px;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: background 0.12s;
+}
+.bulkbar-modal__confirm:hover:not(:disabled) { background: var(--ui-emerald-600, #059669); }
+.bulkbar-modal__cancel:disabled, .bulkbar-modal__confirm:disabled { opacity: 0.6; cursor: default; }
+.bulkbar-toast {
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 60;
+  background: var(--ui-slate-900, #0f172a); color: #ffffff;
+  padding: 11px 18px; border-radius: 10px; font-size: 13px; font-weight: 500;
+  box-shadow: var(--ui-shadow-card-strong, 0 12px 30px rgba(15, 23, 42, 0.18));
+}
+`;
+
 interface Props {
   selected: BulkSelectedThread[];
   onClear: () => void;
@@ -82,34 +167,17 @@ export function BulkActionBar({ selected, onClear }: Props) {
 
   return (
     <>
+      <style>{STYLES}</style>
+
       {count > 0 && (
-        <div
-          style={{
-            position: "sticky",
-            top: 0,
-            zIndex: 5,
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            flexWrap: "wrap",
-            padding: "8px 12px",
-            marginBottom: 8,
-            background: "#1f2937",
-            color: "white",
-            borderRadius: 8,
-          }}
-        >
-          <strong>{t("inbox.bulkSelectedCount", { count })}</strong>
+        <div className="bulkbar">
+          <span className="bulkbar__chip">{t("inbox.bulkSelectedCount", { count })}</span>
           <BulkBtn label={t("inbox.bulkMarkResolved")} onClick={() => setPending("resolved")} />
           <BulkBtn label={t("inbox.bulkReopen")} onClick={() => setPending("reopen")} />
           <BulkBtn label={t("inbox.bulkWaitingCustomer")} onClick={() => setPending("waiting_customer")} />
           <BulkBtn label={t("inbox.bulkWaitingMerchant")} onClick={() => setPending("waiting_merchant")} />
           <BulkBtn label={t("inbox.bulkMarkNonSupport")} onClick={() => setPending("non_support")} />
-          <button
-            type="button"
-            onClick={onClear}
-            style={{ marginLeft: "auto", background: "none", border: "none", color: "white", cursor: "pointer", textDecoration: "underline" }}
-          >
+          <button type="button" className="bulkbar__clear" onClick={onClear}>
             {t("inbox.bulkClear")}
           </button>
         </div>
@@ -117,41 +185,24 @@ export function BulkActionBar({ selected, onClear }: Props) {
 
       {pending && (
         <div
+          className="bulkbar-overlay"
           role="dialog"
           aria-modal="true"
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.4)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 50,
-          }}
           onClick={() => !busy && setPending(null)}
         >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{ background: "white", borderRadius: 12, padding: 24, maxWidth: 440, width: "90%" }}
-          >
-            <p style={{ fontWeight: 600, marginBottom: 12 }}>
-              {t(CONFIRM_KEY[pending], { count })}
-            </p>
+          <div className="bulkbar-modal" onClick={(e) => e.stopPropagation()}>
+            <p className="bulkbar-modal__title">{t(CONFIRM_KEY[pending], { count })}</p>
             {analyzeCount > 0 && (
-              <p style={{ color: "#b45309", background: "#fffbeb", padding: 8, borderRadius: 6, fontSize: 13 }}>
-                ⚠ {t("inbox.bulkAnalyzeWarning", { count: analyzeCount })}
+              <p className="bulkbar-modal__warning">
+                <span aria-hidden="true">⚠</span>
+                <span>{t("inbox.bulkAnalyzeWarning", { count: analyzeCount })}</span>
               </p>
             )}
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
-              <button type="button" onClick={() => setPending(null)} disabled={busy}>
+            <div className="bulkbar-modal__actions">
+              <button type="button" className="bulkbar-modal__cancel" onClick={() => setPending(null)} disabled={busy}>
                 {t("inbox.bulkCancel")}
               </button>
-              <button
-                type="button"
-                onClick={submit}
-                disabled={busy}
-                style={{ background: "#047857", color: "white", border: "none", borderRadius: 6, padding: "6px 14px", cursor: "pointer" }}
-              >
+              <button type="button" className="bulkbar-modal__confirm" onClick={submit} disabled={busy}>
                 {t("inbox.bulkConfirm")}
               </button>
             </div>
@@ -159,34 +210,14 @@ export function BulkActionBar({ selected, onClear }: Props) {
         </div>
       )}
 
-      {toast && (
-        <div
-          style={{
-            position: "fixed",
-            bottom: 16,
-            left: "50%",
-            transform: "translateX(-50%)",
-            background: "#111827",
-            color: "white",
-            padding: "10px 16px",
-            borderRadius: 8,
-            zIndex: 60,
-          }}
-        >
-          {toast}
-        </div>
-      )}
+      {toast && <div className="bulkbar-toast">{toast}</div>}
     </>
   );
 }
 
 function BulkBtn({ label, onClick }: { label: string; onClick: () => void }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{ background: "white", color: "#111827", border: "none", borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontSize: 13 }}
-    >
+    <button type="button" className="bulkbar__btn" onClick={onClick}>
       {label}
     </button>
   );

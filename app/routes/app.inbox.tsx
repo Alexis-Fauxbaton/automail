@@ -3627,13 +3627,14 @@ export default function InboxPage() {
                     </s-box>
                   )}
                   {selectableIds.length > 0 && (
-                    <label style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 2px", fontSize: 13 }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "2px 0", fontSize: 13, color: "var(--ui-slate-600)", cursor: "pointer", userSelect: "none" }}>
                       <input
                         type="checkbox"
                         checked={allSelected}
                         onChange={(e) => {
                           setSelectedIds(e.target.checked ? new Set(selectableIds) : new Set());
                         }}
+                        style={{ width: 17, height: 17, accentColor: "var(--ui-emerald-700, #047857)", cursor: "pointer", flexShrink: 0 }}
                       />
                       {t("inbox.bulkSelectAll")}
                     </label>
@@ -3650,38 +3651,52 @@ export default function InboxPage() {
                         reason={state.redactedReason}
                       />
                     ) : (
-                      <div key={thread.threadId} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                        {thread.latest.canonicalThreadId && (
-                          <input
-                            type="checkbox"
-                            checked={selectedIds.has(thread.latest.canonicalThreadId)}
-                            onChange={() => toggleSelected(thread.latest.canonicalThreadId as string)}
-                            onClick={(e) => e.stopPropagation()}
-                            aria-label="select conversation"
-                            style={{ marginTop: 14 }}
-                          />
+                      <div key={thread.threadId} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        {mailConn && loaderData.connections.length > 1 && (
+                          <div style={{ paddingLeft: 27 }}>
+                            <MailboxBadge
+                              email={mailConn.email}
+                              provider={mailConn.provider}
+                              paused={!mailConn.autoSyncEnabled}
+                            />
+                          </div>
                         )}
-                        <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1, minWidth: 0 }}>
-                          {mailConn && loaderData.connections.length > 1 && (
-                            <div>
-                              <MailboxBadge
-                                email={mailConn.email}
-                                provider={mailConn.provider}
-                                paused={!mailConn.autoSyncEnabled}
-                              />
-                            </div>
+                        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                          {thread.latest.canonicalThreadId && (
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.has(thread.latest.canonicalThreadId)}
+                              onChange={() => toggleSelected(thread.latest.canonicalThreadId as string)}
+                              onClick={(e) => e.stopPropagation()}
+                              aria-label="select conversation"
+                              style={{ width: 17, height: 17, accentColor: "var(--ui-emerald-700, #047857)", cursor: "pointer", flexShrink: 0 }}
+                            />
                           )}
-                          <ThreadCard
-                            thread={thread}
-                            threadState={state}
-                            isSelected={expandedThreadId === thread.threadId}
-                            connectedEmail={loaderData.connectedEmail}
-                            previousContact={previousContact}
-                            onSelect={toggleExpandedThreadId}
-                            onOrderClick={handleOrderClick}
-                            onFilterClick={handleFilterClick}
-                            onBucketClick={handleBucketClick}
-                          />
+                          <div
+                            style={{
+                              flex: 1,
+                              minWidth: 0,
+                              borderRadius: "var(--ui-radius-2xl, 24px)",
+                              boxShadow:
+                                thread.latest.canonicalThreadId &&
+                                selectedIds.has(thread.latest.canonicalThreadId)
+                                  ? "0 0 0 2px var(--ui-emerald-600, #059669)"
+                                  : undefined,
+                              transition: "box-shadow 0.15s",
+                            }}
+                          >
+                            <ThreadCard
+                              thread={thread}
+                              threadState={state}
+                              isSelected={expandedThreadId === thread.threadId}
+                              connectedEmail={loaderData.connectedEmail}
+                              previousContact={previousContact}
+                              onSelect={toggleExpandedThreadId}
+                              onOrderClick={handleOrderClick}
+                              onFilterClick={handleFilterClick}
+                              onBucketClick={handleBucketClick}
+                            />
+                          </div>
                         </div>
                       </div>
                     );
