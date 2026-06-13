@@ -124,6 +124,22 @@ describe("handleBulkThreadAction", () => {
     expect(rowB?.operationalState).toBe("waiting_merchant");
   });
 
+  it("reopen skips threads that are not resolved", async () => {
+    const a = await createTestThread({ operationalState: "waiting_merchant" });
+
+    const res = await handleBulkThreadAction({
+      shop: TEST_SHOP,
+      threadIds: [a.id],
+      action: "reopen",
+    });
+
+    expect(res).toEqual({ updated: 0, skipped: 1 });
+    const row = await testDb.thread.findUnique({ where: { id: a.id } });
+    expect(row?.operationalState).toBe("waiting_merchant"); // untouched
+    const history = await testDb.threadStateHistory.count({ where: { shop: TEST_SHOP } });
+    expect(history).toBe(0);
+  });
+
   it("non_support sets supportNature without touching operationalState or history", async () => {
     const a = await createTestThread({ supportNature: "confirmed_support", operationalState: "waiting_merchant" });
 

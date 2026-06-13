@@ -1270,6 +1270,13 @@ const BULK_MAX_THREADS = 500;
  * never-analyzed threads, enqueues an `analyze_thread` job (first analysis,
  * 1 billing unit). Reopen does NOT refresh tracking inline (deferred to the
  * refresh-stale-analyses tick) to keep the bulk request bounded.
+ *
+ * NOTE: this batch path writes ThreadStateHistory directly via createMany
+ * (with reason "bulk_action") instead of going through recordStateTransition,
+ * for performance. If that shared helper gains new logic, this path won't
+ * inherit it. Also, mirroring handleMoveThread, a thread that is ALREADY
+ * confirmed_support but never analyzed is NOT enqueued for analysis on a
+ * waiting_* move (no supportNature flip happens), which is intentional.
  */
 export async function handleBulkThreadAction(params: {
   shop: string;
