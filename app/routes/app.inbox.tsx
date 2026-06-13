@@ -2780,12 +2780,6 @@ function ThreadDetailPanel({
               previousOperationalState={threadState?.previousOperationalState ?? null}
             />
           )}
-          {latest.canonicalThreadId && (
-            <ThreadReclassifyMenu
-              canonicalThreadId={latest.canonicalThreadId}
-              isNonSupport={bucket === "other"}
-            />
-          )}
           {!noReplyNeeded &&
             !latest.tier1Result?.startsWith("filtered:") &&
             latest.tier2Result !== "probable_non_client" && (
@@ -2825,6 +2819,12 @@ function ThreadDetailPanel({
               />
             );
           })()}
+          {latest.canonicalThreadId && (
+            <ThreadReclassifyMenu
+              canonicalThreadId={latest.canonicalThreadId}
+              isNonSupport={bucket === "other"}
+            />
+          )}
         </div>
       </div>
 
@@ -3153,7 +3153,7 @@ function ThreadReclassifyMenu({
   const label = isNonSupport ? t("inbox.bulkMarkSupport") : t("inbox.bulkMarkNonSupport");
 
   return (
-    <div ref={ref} style={{ position: "relative", display: "inline-flex", alignSelf: "center" }}>
+    <div ref={ref} style={{ position: "relative", display: "inline-flex", alignSelf: "center", marginLeft: "auto" }}>
       <button
         type="button"
         aria-label={t("inbox.moreActions")}
