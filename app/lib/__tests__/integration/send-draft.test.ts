@@ -155,7 +155,7 @@ describe("handleSendDraft — integration", () => {
     expect(refreshed?.sentAt).toBeNull();
     expect(refreshed?.sendError).toContain("Gmail 500");
 
-    const outgoingCount = await prisma.incomingEmail.count({ where: { sourceMarker: "sent_from_app" } });
+    const outgoingCount = await prisma.incomingEmail.count({ where: { shop: TEST_SHOP, sourceMarker: "sent_from_app" } });
     expect(outgoingCount).toBe(0);
   });
 
