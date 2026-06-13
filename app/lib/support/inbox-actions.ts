@@ -1413,5 +1413,10 @@ export async function handleBulkThreadAction(params: {
       console.error(`[bulk] enqueueJob generate-draft failed for thread=${t.id}:`, err);
     });
   }
+  // Wake the worker so the batch starts immediately instead of waiting for the
+  // next 60s tick. Dynamic import avoids a static import cycle with auto-sync.
+  if (targets.length > 0) {
+    import("../mail/auto-sync").then((m) => m.pokeJobQueue()).catch(() => {});
+  }
   return { updated: targets.length, skipped: threads.length - targets.length };
 }

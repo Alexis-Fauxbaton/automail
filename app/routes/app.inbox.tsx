@@ -2066,9 +2066,9 @@ const ThreadCard = memo(function ThreadCard({
           />
         )}
         {isGeneratingDraft && (
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "0.8125rem", color: "var(--ui-slate-600)", alignSelf: "center" }}>
-            <span className="ui-spinner" aria-hidden="true" /> {t("inbox.generating")}
-          </span>
+          <s-button variant="primary" loading>
+            {latest.draftReply ? t("inbox.regenerateDraft") : t("inbox.generateDraft")}
+          </s-button>
         )}
         {!isGeneratingDraft &&
           (bucket === "to_process" || bucket === "waiting_merchant" || bucket === "to_analyze") &&

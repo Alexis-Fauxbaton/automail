@@ -92,22 +92,6 @@ html, body {
   padding: 0;
   overflow: hidden;
 }
-
-/* Small inline loading spinner (e.g. background draft generation). */
-@keyframes ui-spin {
-  to { transform: rotate(360deg); }
-}
-.ui-spinner {
-  display: inline-block;
-  width: 13px;
-  height: 13px;
-  border: 2px solid var(--ui-slate-200);
-  border-top-color: var(--ui-slate-500);
-  border-radius: 50%;
-  animation: ui-spin 0.7s linear infinite;
-  flex-shrink: 0;
-}
-
 .ui-card--ghost {
   background: var(--ui-slate-50);
   box-shadow: none;

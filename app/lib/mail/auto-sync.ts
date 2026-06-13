@@ -443,6 +443,18 @@ async function drainJobQueue(): Promise<void> {
 }
 
 /**
+ * Wake the job queue to drain right now instead of waiting for the next 60s
+ * tick. Call after enqueuing user-triggered jobs (e.g. bulk draft generation)
+ * so the batch starts immediately. Best-effort and safe: `drainJobQueue` is
+ * guarded against concurrency and `claimNextJob` uses FOR UPDATE SKIP LOCKED.
+ * No-op before the loop has started or during shutdown.
+ */
+export function pokeJobQueue(): void {
+  if (!started || shuttingDown) return;
+  void drainJobQueue();
+}
+
+/**
  * For every shop that has threads still in the default "open" state
  * (never recomputed), enqueue one "recompute" job. The de-dup inside
  * `enqueueJob` ensures at most one pending/running job per shop at a time.
