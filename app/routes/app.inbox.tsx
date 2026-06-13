@@ -74,6 +74,7 @@ import MailboxBadge from "../components/inbox/MailboxBadge";
 import MailboxFilter from "../components/inbox/MailboxFilter";
 import MailboxIndicator from "../components/inbox/MailboxIndicator";
 import SendButton from "../components/inbox/SendButton";
+import { BulkActionBar, type BulkSelectedThread } from "../components/inbox/BulkActionBar";
 import { canSend } from "../lib/mail/scopes";
 
 // Tracks email IDs for which an HTML body refresh was already submitted
@@ -3184,6 +3185,21 @@ export default function InboxPage() {
     nature: "all",
     intent: "",
   });
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const toggleSelected = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+  // Drop the multi-select when the visible set changes, so a bulk action can
+  // never hit conversations the merchant can no longer see.
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [filters, activeBucket]);
   const isMobile = useMobile();
 
   // The expanded thread id lives in the URL (?thread=<id>) so that the
@@ -3398,6 +3414,22 @@ export default function InboxPage() {
     )
     .filter(matchesFilters);
 
+  const selectableIds = filteredThreadMeta
+    .map((m) => m.thread.latest.canonicalThreadId)
+    .filter((id): id is string => !!id);
+  const selectedMeta: BulkSelectedThread[] = filteredThreadMeta
+    .filter((m) => {
+      const id = m.thread.latest.canonicalThreadId;
+      return id != null && selectedIds.has(id);
+    })
+    .map((m) => ({
+      id: m.thread.latest.canonicalThreadId as string,
+      operationalState: m.state?.operationalState ?? "open",
+      supportNature: m.state?.supportNature ?? "unknown",
+      analyzedAt: m.state?.analyzedAt ?? null,
+    }));
+  const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id));
+
   const report = actionData?.report as ProcessingReport | null;
 
   if (actionData?.disconnected) {
@@ -3594,6 +3626,19 @@ export default function InboxPage() {
                       <s-paragraph>{t("inbox.noEmailsMatch")}</s-paragraph>
                     </s-box>
                   )}
+                  {selectableIds.length > 0 && (
+                    <label style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 2px", fontSize: 13 }}>
+                      <input
+                        type="checkbox"
+                        checked={allSelected}
+                        onChange={(e) => {
+                          setSelectedIds(e.target.checked ? new Set(selectableIds) : new Set());
+                        }}
+                      />
+                      {t("inbox.bulkSelectAll")}
+                    </label>
+                  )}
+                  <BulkActionBar selected={selectedMeta} onClear={clearSelection} />
                   {filteredThreadMeta.map(({ thread, state, previousContact }) => {
                     const mailConn = loaderData.connections.find(
                       (c) => c.id === thread.latest.mailConnectionId,
@@ -3605,27 +3650,39 @@ export default function InboxPage() {
                         reason={state.redactedReason}
                       />
                     ) : (
-                      <div key={thread.threadId} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                        {mailConn && loaderData.connections.length > 1 && (
-                          <div>
-                            <MailboxBadge
-                              email={mailConn.email}
-                              provider={mailConn.provider}
-                              paused={!mailConn.autoSyncEnabled}
-                            />
-                          </div>
+                      <div key={thread.threadId} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                        {thread.latest.canonicalThreadId && (
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(thread.latest.canonicalThreadId)}
+                            onChange={() => toggleSelected(thread.latest.canonicalThreadId as string)}
+                            onClick={(e) => e.stopPropagation()}
+                            aria-label="select conversation"
+                            style={{ marginTop: 14 }}
+                          />
                         )}
-                        <ThreadCard
-                          thread={thread}
-                          threadState={state}
-                          isSelected={expandedThreadId === thread.threadId}
-                          connectedEmail={loaderData.connectedEmail}
-                          previousContact={previousContact}
-                          onSelect={toggleExpandedThreadId}
-                          onOrderClick={handleOrderClick}
-                          onFilterClick={handleFilterClick}
-                          onBucketClick={handleBucketClick}
-                        />
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1, minWidth: 0 }}>
+                          {mailConn && loaderData.connections.length > 1 && (
+                            <div>
+                              <MailboxBadge
+                                email={mailConn.email}
+                                provider={mailConn.provider}
+                                paused={!mailConn.autoSyncEnabled}
+                              />
+                            </div>
+                          )}
+                          <ThreadCard
+                            thread={thread}
+                            threadState={state}
+                            isSelected={expandedThreadId === thread.threadId}
+                            connectedEmail={loaderData.connectedEmail}
+                            previousContact={previousContact}
+                            onSelect={toggleExpandedThreadId}
+                            onOrderClick={handleOrderClick}
+                            onFilterClick={handleFilterClick}
+                            onBucketClick={handleBucketClick}
+                          />
+                        </div>
                       </div>
                     );
                   })}
