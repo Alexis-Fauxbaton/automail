@@ -9,12 +9,13 @@ export interface BulkSelectedThread {
   analyzedAt: string | null;
 }
 
-type BulkAction = "resolved" | "reopen" | "generate_drafts";
+type BulkAction = "resolved" | "reopen" | "generate_drafts" | "mark_support";
 
 const CONFIRM_KEY: Record<BulkAction, string> = {
   resolved: "inbox.bulkConfirmResolved",
   reopen: "inbox.bulkConfirmReopen",
   generate_drafts: "inbox.bulkConfirmGenerateDrafts",
+  mark_support: "inbox.bulkConfirmMarkSupport",
 };
 
 // Scoped styles — kept here so the bar carries its own hover/focus polish
@@ -115,6 +116,9 @@ export function BulkActionBar({ selected, onClear }: Props) {
   const [toast, setToast] = useState<string | null>(null);
 
   const count = selected.length;
+  // "Treat as support" only makes sense when the selection contains threads
+  // that aren't support yet — otherwise it would be a no-op for everything.
+  const hasNonSupport = selected.some((s) => s.supportNature === "non_support");
 
   // Generating drafts triggers a first analysis for never-analysed,
   // support-eligible threads — each consumes 1 quota unit. Already-analysed
@@ -178,6 +182,9 @@ export function BulkActionBar({ selected, onClear }: Props) {
           <BulkBtn label={t("inbox.bulkMarkResolved")} onClick={() => setPending("resolved")} />
           <BulkBtn label={t("inbox.bulkReopen")} onClick={() => setPending("reopen")} />
           <BulkBtn label={t("inbox.bulkGenerateDrafts")} onClick={() => setPending("generate_drafts")} />
+          {hasNonSupport && (
+            <BulkBtn label={t("inbox.bulkMarkSupport")} onClick={() => setPending("mark_support")} />
+          )}
           <button type="button" className="bulkbar__clear" onClick={onClear}>
             {t("inbox.bulkClear")}
           </button>

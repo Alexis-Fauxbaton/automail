@@ -173,6 +173,24 @@ describe("handleBulkThreadAction", () => {
     expect(history).toBe(0);
   });
 
+  it("mark_support flips non_support to confirmed_support and clears analyze-dismissal", async () => {
+    const a = await createTestThread({ supportNature: "non_support" });
+    await testDb.thread.update({ where: { id: a.id }, data: { dismissedFromAnalyzeAt: new Date() } });
+    const b = await createTestThread({ supportNature: "confirmed_support" }); // already support → skipped
+
+    const res = await handleBulkThreadAction({
+      shop: TEST_SHOP,
+      threadIds: [a.id, b.id],
+      action: "mark_support",
+    });
+
+    expect(res).toEqual({ updated: 1, skipped: 1 });
+    const rowA = await testDb.thread.findUnique({ where: { id: a.id } });
+    expect(rowA?.supportNature).toBe("confirmed_support");
+    expect(rowA?.dismissedFromAnalyzeAt).toBeNull();
+    expect(enqueueSpy).not.toHaveBeenCalled(); // reclassify only — no analysis/quota
+  });
+
   it("resolve and reopen skip non_support threads", async () => {
     const toResolve = await createTestThread({ supportNature: "non_support", operationalState: "waiting_merchant" });
     const r1 = await handleBulkThreadAction({ shop: TEST_SHOP, threadIds: [toResolve.id], action: "resolved" });

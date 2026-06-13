@@ -1242,21 +1242,28 @@ async function runFakeSendForInternalShop(params: {
 // Bulk thread actions
 // ---------------------------------------------------------------------------
 
-export type BulkThreadActionKind = "resolved" | "reopen" | "generate_drafts";
+export type BulkThreadActionKind =
+  | "resolved"
+  | "reopen"
+  | "generate_drafts"
+  | "mark_support";
 
 const BULK_ACTION_KINDS = new Set<BulkThreadActionKind>([
   "resolved",
   "reopen",
   "generate_drafts",
+  "mark_support",
 ]);
 
 const BULK_MAX_THREADS = 500;
 
 /**
- * Apply a grouped action to many threads at once. Three actions:
+ * Apply a grouped action to many threads at once. Four actions:
  *   - `resolved`  : mark selected threads resolved (idempotent).
  *   - `reopen`    : un-resolve, restoring previousOperationalState.
  *   - `generate_drafts` : enqueue a background draft-generation job per thread.
+ *   - `mark_support` : reclassify non-support threads as confirmed support
+ *                      (no analysis/quota; they land in the "To analyse" bucket).
  *
  * Multi-tenant: the thread set is read with `shop` in the WHERE so any id the
  * caller doesn't own is silently dropped (anti-tamper).
@@ -1349,6 +1356,25 @@ export async function handleBulkThreadAction(params: {
           toState: t.previousOperationalState ?? "waiting_merchant",
           reason: "bulk_action",
         })),
+      });
+    }
+    return { updated: changed.length, skipped: threads.length - changed.length };
+  }
+
+  if (action === "mark_support") {
+    // Bring non-support / unclassified threads INTO the support flow: flip to
+    // confirmed_support and clear any analyze-dismissal so they surface in the
+    // "To analyse" bucket. No analysis is triggered here (no quota) — the
+    // merchant explicitly runs "Generate drafts" from there next.
+    const changed = threads.filter((t) => t.supportNature !== "confirmed_support");
+    if (changed.length > 0) {
+      await prisma.thread.updateMany({
+        where: { shop, id: { in: changed.map((t) => t.id) } },
+        data: {
+          supportNature: "confirmed_support",
+          supportNatureUpdatedAt: new Date(),
+          dismissedFromAnalyzeAt: null,
+        },
       });
     }
     return { updated: changed.length, skipped: threads.length - changed.length };
