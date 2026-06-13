@@ -57,6 +57,7 @@ import {
   handleDismissAnalyzeQueue,
   handleDismissThreadFromAnalyze,
   handleSendDraft,
+  handleBulkThreadAction,
 } from "../lib/support/inbox-actions";
 import type { ClassificationEdit } from "../lib/support/manual-classification";
 import { getSettings } from "../lib/support/settings";
@@ -352,7 +353,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     lastSyncAt: connection?.lastSyncAt?.toISOString() ?? null,
     lastSyncError: connection?.lastSyncError ?? null,
     autoSyncEnabled: connection?.autoSyncEnabled ?? false,
-    autoSyncIntervalMinutes: connection?.autoSyncIntervalMinutes ?? 5,
+    autoSyncIntervalMinutes: connection?.autoSyncIntervalMinutes ?? 1,
     gmailAuthUrl,
     zohoAuthUrl,
     outlookAuthUrl,
@@ -497,6 +498,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const canonicalThreadId = String(formData.get("canonicalThreadId") ?? "");
     const target = String(formData.get("target") ?? "");
     return handleMoveThread({ shop, canonicalThreadId, target, admin });
+  }
+
+  if (intent === "bulkThreadAction") {
+    const action = String(formData.get("bulkAction") ?? "");
+    let threadIds: string[] = [];
+    try {
+      const parsed = JSON.parse(String(formData.get("threadIds") ?? "[]"));
+      if (Array.isArray(parsed)) threadIds = parsed.map((x) => String(x));
+    } catch {
+      threadIds = [];
+    }
+    const bulkResult = await handleBulkThreadAction({ shop, threadIds, action });
+    return { bulkResult };
   }
 
   if (intent === "dismissAnalyzeQueue") {
