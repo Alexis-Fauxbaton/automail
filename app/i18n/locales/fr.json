@@ -406,7 +406,7 @@
     "bulkReopen": "Rouvrir",
     "bulkWaitingCustomer": "En attente client",
     "bulkWaitingMerchant": "En attente de moi",
-    "bulkMarkNonSupport": "Non-support",
+    "bulkMarkNonSupport": "Marquer comme non-support",
     "bulkConfirm": "Confirmer",
     "bulkCancel": "Annuler",
     "bulkConfirmResolved": "Marquer {{count}} conversations comme résolues ?",

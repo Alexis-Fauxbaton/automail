@@ -406,7 +406,7 @@
     "bulkReopen": "Reopen",
     "bulkWaitingCustomer": "Waiting on customer",
     "bulkWaitingMerchant": "Waiting on me",
-    "bulkMarkNonSupport": "Not support",
+    "bulkMarkNonSupport": "Mark as not support",
     "bulkConfirm": "Confirm",
     "bulkCancel": "Cancel",
     "bulkConfirmResolved": "Mark {{count}} conversations as resolved?",
