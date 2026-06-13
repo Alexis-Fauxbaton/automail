@@ -1,4 +1,5 @@
 import prisma from "../../db.server";
+import { Prisma } from "@prisma/client";
 import { canSend } from "../mail/scopes";
 import { createMailClient } from "../mail/client-factory";
 import { assembleRfc822 } from "../mail/assemble-rfc822";
@@ -1236,4 +1237,187 @@ async function runFakeSendForInternalShop(params: {
 
   console.log(`[send] FAKE SEND for internal shop ${shop} draftId=${draftId} (SEND_DISABLED_FOR_INTERNAL=true)`);
   return { sent: true, sentAt: result.sentAt!, rfcMessageId: result.sentRfcMessageId! };
+}
+
+// ---------------------------------------------------------------------------
+// Bulk thread actions
+// ---------------------------------------------------------------------------
+
+export type BulkThreadActionKind =
+  | "resolved"
+  | "reopen"
+  | "generate_drafts"
+  | "mark_support"
+  | "mark_non_support";
+
+const BULK_ACTION_KINDS = new Set<BulkThreadActionKind>([
+  "resolved",
+  "reopen",
+  "generate_drafts",
+  "mark_support",
+  "mark_non_support",
+]);
+
+const BULK_MAX_THREADS = 500;
+
+/**
+ * Apply a grouped action to many threads at once. Five actions:
+ *   - `resolved`  : mark selected threads resolved (idempotent).
+ *   - `reopen`    : un-resolve, restoring previousOperationalState.
+ *   - `generate_drafts` : enqueue a background draft-generation job per thread.
+ *   - `mark_support` : reclassify non-support threads as confirmed support
+ *                      (no analysis/quota; they land in the "To analyse" bucket).
+ *   - `mark_non_support` : reclassify threads as non-support (they move to the
+ *                      "Other" bucket, out of the support flow).
+ *
+ * Multi-tenant: the thread set is read with `shop` in the WHERE so any id the
+ * caller doesn't own is silently dropped (anti-tamper).
+ *
+ * `generate_drafts` is asynchronous: drafts appear as the job queue drains.
+ * Never-analysed threads consume 1 billing unit on their first analysis;
+ * already-analysed threads regenerate for free (per-conversation pricing).
+ * Reopen does NOT refresh tracking inline (deferred to the
+ * refresh-stale-analyses tick) to keep the bulk request bounded.
+ *
+ * NOTE: this batch path writes ThreadStateHistory directly via createMany
+ * (with reason "bulk_action") instead of going through recordStateTransition,
+ * for performance. If that shared helper gains new logic, this path won't
+ * inherit it.
+ */
+export async function handleBulkThreadAction(params: {
+  shop: string;
+  threadIds: string[];
+  action: string;
+}): Promise<{ updated: number; skipped: number }> {
+  const { shop } = params;
+  const action = params.action as BulkThreadActionKind;
+  if (!BULK_ACTION_KINDS.has(action)) return { updated: 0, skipped: 0 };
+
+  const ids = Array.from(new Set(params.threadIds))
+    .filter((id) => typeof id === "string" && id.length > 0)
+    .slice(0, BULK_MAX_THREADS);
+  if (ids.length === 0) return { updated: 0, skipped: 0 };
+
+  const threads = await prisma.thread.findMany({
+    where: { id: { in: ids }, shop },
+    select: {
+      id: true,
+      operationalState: true,
+      previousOperationalState: true,
+      supportNature: true,
+      analyzedAt: true,
+      mailConnectionId: true,
+    },
+  });
+  if (threads.length === 0) return { updated: 0, skipped: 0 };
+
+  if (action === "resolved") {
+    // Skip non_support threads: they always display in "Other" (supportNature
+    // wins the bucket over operationalState), never "Resolved", so resolving
+    // them would mutate state invisibly. Counted as skipped instead.
+    const changed = threads.filter(
+      (t) => t.operationalState !== "resolved" && t.supportNature !== "non_support",
+    );
+    if (changed.length > 0) {
+      await prisma.$executeRaw`
+        UPDATE "Thread"
+        SET "previousOperationalState" = "operationalState",
+            "operationalState" = 'resolved',
+            "operationalStateUpdatedAt" = now()
+        WHERE "shop" = ${shop} AND "id" IN (${Prisma.join(changed.map((t) => t.id))})
+      `;
+      await prisma.threadStateHistory.createMany({
+        data: changed.map((t) => ({
+          shop,
+          threadId: t.id,
+          fromState: t.operationalState,
+          toState: "resolved",
+          reason: "bulk_action",
+        })),
+      });
+    }
+    return { updated: changed.length, skipped: threads.length - changed.length };
+  }
+
+  if (action === "reopen") {
+    // Non_support threads never display as "Resolved", so the per-thread Reopen
+    // affordance never targets them — mirror that here and skip them.
+    const changed = threads.filter(
+      (t) => t.operationalState === "resolved" && t.supportNature !== "non_support",
+    );
+    if (changed.length > 0) {
+      await prisma.$executeRaw`
+        UPDATE "Thread"
+        SET "operationalState" = COALESCE("previousOperationalState", 'waiting_merchant'),
+            "previousOperationalState" = NULL,
+            "operationalStateUpdatedAt" = now()
+        WHERE "shop" = ${shop} AND "id" IN (${Prisma.join(changed.map((t) => t.id))})
+      `;
+      await prisma.threadStateHistory.createMany({
+        data: changed.map((t) => ({
+          shop,
+          threadId: t.id,
+          fromState: "resolved",
+          toState: t.previousOperationalState ?? "waiting_merchant",
+          reason: "bulk_action",
+        })),
+      });
+    }
+    return { updated: changed.length, skipped: threads.length - changed.length };
+  }
+
+  if (action === "mark_support") {
+    // Bring non-support / unclassified threads INTO the support flow: flip to
+    // confirmed_support and clear any analyze-dismissal so they surface in the
+    // "To analyse" bucket. No analysis is triggered here (no quota) — the
+    // merchant explicitly runs "Generate drafts" from there next.
+    const changed = threads.filter((t) => t.supportNature !== "confirmed_support");
+    if (changed.length > 0) {
+      await prisma.thread.updateMany({
+        where: { shop, id: { in: changed.map((t) => t.id) } },
+        data: {
+          supportNature: "confirmed_support",
+          supportNatureUpdatedAt: new Date(),
+          dismissedFromAnalyzeAt: null,
+        },
+      });
+    }
+    return { updated: changed.length, skipped: threads.length - changed.length };
+  }
+
+  if (action === "mark_non_support") {
+    // Pull support threads OUT of the support flow → "Other" bucket. Already
+    // non-support threads are skipped. No state/history/analysis side-effects.
+    const changed = threads.filter((t) => t.supportNature !== "non_support");
+    if (changed.length > 0) {
+      await prisma.thread.updateMany({
+        where: { shop, id: { in: changed.map((t) => t.id) } },
+        data: { supportNature: "non_support", supportNatureUpdatedAt: new Date() },
+      });
+    }
+    return { updated: changed.length, skipped: threads.length - changed.length };
+  }
+
+  // generate_drafts: enqueue one background draft-generation job per selected
+  // thread (skipping non-support threads — a draft makes no sense there). The
+  // job runner resolves the thread anchor and runs Tier 3 WITH the draft
+  // (params.generateDraft). Async by design: drafts surface as the queue
+  // drains. Billing is charged inside the job on first analysis only.
+  const targets = threads.filter((t) => t.supportNature !== "non_support");
+  for (const t of targets) {
+    await enqueueJob({
+      shop,
+      kind: "analyze_thread",
+      mailConnectionId: t.mailConnectionId,
+      params: { threadId: t.id, generateDraft: true },
+    }).catch((err) => {
+      console.error(`[bulk] enqueueJob generate-draft failed for thread=${t.id}:`, err);
+    });
+  }
+  // Wake the worker so the batch starts immediately instead of waiting for the
+  // next 60s tick. Dynamic import avoids a static import cycle with auto-sync.
+  if (targets.length > 0) {
+    import("../mail/auto-sync").then((m) => m.pokeJobQueue()).catch(() => {});
+  }
+  return { updated: targets.length, skipped: threads.length - targets.length };
 }

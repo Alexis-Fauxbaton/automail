@@ -17,7 +17,7 @@ This is a support copilot, not a full CRM.
 
 Today the merchant:
 - connects a mailbox via OAuth (Gmail / Zoho / Outlook)
-- auto-sync pulls new mail every 5 min by default
+- auto-sync pulls new mail every 1 min by default
 - the pipeline classifies + analyses each thread automatically
 - the merchant opens the inbox, reviews each thread, generates / refines a draft, copies to their mail client to send
 - multiple mailboxes per shop are supported (up to 3 on Pro/Trial, 1 on Starter), managed at `/app/connections`

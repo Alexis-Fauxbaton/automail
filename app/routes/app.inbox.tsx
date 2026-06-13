@@ -57,6 +57,7 @@ import {
   handleDismissAnalyzeQueue,
   handleDismissThreadFromAnalyze,
   handleSendDraft,
+  handleBulkThreadAction,
 } from "../lib/support/inbox-actions";
 import type { ClassificationEdit } from "../lib/support/manual-classification";
 import { getSettings } from "../lib/support/settings";
@@ -73,6 +74,7 @@ import MailboxBadge from "../components/inbox/MailboxBadge";
 import MailboxFilter from "../components/inbox/MailboxFilter";
 import MailboxIndicator from "../components/inbox/MailboxIndicator";
 import SendButton from "../components/inbox/SendButton";
+import { BulkActionBar, type BulkSelectedThread } from "../components/inbox/BulkActionBar";
 import { canSend } from "../lib/mail/scopes";
 
 // Tracks email IDs for which an HTML body refresh was already submitted
@@ -319,6 +321,33 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   });
   const syncInProgress = !!activeHeavyJob;
 
+  // Threads whose draft is being generated in the background (bulk "Generate
+  // drafts" enqueues analyze_thread jobs with generateDraft:true). Surfaced so
+  // the inbox can show a per-card spinner and poll faster until they land.
+  const generatingJobs = await prisma.syncJob.findMany({
+    where: { shop, kind: "analyze_thread", status: { in: ["pending", "running"] } },
+    select: { params: true },
+  });
+  const generatingThreadIds = Array.from(
+    new Set(
+      generatingJobs
+        .map((j) => {
+          // params is a String column holding stringified JSON — parse it (the
+          // job queue stores it via JSON.stringify; claimNextJob parses on read).
+          try {
+            return JSON.parse(j.params || "{}") as { threadId?: string; generateDraft?: boolean };
+          } catch {
+            return null;
+          }
+        })
+        .filter(
+          (p): p is { threadId: string; generateDraft?: boolean } =>
+            !!p && typeof p.threadId === "string" && p.generateDraft === true,
+        )
+        .map((p) => p.threadId),
+    ),
+  );
+
   // Per-mailbox metadata — consumed by the mailbox filter UI (Phase 8).
   const connections = await prisma.mailConnection.findMany({
     where: { shop },
@@ -352,7 +381,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     lastSyncAt: connection?.lastSyncAt?.toISOString() ?? null,
     lastSyncError: connection?.lastSyncError ?? null,
     autoSyncEnabled: connection?.autoSyncEnabled ?? false,
-    autoSyncIntervalMinutes: connection?.autoSyncIntervalMinutes ?? 5,
+    autoSyncIntervalMinutes: connection?.autoSyncIntervalMinutes ?? 1,
     gmailAuthUrl,
     zohoAuthUrl,
     outlookAuthUrl,
@@ -360,6 +389,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     threadStates,
     priorContact,
     syncInProgress,
+    generatingThreadIds,
     onboardingChecklist,
     shop,
     connections: connections.map((c) => ({
@@ -497,6 +527,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const canonicalThreadId = String(formData.get("canonicalThreadId") ?? "");
     const target = String(formData.get("target") ?? "");
     return handleMoveThread({ shop, canonicalThreadId, target, admin });
+  }
+
+  if (intent === "bulkThreadAction") {
+    const action = String(formData.get("bulkAction") ?? "");
+    let threadIds: string[] = [];
+    try {
+      const parsed = JSON.parse(String(formData.get("threadIds") ?? "[]"));
+      if (Array.isArray(parsed)) threadIds = parsed.map((x) => String(x));
+    } catch {
+      threadIds = [];
+    }
+    const bulkResult = await handleBulkThreadAction({ shop, threadIds, action });
+    return { bulkResult };
   }
 
   if (intent === "dismissAnalyzeQueue") {
@@ -1781,6 +1824,9 @@ const ThreadCard = memo(function ThreadCard({
   thread,
   threadState,
   isSelected,
+  isChecked,
+  isGeneratingDraft,
+  selectionCheckbox,
   connectedEmail,
   previousContact,
   onSelect,
@@ -1791,6 +1837,12 @@ const ThreadCard = memo(function ThreadCard({
   thread: EmailThread;
   threadState: SerializedThreadState | null;
   isSelected: boolean;
+  /** Multi-select state: true when this card is ticked in the bulk selection. */
+  isChecked?: boolean;
+  /** True while a background draft-generation job is in flight for this thread. */
+  isGeneratingDraft?: boolean;
+  /** Bulk-select checkbox rendered as the leading item of the tags row. */
+  selectionCheckbox?: ReactNode;
   connectedEmail: string | null;
   /** Cross-thread: have we already sent an outgoing to this address/order in another thread? */
   previousContact: { byOrder: boolean; recentReply: boolean };
@@ -1852,10 +1904,16 @@ const ThreadCard = memo(function ThreadCard({
     <div
       onClick={() => onSelect(thread.threadId)}
       className={["ui-card ui-card--compact", isSelected ? "ui-card--selected" : ""].join(" ")}
-      style={{ cursor: "pointer" }}
+      style={{
+        cursor: "pointer",
+        ...(isChecked
+          ? { boxShadow: "0 0 0 2px var(--ui-emerald-600, #059669), var(--ui-shadow-card, 0 8px 24px rgba(15, 23, 42, 0.05))" }
+          : {}),
+      }}
     >
-      {/* Row 1 : badges */}
+      {/* Row 1 : badges (bulk-select checkbox leads the row when present) */}
       <div className="ui-thread-row-tags">
+        {selectionCheckbox}
         {cls === "uncertain" && <span className="ui-pill ui-pill--warning ui-pill--clickable" onClick={(e) => { e.stopPropagation(); onFilterClick({ nature: "uncertain" }); }}>{t("inbox.pillUncertain")}</span>}
         {/* Show "Non-support" badge for any thread in the "other" bucket:
             explicitly classified non_support (tier 1 or tier 2) AND outgoing-only
@@ -2007,7 +2065,13 @@ const ThreadCard = memo(function ThreadCard({
             previousOperationalState={threadState?.previousOperationalState ?? null}
           />
         )}
-        {(bucket === "to_process" || bucket === "waiting_merchant" || bucket === "to_analyze") &&
+        {isGeneratingDraft && (
+          <s-button variant="primary" loading>
+            {latest.draftReply ? t("inbox.regenerateDraft") : t("inbox.generateDraft")}
+          </s-button>
+        )}
+        {!isGeneratingDraft &&
+          (bucket === "to_process" || bucket === "waiting_merchant" || bucket === "to_analyze") &&
           !latest.draftReply &&
           !noReplyNeeded &&
           !latest.tier1Result?.startsWith("filtered:") &&
@@ -2037,6 +2101,12 @@ const ThreadCard = memo(function ThreadCard({
         )}
         {bucket === "to_analyze" && latest.canonicalThreadId && (
           <DismissThreadFromAnalyzeButton canonicalThreadId={latest.canonicalThreadId} />
+        )}
+        {latest.canonicalThreadId && (
+          <ThreadReclassifyMenu
+            canonicalThreadId={latest.canonicalThreadId}
+            isNonSupport={bucket === "other"}
+          />
         )}
       </div>
 
@@ -2792,6 +2862,12 @@ function ThreadDetailPanel({
               />
             );
           })()}
+          {latest.canonicalThreadId && (
+            <ThreadReclassifyMenu
+              canonicalThreadId={latest.canonicalThreadId}
+              isNonSupport={bucket === "other"}
+            />
+          )}
         </div>
       </div>
 
@@ -3088,6 +3164,86 @@ function ClearAnalyzeQueueButton({ count }: { count: number }) {
 }
 
 /**
+ * Per-thread reclassify menu — a discreet "⋯" that swaps the thread between
+ * support and non-support. Reuses the bulk handler (mark_support /
+ * mark_non_support) with a single thread id so per-thread and bulk behave
+ * identically; no analysis / quota. Kept out of the main action emphasis so it
+ * doesn't weigh down the card list.
+ */
+function ThreadReclassifyMenu({
+  canonicalThreadId,
+  isNonSupport,
+}: {
+  canonicalThreadId: string;
+  isNonSupport: boolean;
+}) {
+  const { t } = useTranslation();
+  const fetcher = useFetcher();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  const busy = fetcher.state !== "idle";
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  const action = isNonSupport ? "mark_support" : "mark_non_support";
+  const label = isNonSupport ? t("inbox.bulkMarkSupport") : t("inbox.bulkMarkNonSupport");
+
+  return (
+    <div ref={ref} style={{ position: "relative", display: "inline-flex", alignSelf: "center", marginLeft: "auto" }}>
+      <button
+        type="button"
+        aria-label={t("inbox.moreActions")}
+        disabled={busy}
+        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+        style={{
+          background: "none", border: "none", cursor: "pointer",
+          color: "var(--ui-slate-400)", fontSize: "18px", lineHeight: 1,
+          padding: "2px 6px", borderRadius: 6,
+        }}
+      >
+        ⋯
+      </button>
+      {open && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "absolute", top: "calc(100% + 4px)", right: 0, zIndex: 30,
+            background: "#fff", border: "1px solid var(--ui-slate-200)",
+            borderRadius: 8, boxShadow: "var(--ui-shadow-card)", padding: 4, minWidth: 190,
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              fetcher.submit(
+                { _action: "bulkThreadAction", bulkAction: action, threadIds: JSON.stringify([canonicalThreadId]) },
+                { method: "post" },
+              );
+            }}
+            style={{
+              display: "block", width: "100%", textAlign: "left",
+              background: "none", border: "none", cursor: "pointer",
+              padding: "7px 10px", borderRadius: 6, fontSize: "0.8125rem",
+              color: "var(--ui-slate-700)",
+            }}
+          >
+            {label}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * Per-thread "Retirer de la file" button shown on cards in the À analyser tab.
  * Idempotent server-side; submits intent=dismissThreadFromAnalyze with the
  * canonical thread id.
@@ -3144,7 +3300,14 @@ export default function InboxPage() {
   // triggered one (syncStarted from action). Cleared only when loader revalidates with
   // no active job.
   const syncStarted = (actionData as { syncStarted?: boolean } | null)?.syncStarted === true;
-  const bgSyncActive = loaderData.syncInProgress || syncStarted;
+  // Threads with a background draft-generation job in flight → per-card spinner
+  // + faster polling so the drafts surface within seconds, not a minute.
+  const generatingDraftIds = useMemo(
+    () => new Set(loaderData.generatingThreadIds ?? []),
+    [loaderData.generatingThreadIds],
+  );
+  const draftsGenerating = generatingDraftIds.size > 0;
+  const bgSyncActive = loaderData.syncInProgress || syncStarted || draftsGenerating;
 
   // Passive revalidation — picks up emails ingested by the background auto-sync loop.
   // Poll every 5s while a heavy job is running, otherwise every 60s.
@@ -3176,6 +3339,21 @@ export default function InboxPage() {
     nature: "all",
     intent: "",
   });
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const toggleSelected = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+  // Drop the multi-select when the visible set changes, so a bulk action can
+  // never hit conversations the merchant can no longer see.
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [filters, activeBucket]);
   const isMobile = useMobile();
 
   // The expanded thread id lives in the URL (?thread=<id>) so that the
@@ -3390,6 +3568,22 @@ export default function InboxPage() {
     )
     .filter(matchesFilters);
 
+  const selectableIds = filteredThreadMeta
+    .map((m) => m.thread.latest.canonicalThreadId)
+    .filter((id): id is string => !!id);
+  const selectedMeta: BulkSelectedThread[] = filteredThreadMeta
+    .filter((m) => {
+      const id = m.thread.latest.canonicalThreadId;
+      return id != null && selectedIds.has(id);
+    })
+    .map((m) => ({
+      id: m.thread.latest.canonicalThreadId as string,
+      operationalState: m.state?.operationalState ?? "open",
+      supportNature: m.state?.supportNature ?? "unknown",
+      analyzedAt: m.state?.analyzedAt ?? null,
+    }));
+  const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id));
+
   const report = actionData?.report as ProcessingReport | null;
 
   if (actionData?.disconnected) {
@@ -3586,6 +3780,20 @@ export default function InboxPage() {
                       <s-paragraph>{t("inbox.noEmailsMatch")}</s-paragraph>
                     </s-box>
                   )}
+                  {selectableIds.length > 0 && (
+                    <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "2px 0", fontSize: 13, color: "var(--ui-slate-600)", cursor: "pointer", userSelect: "none" }}>
+                      <input
+                        type="checkbox"
+                        checked={allSelected}
+                        onChange={(e) => {
+                          setSelectedIds(e.target.checked ? new Set(selectableIds) : new Set());
+                        }}
+                        style={{ width: 17, height: 17, accentColor: "var(--ui-emerald-700, #047857)", cursor: "pointer", flexShrink: 0 }}
+                      />
+                      {t("inbox.bulkSelectAll")}
+                    </label>
+                  )}
+                  <BulkActionBar selected={selectedMeta} onClear={clearSelection} />
                   {filteredThreadMeta.map(({ thread, state, previousContact }) => {
                     const mailConn = loaderData.connections.find(
                       (c) => c.id === thread.latest.mailConnectionId,
@@ -3611,6 +3819,26 @@ export default function InboxPage() {
                           thread={thread}
                           threadState={state}
                           isSelected={expandedThreadId === thread.threadId}
+                          isChecked={
+                            !!thread.latest.canonicalThreadId &&
+                            selectedIds.has(thread.latest.canonicalThreadId)
+                          }
+                          isGeneratingDraft={
+                            !!thread.latest.canonicalThreadId &&
+                            generatingDraftIds.has(thread.latest.canonicalThreadId)
+                          }
+                          selectionCheckbox={
+                            thread.latest.canonicalThreadId ? (
+                              <input
+                                type="checkbox"
+                                checked={selectedIds.has(thread.latest.canonicalThreadId)}
+                                onChange={() => toggleSelected(thread.latest.canonicalThreadId as string)}
+                                onClick={(e) => e.stopPropagation()}
+                                aria-label="select conversation"
+                                style={{ width: 16, height: 16, accentColor: "var(--ui-emerald-700, #047857)", cursor: "pointer", flexShrink: 0, marginRight: 2 }}
+                              />
+                            ) : null
+                          }
                           connectedEmail={loaderData.connectedEmail}
                           previousContact={previousContact}
                           onSelect={toggleExpandedThreadId}

@@ -15,21 +15,21 @@ datasource db {
 }
 
 model Session {
-  id            String    @id
-  shop          String
-  state         String
-  isOnline      Boolean   @default(false)
-  scope         String?
-  expires       DateTime?
-  accessToken   String    // encrypted
-  userId        BigInt?
-  firstName     String?
-  lastName      String?
-  email         String?
-  accountOwner  Boolean   @default(false)
-  locale        String?
-  collaborator  Boolean?  @default(false)
-  emailVerified Boolean?  @default(false)
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String // encrypted
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
   refreshToken        String?
   refreshTokenExpires DateTime?
 
@@ -41,21 +41,21 @@ model SupportSettings {
   shop                  String   @id
   signatureName         String   @default("Customer Support")
   brandName             String   @default("")
-  tone                  String   @default("friendly")     // friendly | formal | neutral
-  language              String   @default("auto")         // auto | fr | en
+  tone                  String   @default("friendly") // friendly | formal | neutral
+  language              String   @default("auto") // auto | fr | en
   closingPhrase         String   @default("")
   shareTrackingNumber   Boolean  @default(true)
-  customerGreetingStyle String   @default("auto")         // auto | first_name | full_name | neutral
+  customerGreetingStyle String   @default("auto") // auto | first_name | full_name | neutral
   refundPolicy          String   @default("")
-  immediateSend         Boolean  @default(false)          // true = one-click send, no countdown
+  immediateSend         Boolean  @default(false) // true = one-click send, no countdown
   updatedAt             DateTime @updatedAt
 }
 
 model MailConnection {
-  id             String   @id @default(cuid())
-  shop           String
-  provider       String   @default("gmail") // "gmail" | "zoho" | "outlook"
-  email          String   @default("")      // connected email address
+  id                       String    @id @default(cuid())
+  shop                     String
+  provider                 String    @default("gmail") // "gmail" | "zoho" | "outlook"
+  email                    String    @default("") // connected email address
   // Lowercased addresses from which the merchant can send via this account
   // (e.g. support@, contact@ aliases configured in Zoho/Gmail/Outlook).
   // Populated at OAuth completion by querying the provider, refreshed at
@@ -63,27 +63,27 @@ model MailConnection {
   // as outgoing without relying on a self-reinforcing pool of prior data.
   // JSON-encoded String[] for cross-DB portability (Prisma's String[] is
   // postgres-only on this version, and the column is small).
-  outgoingAliases String  @default("[]")
+  outgoingAliases          String    @default("[]")
   // CSV of OAuth scopes granted at the latest callback (lowercase, comma-separated).
   // Authoritative source is the provider; this is a cached snapshot for fast canSend checks.
-  grantedScopes String?
-  accessToken    String   // encrypted
-  refreshToken   String   // encrypted
-  tokenExpiry    DateTime
-  historyId      String?  // Gmail only — incremental sync cursor
-  deltaToken     String?  // Outlook only — Microsoft Graph delta link (full URL)
-  lastSyncAt     DateTime?
-  lastSyncError  String?  // last top-level sync error message, if any
-  syncCancelledAt DateTime? // set by the user to abort a running sync
-  zohoAccountId  String?  // Zoho only — needed for API calls
+  grantedScopes            String?
+  accessToken              String // encrypted
+  refreshToken             String // encrypted
+  tokenExpiry              DateTime
+  historyId                String? // Gmail only — incremental sync cursor
+  deltaToken               String? // Outlook only — Microsoft Graph delta link (full URL)
+  lastSyncAt               DateTime?
+  lastSyncError            String? // last top-level sync error message, if any
+  syncCancelledAt          DateTime? // set by the user to abort a running sync
+  zohoAccountId            String? // Zoho only — needed for API calls
   // --- Backend auto-sync (spec §10) -------------------------------------
-  autoSyncEnabled          Boolean  @default(true)
-  autoSyncIntervalMinutes  Int      @default(5)
+  autoSyncEnabled          Boolean   @default(true)
+  autoSyncIntervalMinutes  Int       @default(1)
   // --- Onboarding historical backfill (spec §11) ------------------------
   onboardingBackfillDoneAt DateTime?
-  onboardingBackfillDays   Int      @default(60)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  onboardingBackfillDays   Int       @default(60)
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
 
   threads        Thread[]
   incomingEmails IncomingEmail[]
@@ -100,53 +100,53 @@ model MailConnection {
 // All cross-message logic (classification, state, backfill) should key
 // off Thread.id rather than the provider's raw threadId.
 model Thread {
-  id             String   @id @default(cuid())
-  shop           String
-  mailConnectionId String
-  mailConnection   MailConnection @relation(fields: [mailConnectionId], references: [id], onDelete: Cascade)
-  provider       String   // "gmail" | "zoho" — provider that first created the thread
+  id                           String         @id @default(cuid())
+  shop                         String
+  mailConnectionId             String
+  mailConnection               MailConnection @relation(fields: [mailConnectionId], references: [id], onDelete: Cascade)
+  provider                     String // "gmail" | "zoho" — provider that first created the thread
   // Fast-path cached stats (maintained by the resolver on ingestion):
-  lastMessageAt  DateTime // receivedAt of the true latest message (any direction)
-  lastMessageId  String?  // IncomingEmail.id of the true latest message
-  firstMessageAt DateTime // receivedAt of the oldest message in the canonical thread
-  messageCount   Int      @default(0)
+  lastMessageAt                DateTime // receivedAt of the true latest message (any direction)
+  lastMessageId                String? // IncomingEmail.id of the true latest message
+  firstMessageAt               DateTime // receivedAt of the oldest message in the canonical thread
+  messageCount                 Int            @default(0)
   // Normalized subject kept for debugging / future heuristic merges.
-  subjectKey     String   @default("")
+  subjectKey                   String         @default("")
   // --- Consolidated identifier resolution at thread level ---------------
   // Merged from per-message extractions. Populated/updated by the
   // thread-identifiers module on every ingestion. Business code should
   // prefer these over re-parsing the full thread.
-  resolvedOrderNumber    String?  // e.g. "1234" (without #)
-  resolvedTrackingNumber String?
-  resolvedEmail          String?  // customer email
-  resolvedCustomerName   String?
-  resolutionConfidence   String   @default("none") // none | low | medium | high
-  resolvedFromMessageId  String?  // IncomingEmail.id that produced the strongest signal
+  resolvedOrderNumber          String? // e.g. "1234" (without #)
+  resolvedTrackingNumber       String?
+  resolvedEmail                String? // customer email
+  resolvedCustomerName         String?
+  resolutionConfidence         String         @default("none") // none | low | medium | high
+  resolvedFromMessageId        String? // IncomingEmail.id that produced the strongest signal
   // --- Thread-level classification (spec §4, §5, §7) --------------------
   // supportNature is "sticky": once set to `confirmed_support`, never
   // downgrades to `non_support` automatically. See thread-state.ts.
-  supportNature          String   @default("unknown")
+  supportNature                String         @default("unknown")
   //                                // unknown | non_support | probable_support | confirmed_support | mixed | needs_review
-  supportNatureUpdatedAt DateTime?
+  supportNatureUpdatedAt       DateTime?
   // Orthogonal operational state — can move freely both ways.
-  operationalState         String   @default("open")
+  operationalState             String         @default("open")
   //                                  // open | waiting_customer | waiting_merchant | resolved | no_reply_needed
-  previousOperationalState String?  // last state before a manual move to resolved
-  operationalStateUpdatedAt DateTime?
+  previousOperationalState     String? // last state before a manual move to resolved
+  operationalStateUpdatedAt    DateTime?
   // Structured thread state (spec §9). JSON blob consumed by the
   // classifier/draft as compact context. Shape: {
   //   orderResolved, trackingResolved, lastCustomerIntent, lastAgentAction,
   //   awaitingCustomer, awaitingMerchant, openIssue, replyNeeded,
   //   needsReviewReason, trueLatestMessageId, targetMessageId, ...
   // }
-  structuredState        String   @default("{}")
+  structuredState              String         @default("{}")
   // Prose summary generated by the LLM — only for long/ambiguous threads.
-  summaryText            String?
-  summaryUpdatedAt       DateTime?
+  summaryText                  String?
+  summaryUpdatedAt             DateTime?
   // --- History completeness (spec §12) ----------------------------------
-  historyStatus          String   @default("unknown") // complete | partial | unknown
-  oldestSyncedMessageAt  DateTime?
-  backfillAttemptedAt    DateTime?
+  historyStatus                String         @default("unknown") // complete | partial | unknown
+  oldestSyncedMessageAt        DateTime?
+  backfillAttemptedAt          DateTime?
   // --- Manual override snapshot (survives `handleResync`) --------------
   // JSON shape: { intents?: SupportIntent[]; intentsAt?: ISO; order?: OrderFacts|null; orderAt?: ISO }
   // Captured by handleResync before wiping IncomingEmail rows; consumed
@@ -158,29 +158,29 @@ model Thread {
   // and delete the related messages/drafts. The Thread row itself is kept
   // as a tombstone so the merchant sees a placeholder in the inbox rather
   // than a confusing gap. `redactedAt` non-null signals tombstone state.
-  redactedAt     DateTime?
-  redactedReason String?  // e.g. "gdpr_customer_request"
+  redactedAt                   DateTime?
+  redactedReason               String? // e.g. "gdpr_customer_request"
   // --- Stale-classify cron gate ------------------------------------
   // Set to NOW() immediately before each Tier 2 LLM call (even if the call
   // crashes afterwards). The hourly enqueueClassifyStaleUnknown cron skips
   // threads where this is within the last 24 h, preventing quota burn during
   // LLM outages. null = never attempted.
-  lastClassifyAttemptAt DateTime?
+  lastClassifyAttemptAt        DateTime?
   // --- Billing (per-conversation) -----------------------------------
   // Timestamp of the first successful Tier 3 analysis on this thread.
   // Used by the billing counter `markThreadAnalyzedIfFirst` to guarantee
   // one billing increment per thread regardless of how many times Tier 3
   // re-runs (new messages, refresh-stale, user-triggered re-analyse).
-  analyzedAt     DateTime?
+  analyzedAt                   DateTime?
   // Merchant explicitly dismissed this thread from the "À analyser" queue
   // (the list of support threads waiting for a Tier 3 run that accumulate
   // when the shop is suspended). Used to hide the thread from that queue
   // without touching billing or operational state. Set by the bulk "Vider"
   // action on the À analyser tab. Cleared automatically when analyzedAt is
   // populated (Tier 3 ran).
-  dismissedFromAnalyzeAt DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  dismissedFromAnalyzeAt       DateTime?
+  createdAt                    DateTime       @default(now())
+  updatedAt                    DateTime       @updatedAt
 
   providerIds  ThreadProviderId[]
   messages     IncomingEmail[]
@@ -215,63 +215,63 @@ model ThreadProviderId {
 }
 
 model IncomingEmail {
-  id               String   @id @default(cuid())
-  shop             String
-  mailConnectionId String
-  mailConnection   MailConnection @relation(fields: [mailConnectionId], references: [id], onDelete: Cascade)
-  externalMessageId String
+  id                   String         @id @default(cuid())
+  shop                 String
+  mailConnectionId     String
+  mailConnection       MailConnection @relation(fields: [mailConnectionId], references: [id], onDelete: Cascade)
+  externalMessageId    String
   // Provider-native thread identifier (Gmail threadId / Zoho threadId).
   // Kept for diagnostics; logic should prefer canonicalThreadId.
-  threadId         String   @default("")
+  threadId             String         @default("")
   // Canonical thread this message belongs to. Nullable during backfill
   // and for legacy rows; new rows always have it set by the resolver.
-  canonicalThreadId String?
+  canonicalThreadId    String?
   // RFC 5322 headers useful for thread reconciliation across providers.
-  rfcMessageId     String   @default("")
-  inReplyTo        String   @default("")
-  rfcReferences    String   @default("") // space-separated Message-IDs
+  rfcMessageId         String         @default("")
+  inReplyTo            String         @default("")
+  rfcReferences        String         @default("") // space-separated Message-IDs
   // Per-message regex extraction cached at ingestion time. JSON of
   // { orderNumber?, trackingNumber?, email?, customerName? }. The thread
   // consolidates these into Thread.resolved* fields.
-  extractedIdentifiers String @default("{}")
-  fromAddress      String
-  fromName         String   @default("")
-  subject          String
-  snippet          String   @default("")
-  bodyText         String   @default("")
-  receivedAt       DateTime
-  labelIds         String   @default("[]")   // JSON array of provider label IDs e.g. ["INBOX","CATEGORY_PROMOTIONS"]
-  tier1Result      String?  // "passed" | "filtered:<reason>"
-  tier2Result      String?  // "support_client" | "probable_non_client" | "incertain"
-  isKnownCustomer  Boolean  @default(false)
-  processingStatus String   @default("pending") // pending | filtering | classified | analyzed | error
+  extractedIdentifiers String         @default("{}")
+  fromAddress          String
+  fromName             String         @default("")
+  subject              String
+  snippet              String         @default("")
+  bodyText             String         @default("")
+  receivedAt           DateTime
+  labelIds             String         @default("[]") // JSON array of provider label IDs e.g. ["INBOX","CATEGORY_PROMOTIONS"]
+  tier1Result          String? // "passed" | "filtered:<reason>"
+  tier2Result          String? // "support_client" | "probable_non_client" | "incertain"
+  isKnownCustomer      Boolean        @default(false)
+  processingStatus     String         @default("pending") // pending | filtering | classified | analyzed | error
   // null = ingested by sync; "sent_from_app" = pre-emptive row created by handleSendDraft.
-  sourceMarker String?
-  analysisResult   String?  // JSON blob
+  sourceMarker         String?
+  analysisResult       String? // JSON blob
   // Top-level fields promoted out of analysisResult for cheap SQL
   // queries (dashboards, rule engines, QA). Must stay in sync with
   // the JSON blob — written at the same time in the pipeline.
-  detectedIntent      String?  // SupportIntent enum value
-  analysisConfidence  String?  // "high" | "medium" | "low"
+  detectedIntent       String? // SupportIntent enum value
+  analysisConfidence   String? // "high" | "medium" | "low"
   // Timestamp of the last full analysis (Shopify + tracking refresh).
   // Used to:
   //   - drive the daily auto-refresh of "to handle" threads,
   //   - trigger an automatic refresh when the user generates / refines
   //     a draft and the last analysis is older than 1h,
   //   - show the merchant when the data was last refreshed.
-  lastAnalyzedAt      DateTime?
-  errorMessage     String?
+  lastAnalyzedAt       DateTime?
+  errorMessage         String?
   // HTML body of the email (sanitized at ingestion time, may be empty)
-  bodyHtml         String   @default("")
-  hasAttachments   Boolean  @default(false)
+  bodyHtml             String         @default("")
+  hasAttachments       Boolean        @default(false)
   // Aggregated LLM cost tracking (sum of all LLM calls on this email)
-  llmTokensTotal   Int      @default(0)
-  llmCostUsd       Float    @default(0)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  llmTokensTotal       Int            @default(0)
+  llmCostUsd           Float          @default(0)
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
 
-  thread Thread? @relation(fields: [canonicalThreadId], references: [id], onDelete: SetNull)
-  replyDraft   ReplyDraft?
+  thread              Thread?                   @relation(fields: [canonicalThreadId], references: [id], onDelete: SetNull)
+  replyDraft          ReplyDraft?
   incomingAttachments IncomingEmailAttachment[]
 
   @@unique([shop, externalMessageId])
@@ -304,13 +304,13 @@ model IncomingEmailAttachment {
   fileName         String
   mimeType         String
   sizeBytes        Int
-  contentId        String?       // CID for inline images (without angle brackets)
-  disposition      String        // "attachment" | "inline"
-  inlineData       String?       // base64-encoded for small files
-  provider         String        // "gmail" | "zoho"
-  providerMsgId    String        // Gmail/Zoho message ID
-  providerAttachId String?       // Gmail/Zoho attachmentId (null for small inline data)
-  providerFolderId String?       // Zoho: folderId (required for attachment download URL)
+  contentId        String? // CID for inline images (without angle brackets)
+  disposition      String // "attachment" | "inline"
+  inlineData       String? // base64-encoded for small files
+  provider         String // "gmail" | "zoho"
+  providerMsgId    String // Gmail/Zoho message ID
+  providerAttachId String? // Gmail/Zoho attachmentId (null for small inline data)
+  providerFolderId String? // Zoho: folderId (required for attachment download URL)
   createdAt        DateTime      @default(now())
 
   @@index([shop])
@@ -318,29 +318,29 @@ model IncomingEmailAttachment {
 }
 
 model ReplyDraft {
-  id          String   @id @default(cuid())
-  shop        String
-  emailId     String   @unique
-  email       IncomingEmail @relation(fields: [emailId], references: [id], onDelete: Cascade)
+  id      String        @id @default(cuid())
+  shop    String
+  emailId String        @unique
+  email   IncomingEmail @relation(fields: [emailId], references: [id], onDelete: Cascade)
 
   body        String?
-  bodyHistory Json     @default("[]")
+  bodyHistory Json    @default("[]")
 
-  subject     String?
-  cc          String?
-  bcc         String?
-  replyMode   String   @default("thread")
+  subject   String?
+  cc        String?
+  bcc       String?
+  replyMode String  @default("thread")
 
   attachments DraftAttachment[]
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   /// Retrospective draft-usage bucket. null = pending (no outgoing synced yet).
   /// Values: "as_is" | "edited" | "ignored"
-  heuristicBucket      String?
+  heuristicBucket     String?
   /// Timestamp of last heuristic computation.
-  heuristicComputedAt  DateTime?
+  heuristicComputedAt DateTime?
 
   // --- Email send v1 ---
   sendingStartedAt      DateTime?
@@ -356,19 +356,19 @@ model ReplyDraft {
 }
 
 model DraftAttachment {
-  id                  String     @id @default(cuid())
-  shop                String
-  replyDraftId        String
-  replyDraft          ReplyDraft @relation(fields: [replyDraftId], references: [id], onDelete: Cascade)
+  id           String     @id @default(cuid())
+  shop         String
+  replyDraftId String
+  replyDraft   ReplyDraft @relation(fields: [replyDraftId], references: [id], onDelete: Cascade)
 
   fileName            String
   mimeType            String
   sizeBytes           Int
-  source              String     // "upload" | "thread"
+  source              String // "upload" | "thread"
   storagePath         String?
   threadAttachmentRef String?
 
-  createdAt           DateTime   @default(now())
+  createdAt DateTime @default(now())
 
   @@index([shop])
   @@index([replyDraftId])
@@ -377,18 +377,18 @@ model DraftAttachment {
 // Granular log of every OpenAI call. Enables precise cost attribution
 // per email / thread / call-site (classifier, llm-parser, llm-draft, …).
 model LlmCallLog {
-  id              String   @id @default(cuid())
-  shop            String
-  emailId         String?  // incomingEmail.id when applicable
-  threadId        String?  // email threadId for thread-level aggregation
-  callSite        String   // "classifier" | "llm-parser" | "llm-draft" | "refine-draft" | "tracking-agent" | "context-crawler"
-  model           String
-  promptTokens    Int
+  id               String   @id @default(cuid())
+  shop             String
+  emailId          String? // incomingEmail.id when applicable
+  threadId         String? // email threadId for thread-level aggregation
+  callSite         String // "classifier" | "llm-parser" | "llm-draft" | "refine-draft" | "tracking-agent" | "context-crawler"
+  model            String
+  promptTokens     Int
   completionTokens Int
-  totalTokens     Int
-  costUsd         Float
-  durationMs      Int      @default(0)
-  createdAt       DateTime @default(now())
+  totalTokens      Int
+  costUsd          Float
+  durationMs       Int      @default(0)
+  createdAt        DateTime @default(now())
 
   @@index([shop])
   @@index([shop, createdAt])
@@ -408,7 +408,7 @@ model ThreadStateHistory {
   fromState String?
   toState   String
   changedAt DateTime @default(now())
-  reason    String?  // e.g. "draft_sent", "auto_recompute", "manual_resolve"
+  reason    String? // e.g. "draft_sent", "auto_recompute", "manual_resolve"
 
   thread Thread @relation(fields: [threadId], references: [id], onDelete: Cascade)
 
@@ -437,21 +437,21 @@ model UserPreference {
 // processes them. Surviving a restart is the whole point — do not
 // replace with in-memory Promises.
 model SyncJob {
-  id           String    @id @default(cuid())
-  shop         String
+  id               String          @id @default(cuid())
+  shop             String
   mailConnectionId String?
   mailConnection   MailConnection? @relation(fields: [mailConnectionId], references: [id], onDelete: Cascade)
-  kind         String    // "sync" | "backfill" | "resync"
-  params       String    @default("{}") // JSON payload (e.g. { afterDate })
-  status       String    @default("pending") // pending | running | done | error
-  attempts     Int       @default(0)
-  lastError    String?
+  kind             String // "sync" | "backfill" | "resync"
+  params           String          @default("{}") // JSON payload (e.g. { afterDate })
+  status           String          @default("pending") // pending | running | done | error
+  attempts         Int             @default(0)
+  lastError        String?
   // Populated by markJobFailed: exponential backoff — job stays "pending"
   // but claimNextJob skips it until this timestamp is reached.
-  nextRetryAt  DateTime?
-  createdAt    DateTime  @default(now())
-  startedAt    DateTime?
-  finishedAt   DateTime?
+  nextRetryAt      DateTime?
+  createdAt        DateTime        @default(now())
+  startedAt        DateTime?
+  finishedAt       DateTime?
 
   @@index([shop, status])
   @@index([status, nextRetryAt])
@@ -474,8 +474,8 @@ model RateLimitBucket {
   // Free-form identifier for what's being rate-limited
   // (e.g. "reply-draft", "mail-auth").
   kind        String
-  count       Int       @default(0)
-  windowStart DateTime  @default(now())
+  count       Int      @default(0)
+  windowStart DateTime @default(now())
 
   @@id([key, kind])
   @@index([windowStart])
@@ -485,14 +485,14 @@ model RateLimitBucket {
 // One row per (shop, periodStart) — enforced via unique constraint.
 // periodStart is always 00:00:00 UTC of the 1st of the month.
 model BillingUsage {
-  id           String   @id @default(cuid())
-  shop         String
-  periodStart  DateTime
+  id                   String   @id @default(cuid())
+  shop                 String
+  periodStart          DateTime
   // Renamed from draftsCount. Each successful first-time Tier 3 on a
   // Thread increments this by 1 via markThreadAnalyzedIfFirst.
-  analyzedThreadsCount Int @default(0)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  analyzedThreadsCount Int      @default(0)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   @@unique([shop, periodStart])
   @@index([shop])
@@ -501,14 +501,14 @@ model BillingUsage {
 // Scheduled plan changes (downgrades). Applied at effectiveAt by a job.
 // Upgrades are immediate via Shopify Billing API and don't use this table.
 model BillingScheduledChange {
-  id           String    @id @default(cuid())
-  shop         String
-  fromPlan     String
-  toPlan       String
-  effectiveAt  DateTime
-  createdAt    DateTime  @default(now())
-  appliedAt    DateTime?
-  cancelledAt  DateTime?
+  id          String    @id @default(cuid())
+  shop        String
+  fromPlan    String
+  toPlan      String
+  effectiveAt DateTime
+  createdAt   DateTime  @default(now())
+  appliedAt   DateTime?
+  cancelledAt DateTime?
 
   @@index([shop])
   @@index([effectiveAt, appliedAt])

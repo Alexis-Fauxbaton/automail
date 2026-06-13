@@ -87,6 +87,10 @@ export function _resetStaleClassifyThrottleForTest(): void {
 let started = false;
 let _intervalHandle: ReturnType<typeof setInterval> | null = null;
 let inFlight = 0;
+// Guards drainJobQueue against concurrent invocations (the 60s tick plus the
+// re-drain fired by each job completion). Without it, two drains could each
+// claim a job in the window between `await claimNextJob` and `inFlight++`.
+let draining = false;
 let shuttingDown = false;
 const running: RunningSet = {
   mailConnectionIds: new Set<string>(),
@@ -410,26 +414,44 @@ export async function releaseStaleSendingDrafts(): Promise<number> {
  * that avoids a round-trip race when several slots drain in the same tick.
  */
 async function drainJobQueue(): Promise<void> {
-  while (inFlight < MAX_CONCURRENT) {
-    if (shuttingDown) return;
-    const job = await claimNextJob(running);
-    if (!job) break;
-    // Update the running set synchronously before firing — prevents the while
-    // loop from over-claiming slots for the same mailbox or shop within the
-    // same tick. Bookkeeping is undone in runJob's finally block.
-    inFlight++;
-    if (job.mailConnectionId != null) {
-      running.mailConnectionIds.add(job.mailConnectionId);
+  if (draining) return;
+  draining = true;
+  try {
+    while (inFlight < MAX_CONCURRENT) {
+      if (shuttingDown) return;
+      const job = await claimNextJob(running);
+      if (!job) break;
+      // Update the running set synchronously before firing — prevents the while
+      // loop from over-claiming slots for the same mailbox or shop within the
+      // same tick. Bookkeeping is undone in runJob's finally block.
+      inFlight++;
+      if (job.mailConnectionId != null) {
+        running.mailConnectionIds.add(job.mailConnectionId);
+      }
+      running.perShopCount.set(
+        job.shop,
+        (running.perShopCount.get(job.shop) ?? 0) + 1,
+      );
+      autoSyncInFlight.set(inFlight);
+      // Fire-and-forget: each slot runs in parallel. Bookkeeping happens
+      // inside runJob's finally block.
+      void runJob(job);
     }
-    running.perShopCount.set(
-      job.shop,
-      (running.perShopCount.get(job.shop) ?? 0) + 1,
-    );
-    autoSyncInFlight.set(inFlight);
-    // Fire-and-forget: each slot runs in parallel. Bookkeeping happens
-    // inside runJob's finally block.
-    void runJob(job);
+  } finally {
+    draining = false;
   }
+}
+
+/**
+ * Wake the job queue to drain right now instead of waiting for the next 60s
+ * tick. Call after enqueuing user-triggered jobs (e.g. bulk draft generation)
+ * so the batch starts immediately. Best-effort and safe: `drainJobQueue` is
+ * guarded against concurrency and `claimNextJob` uses FOR UPDATE SKIP LOCKED.
+ * No-op before the loop has started or during shutdown.
+ */
+export function pokeJobQueue(): void {
+  if (!started || shuttingDown) return;
+  void drainJobQueue();
 }
 
 /**
@@ -601,6 +623,9 @@ async function runJob(job: {
       case "analyze_thread": {
         const threadId = String(job.params.threadId ?? "");
         if (!threadId) throw new Error("analyze_thread job missing threadId");
+        // Bulk "Generate drafts" enqueues with this flag → run Tier 3 WITH the
+        // draft. Default paths (catch-up / stale-classify) stay draft-free.
+        const generateDraft = job.params.generateDraft === true;
         // Look up by mailConnectionId when available; fall back to any mailbox
         // for the address hint (analyze_thread is mailbox-scoped but the email
         // field is only used for logging).
@@ -672,14 +697,14 @@ async function runJob(job: {
               runTier2: true,
               runShopify: true,
               runTracking: true,
-              runDraft: false,
+              runDraft: generateDraft,
               skipBillingIncrement: false, // charge if Tier 3 runs and it's the first analysis
             },
           );
         } else {
           // Already classified — use the refresh path (no Tier 2 re-run).
           const { reanalyzeEmail } = await import("../gmail/pipeline");
-          await reanalyzeEmail(anchor.id, admin, job.shop, { skipDraft: true });
+          await reanalyzeEmail(anchor.id, admin, job.shop, { skipDraft: !generateDraft });
           // markThreadAnalyzedIfFirst was called inside reanalyzeEmail.
         }
         console.log(`[auto-sync] analyze_thread ok thread=${threadId} shop=${job.shop} mailbox=${conn?.email ?? "?"}`);
@@ -719,6 +744,11 @@ async function runJob(job: {
       { kind: job.kind, status: finalStatus },
       stopTimer(),
     );
+    // A slot just freed — pull the next queued job immediately instead of
+    // waiting for the next 60s tick. Lets a shop's queue (e.g. a batch of
+    // bulk draft-generation jobs) drain back-to-back. The `draining` guard
+    // keeps this safe against the tick's concurrent drain.
+    if (!shuttingDown) void drainJobQueue();
   }
 }
 
