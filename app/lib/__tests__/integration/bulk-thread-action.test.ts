@@ -173,6 +173,18 @@ describe("handleBulkThreadAction", () => {
     expect(history).toBe(0);
   });
 
+  it("resolve and reopen skip non_support threads", async () => {
+    const toResolve = await createTestThread({ supportNature: "non_support", operationalState: "waiting_merchant" });
+    const r1 = await handleBulkThreadAction({ shop: TEST_SHOP, threadIds: [toResolve.id], action: "resolved" });
+    expect(r1).toEqual({ updated: 0, skipped: 1 });
+    expect((await testDb.thread.findUnique({ where: { id: toResolve.id } }))?.operationalState).toBe("waiting_merchant");
+
+    const toReopen = await createTestThread({ supportNature: "non_support", operationalState: "resolved" });
+    const r2 = await handleBulkThreadAction({ shop: TEST_SHOP, threadIds: [toReopen.id], action: "reopen" });
+    expect(r2).toEqual({ updated: 0, skipped: 1 });
+    expect((await testDb.thread.findUnique({ where: { id: toReopen.id } }))?.operationalState).toBe("resolved");
+  });
+
   it("rejects unknown actions and empty input", async () => {
     const a = await createTestThread();
     expect(await handleBulkThreadAction({ shop: TEST_SHOP, threadIds: [a.id], action: "delete" })).toEqual({ updated: 0, skipped: 0 });

@@ -1300,7 +1300,12 @@ export async function handleBulkThreadAction(params: {
   if (threads.length === 0) return { updated: 0, skipped: 0 };
 
   if (action === "resolved") {
-    const changed = threads.filter((t) => t.operationalState !== "resolved");
+    // Skip non_support threads: they always display in "Other" (supportNature
+    // wins the bucket over operationalState), never "Resolved", so resolving
+    // them would mutate state invisibly. Counted as skipped instead.
+    const changed = threads.filter(
+      (t) => t.operationalState !== "resolved" && t.supportNature !== "non_support",
+    );
     if (changed.length > 0) {
       await prisma.$executeRaw`
         UPDATE "Thread"
@@ -1323,7 +1328,11 @@ export async function handleBulkThreadAction(params: {
   }
 
   if (action === "reopen") {
-    const changed = threads.filter((t) => t.operationalState === "resolved");
+    // Non_support threads never display as "Resolved", so the per-thread Reopen
+    // affordance never targets them — mirror that here and skip them.
+    const changed = threads.filter(
+      (t) => t.operationalState === "resolved" && t.supportNature !== "non_support",
+    );
     if (changed.length > 0) {
       await prisma.$executeRaw`
         UPDATE "Thread"
