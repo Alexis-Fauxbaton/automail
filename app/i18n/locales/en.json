@@ -414,9 +414,12 @@
     "bulkConfirmWaitingCustomer": "Mark {{count}} conversations as waiting on customer?",
     "bulkConfirmWaitingMerchant": "Mark {{count}} conversations as waiting on me?",
     "bulkConfirmNonSupport": "Mark {{count}} conversations as not support?",
-    "bulkAnalyzeWarning": "{{count}} of them have never been analyzed and will be now — moving them to a waiting state confirms them as support. This uses {{count}} analyses from your quota.",
+    "bulkGenerateDrafts": "Generate drafts",
+    "bulkConfirmGenerateDrafts": "Generate drafts for {{count}} conversations?",
+    "bulkAnalyzeWarning": "{{count}} of them have never been analyzed and will be analyzed to draft a reply. This uses {{count}} analyses from your quota.",
     "bulkToastUpdated": "{{count}} conversations updated",
     "bulkToastSkipped": "{{count}} skipped",
+    "bulkToastDraftsQueued": "Draft generation started for {{count}} conversations — drafts will appear as they're ready.",
     "send": {
       "cta": "Send",
       "disabled_no_draft": "Generate a draft first",

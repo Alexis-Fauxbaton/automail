@@ -140,49 +140,37 @@ describe("handleBulkThreadAction", () => {
     expect(history).toBe(0);
   });
 
-  it("non_support sets supportNature without touching operationalState or history", async () => {
-    const a = await createTestThread({ supportNature: "confirmed_support", operationalState: "waiting_merchant" });
+  it("generate_drafts enqueues a draft job per support thread, skipping non_support", async () => {
+    const a = await createTestThread({ supportNature: "confirmed_support" });
+    const b = await createTestThread({ supportNature: "non_support" });
 
     const res = await handleBulkThreadAction({
       shop: TEST_SHOP,
-      threadIds: [a.id],
-      action: "non_support",
+      threadIds: [a.id, b.id],
+      action: "generate_drafts",
     });
 
-    expect(res).toEqual({ updated: 1, skipped: 0 });
-    const row = await testDb.thread.findUnique({ where: { id: a.id } });
-    expect(row?.supportNature).toBe("non_support");
-    expect(row?.operationalState).toBe("waiting_merchant");
-    const history = await testDb.threadStateHistory.count({ where: { shop: TEST_SHOP } });
-    expect(history).toBe(0);
-    expect(enqueueSpy).not.toHaveBeenCalled();
-  });
-
-  it("waiting_* flips support and enqueues analyze_thread for never-analyzed threads", async () => {
-    const a = await createTestThread({ supportNature: "probable_support", operationalState: "open" });
-
-    const res = await handleBulkThreadAction({
-      shop: TEST_SHOP,
-      threadIds: [a.id],
-      action: "waiting_merchant",
-    });
-
-    expect(res).toEqual({ updated: 1, skipped: 0 });
-    const row = await testDb.thread.findUnique({ where: { id: a.id } });
-    expect(row?.operationalState).toBe("waiting_merchant");
-    expect(row?.supportNature).toBe("confirmed_support");
+    expect(res).toEqual({ updated: 1, skipped: 1 });
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
     expect(enqueueSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ shop: TEST_SHOP, kind: "analyze_thread", params: { threadId: a.id } }),
+      expect.objectContaining({
+        shop: TEST_SHOP,
+        kind: "analyze_thread",
+        params: { threadId: a.id, generateDraft: true },
+      }),
     );
   });
 
-  it("waiting_* does NOT enqueue when already analyzed", async () => {
-    const a = await createTestThread({ supportNature: "probable_support" });
-    await testDb.thread.update({ where: { id: a.id }, data: { analyzedAt: new Date() } });
+  it("generate_drafts touches no thread state or history", async () => {
+    const a = await createTestThread({ supportNature: "confirmed_support", operationalState: "waiting_merchant" });
 
-    await handleBulkThreadAction({ shop: TEST_SHOP, threadIds: [a.id], action: "waiting_merchant" });
+    await handleBulkThreadAction({ shop: TEST_SHOP, threadIds: [a.id], action: "generate_drafts" });
 
-    expect(enqueueSpy).not.toHaveBeenCalled();
+    const row = await testDb.thread.findUnique({ where: { id: a.id } });
+    expect(row?.operationalState).toBe("waiting_merchant");
+    expect(row?.supportNature).toBe("confirmed_support");
+    const history = await testDb.threadStateHistory.count({ where: { shop: TEST_SHOP } });
+    expect(history).toBe(0);
   });
 
   it("rejects unknown actions and empty input", async () => {

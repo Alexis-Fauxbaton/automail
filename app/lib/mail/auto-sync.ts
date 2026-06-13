@@ -601,6 +601,9 @@ async function runJob(job: {
       case "analyze_thread": {
         const threadId = String(job.params.threadId ?? "");
         if (!threadId) throw new Error("analyze_thread job missing threadId");
+        // Bulk "Generate drafts" enqueues with this flag → run Tier 3 WITH the
+        // draft. Default paths (catch-up / stale-classify) stay draft-free.
+        const generateDraft = job.params.generateDraft === true;
         // Look up by mailConnectionId when available; fall back to any mailbox
         // for the address hint (analyze_thread is mailbox-scoped but the email
         // field is only used for logging).
@@ -669,14 +672,14 @@ async function runJob(job: {
               runTier2: true,
               runShopify: true,
               runTracking: true,
-              runDraft: false,
+              runDraft: generateDraft,
               skipBillingIncrement: false, // charge if Tier 3 runs and it's the first analysis
             },
           );
         } else {
           // Already classified — use the refresh path (no Tier 2 re-run).
           const { reanalyzeEmail } = await import("../gmail/pipeline");
-          await reanalyzeEmail(anchor.id, admin, job.shop, { skipDraft: true });
+          await reanalyzeEmail(anchor.id, admin, job.shop, { skipDraft: !generateDraft });
           // markThreadAnalyzedIfFirst was called inside reanalyzeEmail.
         }
         console.log(`[auto-sync] analyze_thread ok thread=${threadId} shop=${job.shop} mailbox=${conn?.email ?? "?"}`);

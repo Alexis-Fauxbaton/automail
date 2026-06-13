@@ -1242,41 +1242,35 @@ async function runFakeSendForInternalShop(params: {
 // Bulk thread actions
 // ---------------------------------------------------------------------------
 
-export type BulkThreadActionKind =
-  | "resolved"
-  | "reopen"
-  | "waiting_customer"
-  | "waiting_merchant"
-  | "non_support";
+export type BulkThreadActionKind = "resolved" | "reopen" | "generate_drafts";
 
 const BULK_ACTION_KINDS = new Set<BulkThreadActionKind>([
   "resolved",
   "reopen",
-  "waiting_customer",
-  "waiting_merchant",
-  "non_support",
+  "generate_drafts",
 ]);
 
 const BULK_MAX_THREADS = 500;
 
 /**
- * Apply a grouped operational/support-nature change to many threads at once.
+ * Apply a grouped action to many threads at once. Three actions:
+ *   - `resolved`  : mark selected threads resolved (idempotent).
+ *   - `reopen`    : un-resolve, restoring previousOperationalState.
+ *   - `generate_drafts` : enqueue a background draft-generation job per thread.
  *
  * Multi-tenant: the thread set is read with `shop` in the WHERE so any id the
  * caller doesn't own is silently dropped (anti-tamper).
  *
- * Side-effect parity with the single path (handleMoveThread, "site #2"):
- * moving to a waiting state flips supportNature -> confirmed_support and, for
- * never-analyzed threads, enqueues an `analyze_thread` job (first analysis,
- * 1 billing unit). Reopen does NOT refresh tracking inline (deferred to the
+ * `generate_drafts` is asynchronous: drafts appear as the job queue drains.
+ * Never-analysed threads consume 1 billing unit on their first analysis;
+ * already-analysed threads regenerate for free (per-conversation pricing).
+ * Reopen does NOT refresh tracking inline (deferred to the
  * refresh-stale-analyses tick) to keep the bulk request bounded.
  *
  * NOTE: this batch path writes ThreadStateHistory directly via createMany
  * (with reason "bulk_action") instead of going through recordStateTransition,
  * for performance. If that shared helper gains new logic, this path won't
- * inherit it. Also, mirroring handleMoveThread, a thread that is ALREADY
- * confirmed_support but never analyzed is NOT enqueued for analysis on a
- * waiting_* move (no supportNature flip happens), which is intentional.
+ * inherit it.
  */
 export async function handleBulkThreadAction(params: {
   shop: string;
@@ -1351,62 +1345,21 @@ export async function handleBulkThreadAction(params: {
     return { updated: changed.length, skipped: threads.length - changed.length };
   }
 
-  if (action === "non_support") {
-    const changed = threads.filter((t) => t.supportNature !== "non_support");
-    if (changed.length > 0) {
-      await prisma.thread.updateMany({
-        where: { shop, id: { in: changed.map((t) => t.id) } },
-        data: { supportNature: "non_support", supportNatureUpdatedAt: new Date() },
-      });
-    }
-    return { updated: changed.length, skipped: threads.length - changed.length };
-  }
-
-  // waiting_customer | waiting_merchant
-  const target = action;
-  const stateChanged = threads.filter((t) => t.operationalState !== target);
-  const supportFlip = threads.filter((t) => t.supportNature !== "confirmed_support");
-  const touched = threads.filter(
-    (t) => t.operationalState !== target || t.supportNature !== "confirmed_support",
-  );
-
-  if (stateChanged.length > 0) {
-    await prisma.thread.updateMany({
-      where: { shop, id: { in: stateChanged.map((t) => t.id) } },
-      data: { operationalState: target, operationalStateUpdatedAt: new Date() },
-    });
-    await prisma.threadStateHistory.createMany({
-      data: stateChanged.map((t) => ({
-        shop,
-        threadId: t.id,
-        fromState: t.operationalState,
-        toState: target,
-        reason: "bulk_action",
-      })),
-    });
-  }
-
-  if (supportFlip.length > 0) {
-    await prisma.thread.updateMany({
-      where: { shop, id: { in: supportFlip.map((t) => t.id) } },
-      data: { supportNature: "confirmed_support", supportNatureUpdatedAt: new Date() },
-    });
-  }
-
-  // Site #2 condition: flipped to confirmed_support AND never analyzed.
-  const toAnalyze = threads.filter(
-    (t) => t.supportNature !== "confirmed_support" && t.analyzedAt === null,
-  );
-  for (const t of toAnalyze) {
+  // generate_drafts: enqueue one background draft-generation job per selected
+  // thread (skipping non-support threads — a draft makes no sense there). The
+  // job runner resolves the thread anchor and runs Tier 3 WITH the draft
+  // (params.generateDraft). Async by design: drafts surface as the queue
+  // drains. Billing is charged inside the job on first analysis only.
+  const targets = threads.filter((t) => t.supportNature !== "non_support");
+  for (const t of targets) {
     await enqueueJob({
       shop,
       kind: "analyze_thread",
       mailConnectionId: t.mailConnectionId,
-      params: { threadId: t.id },
+      params: { threadId: t.id, generateDraft: true },
     }).catch((err) => {
-      console.error(`[bulk] enqueueJob analyze_thread failed for thread=${t.id}:`, err);
+      console.error(`[bulk] enqueueJob generate-draft failed for thread=${t.id}:`, err);
     });
   }
-
-  return { updated: touched.length, skipped: threads.length - touched.length };
+  return { updated: targets.length, skipped: threads.length - targets.length };
 }

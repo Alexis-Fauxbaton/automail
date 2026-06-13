@@ -9,19 +9,12 @@ export interface BulkSelectedThread {
   analyzedAt: string | null;
 }
 
-type BulkAction =
-  | "resolved"
-  | "reopen"
-  | "waiting_customer"
-  | "waiting_merchant"
-  | "non_support";
+type BulkAction = "resolved" | "reopen" | "generate_drafts";
 
 const CONFIRM_KEY: Record<BulkAction, string> = {
   resolved: "inbox.bulkConfirmResolved",
   reopen: "inbox.bulkConfirmReopen",
-  waiting_customer: "inbox.bulkConfirmWaitingCustomer",
-  waiting_merchant: "inbox.bulkConfirmWaitingMerchant",
-  non_support: "inbox.bulkConfirmNonSupport",
+  generate_drafts: "inbox.bulkConfirmGenerateDrafts",
 };
 
 // Scoped styles — kept here so the bar carries its own hover/focus polish
@@ -118,16 +111,18 @@ export function BulkActionBar({ selected, onClear }: Props) {
   const { t } = useTranslation();
   const fetcher = useFetcher<{ bulkResult?: { updated: number; skipped: number } }>();
   const [pending, setPending] = useState<BulkAction | null>(null);
+  const [submittedAction, setSubmittedAction] = useState<BulkAction | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const count = selected.length;
 
-  // Exact "site #2" estimate: only waiting_* moves on threads that will flip
-  // (supportNature !== confirmed_support) AND were never analyzed.
+  // Generating drafts triggers a first analysis for never-analysed,
+  // support-eligible threads — each consumes 1 quota unit. Already-analysed
+  // threads regenerate for free, so they don't count toward the warning.
   const analyzeCount = useMemo(() => {
-    if (pending !== "waiting_customer" && pending !== "waiting_merchant") return 0;
+    if (pending !== "generate_drafts") return 0;
     return selected.filter(
-      (s) => s.supportNature !== "confirmed_support" && s.analyzedAt === null,
+      (s) => s.analyzedAt === null && s.supportNature !== "non_support",
     ).length;
   }, [pending, selected]);
 
@@ -135,13 +130,20 @@ export function BulkActionBar({ selected, onClear }: Props) {
   useEffect(() => {
     if (fetcher.state === "idle" && fetcher.data?.bulkResult) {
       const { updated, skipped } = fetcher.data.bulkResult;
-      let msg = t("inbox.bulkToastUpdated", { count: updated });
-      if (skipped > 0) msg += ` · ${t("inbox.bulkToastSkipped", { count: skipped })}`;
+      let msg: string;
+      if (submittedAction === "generate_drafts") {
+        // Async: the jobs were queued, drafts surface as they complete.
+        msg = t("inbox.bulkToastDraftsQueued", { count: updated });
+      } else {
+        msg = t("inbox.bulkToastUpdated", { count: updated });
+        if (skipped > 0) msg += ` · ${t("inbox.bulkToastSkipped", { count: skipped })}`;
+      }
       setToast(msg);
       setPending(null);
+      setSubmittedAction(null);
       onClear();
     }
-  }, [fetcher.state, fetcher.data, t, onClear]);
+  }, [fetcher.state, fetcher.data, submittedAction, t, onClear]);
 
   useEffect(() => {
     if (!toast) return;
@@ -153,6 +155,7 @@ export function BulkActionBar({ selected, onClear }: Props) {
 
   function submit() {
     if (!pending) return;
+    setSubmittedAction(pending);
     fetcher.submit(
       {
         _action: "bulkThreadAction",
@@ -174,9 +177,7 @@ export function BulkActionBar({ selected, onClear }: Props) {
           <span className="bulkbar__chip">{t("inbox.bulkSelectedCount", { count })}</span>
           <BulkBtn label={t("inbox.bulkMarkResolved")} onClick={() => setPending("resolved")} />
           <BulkBtn label={t("inbox.bulkReopen")} onClick={() => setPending("reopen")} />
-          <BulkBtn label={t("inbox.bulkWaitingCustomer")} onClick={() => setPending("waiting_customer")} />
-          <BulkBtn label={t("inbox.bulkWaitingMerchant")} onClick={() => setPending("waiting_merchant")} />
-          <BulkBtn label={t("inbox.bulkMarkNonSupport")} onClick={() => setPending("non_support")} />
+          <BulkBtn label={t("inbox.bulkGenerateDrafts")} onClick={() => setPending("generate_drafts")} />
           <button type="button" className="bulkbar__clear" onClick={onClear}>
             {t("inbox.bulkClear")}
           </button>

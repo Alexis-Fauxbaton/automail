@@ -414,9 +414,12 @@
     "bulkConfirmWaitingCustomer": "Marquer {{count}} conversations comme « en attente client » ?",
     "bulkConfirmWaitingMerchant": "Marquer {{count}} conversations comme « en attente de moi » ?",
     "bulkConfirmNonSupport": "Marquer {{count}} conversations comme non-support ?",
-    "bulkAnalyzeWarning": "{{count}} d'entre elles n'ont jamais été analysées et le seront maintenant — les passer en attente les confirme comme support. Cela consomme {{count}} analyses de votre quota.",
+    "bulkGenerateDrafts": "Générer les brouillons",
+    "bulkConfirmGenerateDrafts": "Générer le brouillon de {{count}} conversations ?",
+    "bulkAnalyzeWarning": "{{count}} d'entre elles n'ont jamais été analysées et le seront pour rédiger un brouillon. Cela consomme {{count}} analyses de votre quota.",
     "bulkToastUpdated": "{{count}} conversations mises à jour",
     "bulkToastSkipped": "{{count}} ignorées",
+    "bulkToastDraftsQueued": "Génération lancée pour {{count}} conversations — les brouillons apparaîtront au fur et à mesure.",
     "send": {
       "cta": "Envoyer",
       "disabled_no_draft": "Générez d'abord un brouillon",
