@@ -1246,24 +1246,28 @@ export type BulkThreadActionKind =
   | "resolved"
   | "reopen"
   | "generate_drafts"
-  | "mark_support";
+  | "mark_support"
+  | "mark_non_support";
 
 const BULK_ACTION_KINDS = new Set<BulkThreadActionKind>([
   "resolved",
   "reopen",
   "generate_drafts",
   "mark_support",
+  "mark_non_support",
 ]);
 
 const BULK_MAX_THREADS = 500;
 
 /**
- * Apply a grouped action to many threads at once. Four actions:
+ * Apply a grouped action to many threads at once. Five actions:
  *   - `resolved`  : mark selected threads resolved (idempotent).
  *   - `reopen`    : un-resolve, restoring previousOperationalState.
  *   - `generate_drafts` : enqueue a background draft-generation job per thread.
  *   - `mark_support` : reclassify non-support threads as confirmed support
  *                      (no analysis/quota; they land in the "To analyse" bucket).
+ *   - `mark_non_support` : reclassify threads as non-support (they move to the
+ *                      "Other" bucket, out of the support flow).
  *
  * Multi-tenant: the thread set is read with `shop` in the WHERE so any id the
  * caller doesn't own is silently dropped (anti-tamper).
@@ -1375,6 +1379,19 @@ export async function handleBulkThreadAction(params: {
           supportNatureUpdatedAt: new Date(),
           dismissedFromAnalyzeAt: null,
         },
+      });
+    }
+    return { updated: changed.length, skipped: threads.length - changed.length };
+  }
+
+  if (action === "mark_non_support") {
+    // Pull support threads OUT of the support flow → "Other" bucket. Already
+    // non-support threads are skipped. No state/history/analysis side-effects.
+    const changed = threads.filter((t) => t.supportNature !== "non_support");
+    if (changed.length > 0) {
+      await prisma.thread.updateMany({
+        where: { shop, id: { in: changed.map((t) => t.id) } },
+        data: { supportNature: "non_support", supportNatureUpdatedAt: new Date() },
       });
     }
     return { updated: changed.length, skipped: threads.length - changed.length };

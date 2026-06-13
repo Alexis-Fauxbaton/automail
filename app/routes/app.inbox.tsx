@@ -2037,6 +2037,9 @@ const ThreadCard = memo(function ThreadCard({
         {bucket === "other" && latest.canonicalThreadId && (
           <MarkThreadSupportButton canonicalThreadId={latest.canonicalThreadId} />
         )}
+        {bucket !== "other" && latest.canonicalThreadId && (
+          <MarkThreadNonSupportButton canonicalThreadId={latest.canonicalThreadId} />
+        )}
         {(bucket === "to_process" || bucket === "waiting_merchant" || bucket === "to_analyze") &&
           !latest.draftReply &&
           !noReplyNeeded &&
@@ -2780,6 +2783,9 @@ function ThreadDetailPanel({
           {bucket === "other" && latest.canonicalThreadId && (
             <MarkThreadSupportButton canonicalThreadId={latest.canonicalThreadId} />
           )}
+          {bucket !== "other" && latest.canonicalThreadId && (
+            <MarkThreadNonSupportButton canonicalThreadId={latest.canonicalThreadId} />
+          )}
           {!noReplyNeeded &&
             !latest.tier1Result?.startsWith("filtered:") &&
             latest.tier2Result !== "probable_non_client" && (
@@ -3131,6 +3137,28 @@ function MarkThreadSupportButton({ canonicalThreadId }: { canonicalThreadId: str
       <input type="hidden" name="threadIds" value={JSON.stringify([canonicalThreadId])} />
       <s-button type="submit" variant="secondary" {...(isSubmitting ? { loading: true } : {})}>
         {t("inbox.bulkMarkSupport")}
+      </s-button>
+    </fetcher.Form>
+  );
+}
+
+/**
+ * Per-thread "Mark as non-support" button shown on support cards/detail.
+ * Inverse of MarkThreadSupportButton — reuses the bulk mark_non_support
+ * handler with a single thread id so per-thread and bulk behave identically:
+ * supportNature -> non_support, the thread moves to the "Other" bucket.
+ */
+function MarkThreadNonSupportButton({ canonicalThreadId }: { canonicalThreadId: string }) {
+  const { t } = useTranslation();
+  const fetcher = useFetcher();
+  const isSubmitting = fetcher.state === "submitting" || fetcher.state === "loading";
+  return (
+    <fetcher.Form method="post">
+      <input type="hidden" name="_action" value="bulkThreadAction" />
+      <input type="hidden" name="bulkAction" value="mark_non_support" />
+      <input type="hidden" name="threadIds" value={JSON.stringify([canonicalThreadId])} />
+      <s-button type="submit" variant="tertiary" {...(isSubmitting ? { loading: true } : {})}>
+        {t("inbox.bulkMarkNonSupport")}
       </s-button>
     </fetcher.Form>
   );
