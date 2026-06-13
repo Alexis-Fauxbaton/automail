@@ -1796,6 +1796,8 @@ const ThreadCard = memo(function ThreadCard({
   thread,
   threadState,
   isSelected,
+  isChecked,
+  selectionCheckbox,
   connectedEmail,
   previousContact,
   onSelect,
@@ -1806,6 +1808,10 @@ const ThreadCard = memo(function ThreadCard({
   thread: EmailThread;
   threadState: SerializedThreadState | null;
   isSelected: boolean;
+  /** Multi-select state: true when this card is ticked in the bulk selection. */
+  isChecked?: boolean;
+  /** Bulk-select checkbox rendered as the leading item of the tags row. */
+  selectionCheckbox?: ReactNode;
   connectedEmail: string | null;
   /** Cross-thread: have we already sent an outgoing to this address/order in another thread? */
   previousContact: { byOrder: boolean; recentReply: boolean };
@@ -1867,10 +1873,16 @@ const ThreadCard = memo(function ThreadCard({
     <div
       onClick={() => onSelect(thread.threadId)}
       className={["ui-card ui-card--compact", isSelected ? "ui-card--selected" : ""].join(" ")}
-      style={{ cursor: "pointer" }}
+      style={{
+        cursor: "pointer",
+        ...(isChecked
+          ? { boxShadow: "0 0 0 2px var(--ui-emerald-600, #059669), var(--ui-shadow-card, 0 8px 24px rgba(15, 23, 42, 0.05))" }
+          : {}),
+      }}
     >
-      {/* Row 1 : badges */}
+      {/* Row 1 : badges (bulk-select checkbox leads the row when present) */}
       <div className="ui-thread-row-tags">
+        {selectionCheckbox}
         {cls === "uncertain" && <span className="ui-pill ui-pill--warning ui-pill--clickable" onClick={(e) => { e.stopPropagation(); onFilterClick({ nature: "uncertain" }); }}>{t("inbox.pillUncertain")}</span>}
         {/* Show "Non-support" badge for any thread in the "other" bucket:
             explicitly classified non_support (tier 1 or tier 2) AND outgoing-only
@@ -3653,7 +3665,7 @@ export default function InboxPage() {
                     ) : (
                       <div key={thread.threadId} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                         {mailConn && loaderData.connections.length > 1 && (
-                          <div style={{ paddingLeft: 27 }}>
+                          <div>
                             <MailboxBadge
                               email={mailConn.email}
                               provider={mailConn.provider}
@@ -3661,43 +3673,33 @@ export default function InboxPage() {
                             />
                           </div>
                         )}
-                        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                          {thread.latest.canonicalThreadId && (
-                            <input
-                              type="checkbox"
-                              checked={selectedIds.has(thread.latest.canonicalThreadId)}
-                              onChange={() => toggleSelected(thread.latest.canonicalThreadId as string)}
-                              onClick={(e) => e.stopPropagation()}
-                              aria-label="select conversation"
-                              style={{ width: 17, height: 17, accentColor: "var(--ui-emerald-700, #047857)", cursor: "pointer", flexShrink: 0 }}
-                            />
-                          )}
-                          <div
-                            style={{
-                              flex: 1,
-                              minWidth: 0,
-                              borderRadius: "var(--ui-radius-2xl, 24px)",
-                              boxShadow:
-                                thread.latest.canonicalThreadId &&
-                                selectedIds.has(thread.latest.canonicalThreadId)
-                                  ? "0 0 0 2px var(--ui-emerald-600, #059669)"
-                                  : undefined,
-                              transition: "box-shadow 0.15s",
-                            }}
-                          >
-                            <ThreadCard
-                              thread={thread}
-                              threadState={state}
-                              isSelected={expandedThreadId === thread.threadId}
-                              connectedEmail={loaderData.connectedEmail}
-                              previousContact={previousContact}
-                              onSelect={toggleExpandedThreadId}
-                              onOrderClick={handleOrderClick}
-                              onFilterClick={handleFilterClick}
-                              onBucketClick={handleBucketClick}
-                            />
-                          </div>
-                        </div>
+                        <ThreadCard
+                          thread={thread}
+                          threadState={state}
+                          isSelected={expandedThreadId === thread.threadId}
+                          isChecked={
+                            !!thread.latest.canonicalThreadId &&
+                            selectedIds.has(thread.latest.canonicalThreadId)
+                          }
+                          selectionCheckbox={
+                            thread.latest.canonicalThreadId ? (
+                              <input
+                                type="checkbox"
+                                checked={selectedIds.has(thread.latest.canonicalThreadId)}
+                                onChange={() => toggleSelected(thread.latest.canonicalThreadId as string)}
+                                onClick={(e) => e.stopPropagation()}
+                                aria-label="select conversation"
+                                style={{ width: 16, height: 16, accentColor: "var(--ui-emerald-700, #047857)", cursor: "pointer", flexShrink: 0, marginRight: 2 }}
+                              />
+                            ) : null
+                          }
+                          connectedEmail={loaderData.connectedEmail}
+                          previousContact={previousContact}
+                          onSelect={toggleExpandedThreadId}
+                          onOrderClick={handleOrderClick}
+                          onFilterClick={handleFilterClick}
+                          onBucketClick={handleBucketClick}
+                        />
                       </div>
                     );
                   })}
