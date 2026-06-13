@@ -321,6 +321,25 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   });
   const syncInProgress = !!activeHeavyJob;
 
+  // Threads whose draft is being generated in the background (bulk "Generate
+  // drafts" enqueues analyze_thread jobs with generateDraft:true). Surfaced so
+  // the inbox can show a per-card spinner and poll faster until they land.
+  const generatingJobs = await prisma.syncJob.findMany({
+    where: { shop, kind: "analyze_thread", status: { in: ["pending", "running"] } },
+    select: { params: true },
+  });
+  const generatingThreadIds = Array.from(
+    new Set(
+      generatingJobs
+        .map((j) => j.params as { threadId?: string; generateDraft?: boolean } | null)
+        .filter(
+          (p): p is { threadId: string; generateDraft?: boolean } =>
+            !!p && typeof p.threadId === "string" && p.generateDraft === true,
+        )
+        .map((p) => p.threadId),
+    ),
+  );
+
   // Per-mailbox metadata — consumed by the mailbox filter UI (Phase 8).
   const connections = await prisma.mailConnection.findMany({
     where: { shop },
@@ -362,6 +381,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     threadStates,
     priorContact,
     syncInProgress,
+    generatingThreadIds,
     onboardingChecklist,
     shop,
     connections: connections.map((c) => ({
@@ -1797,6 +1817,7 @@ const ThreadCard = memo(function ThreadCard({
   threadState,
   isSelected,
   isChecked,
+  isGeneratingDraft,
   selectionCheckbox,
   connectedEmail,
   previousContact,
@@ -1810,6 +1831,8 @@ const ThreadCard = memo(function ThreadCard({
   isSelected: boolean;
   /** Multi-select state: true when this card is ticked in the bulk selection. */
   isChecked?: boolean;
+  /** True while a background draft-generation job is in flight for this thread. */
+  isGeneratingDraft?: boolean;
   /** Bulk-select checkbox rendered as the leading item of the tags row. */
   selectionCheckbox?: ReactNode;
   connectedEmail: string | null;
@@ -2034,7 +2057,13 @@ const ThreadCard = memo(function ThreadCard({
             previousOperationalState={threadState?.previousOperationalState ?? null}
           />
         )}
-        {(bucket === "to_process" || bucket === "waiting_merchant" || bucket === "to_analyze") &&
+        {isGeneratingDraft && (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "0.8125rem", color: "var(--ui-slate-600)", alignSelf: "center" }}>
+            <span className="ui-spinner" aria-hidden="true" /> {t("inbox.generating")}
+          </span>
+        )}
+        {!isGeneratingDraft &&
+          (bucket === "to_process" || bucket === "waiting_merchant" || bucket === "to_analyze") &&
           !latest.draftReply &&
           !noReplyNeeded &&
           !latest.tier1Result?.startsWith("filtered:") &&
@@ -3257,7 +3286,14 @@ export default function InboxPage() {
   // triggered one (syncStarted from action). Cleared only when loader revalidates with
   // no active job.
   const syncStarted = (actionData as { syncStarted?: boolean } | null)?.syncStarted === true;
-  const bgSyncActive = loaderData.syncInProgress || syncStarted;
+  // Threads with a background draft-generation job in flight → per-card spinner
+  // + faster polling so the drafts surface within seconds, not a minute.
+  const generatingDraftIds = useMemo(
+    () => new Set(loaderData.generatingThreadIds ?? []),
+    [loaderData.generatingThreadIds],
+  );
+  const draftsGenerating = generatingDraftIds.size > 0;
+  const bgSyncActive = loaderData.syncInProgress || syncStarted || draftsGenerating;
 
   // Passive revalidation — picks up emails ingested by the background auto-sync loop.
   // Poll every 5s while a heavy job is running, otherwise every 60s.
@@ -3772,6 +3808,10 @@ export default function InboxPage() {
                           isChecked={
                             !!thread.latest.canonicalThreadId &&
                             selectedIds.has(thread.latest.canonicalThreadId)
+                          }
+                          isGeneratingDraft={
+                            !!thread.latest.canonicalThreadId &&
+                            generatingDraftIds.has(thread.latest.canonicalThreadId)
                           }
                           selectionCheckbox={
                             thread.latest.canonicalThreadId ? (
