@@ -418,6 +418,7 @@
     "bulkConfirmGenerateDrafts": "Générer le brouillon de {{count}} conversations ?",
     "bulkMarkSupport": "Traiter comme support",
     "bulkConfirmMarkSupport": "Traiter {{count}} conversations comme support ? Elles passeront dans la file « À analyser ».",
+    "moreActions": "Plus d'actions",
     "bulkAnalyzeWarning": "{{count}} d'entre elles n'ont jamais été analysées et le seront pour rédiger un brouillon. Cela consomme {{count}} analyses de votre quota.",
     "bulkToastUpdated": "{{count}} conversations mises à jour",
     "bulkToastSkipped": "{{count}} ignorées",

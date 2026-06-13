@@ -2034,12 +2034,6 @@ const ThreadCard = memo(function ThreadCard({
             previousOperationalState={threadState?.previousOperationalState ?? null}
           />
         )}
-        {bucket === "other" && latest.canonicalThreadId && (
-          <MarkThreadSupportButton canonicalThreadId={latest.canonicalThreadId} />
-        )}
-        {bucket !== "other" && latest.canonicalThreadId && (
-          <MarkThreadNonSupportButton canonicalThreadId={latest.canonicalThreadId} />
-        )}
         {(bucket === "to_process" || bucket === "waiting_merchant" || bucket === "to_analyze") &&
           !latest.draftReply &&
           !noReplyNeeded &&
@@ -2064,6 +2058,12 @@ const ThreadCard = memo(function ThreadCard({
         )}
         {bucket === "to_analyze" && latest.canonicalThreadId && (
           <DismissThreadFromAnalyzeButton canonicalThreadId={latest.canonicalThreadId} />
+        )}
+        {latest.canonicalThreadId && (
+          <ThreadReclassifyMenu
+            canonicalThreadId={latest.canonicalThreadId}
+            isNonSupport={bucket === "other"}
+          />
         )}
       </div>
 
@@ -2780,11 +2780,11 @@ function ThreadDetailPanel({
               previousOperationalState={threadState?.previousOperationalState ?? null}
             />
           )}
-          {bucket === "other" && latest.canonicalThreadId && (
-            <MarkThreadSupportButton canonicalThreadId={latest.canonicalThreadId} />
-          )}
-          {bucket !== "other" && latest.canonicalThreadId && (
-            <MarkThreadNonSupportButton canonicalThreadId={latest.canonicalThreadId} />
+          {latest.canonicalThreadId && (
+            <ThreadReclassifyMenu
+              canonicalThreadId={latest.canonicalThreadId}
+              isNonSupport={bucket === "other"}
+            />
           )}
           {!noReplyNeeded &&
             !latest.tier1Result?.startsWith("filtered:") &&
@@ -3121,62 +3121,82 @@ function ClearAnalyzeQueueButton({ count }: { count: number }) {
 }
 
 /**
- * Per-thread "Treat as support" button shown on non-support cards/detail.
- * Reuses the bulk handler (mark_support) with a single thread id, so the
- * behaviour matches the bulk path exactly: reclassify to confirmed_support
- * with no analysis / quota — the thread lands in the "To analyse" bucket.
+ * Per-thread reclassify menu — a discreet "⋯" that swaps the thread between
+ * support and non-support. Reuses the bulk handler (mark_support /
+ * mark_non_support) with a single thread id so per-thread and bulk behave
+ * identically; no analysis / quota. Kept out of the main action emphasis so it
+ * doesn't weigh down the card list.
  */
-function MarkThreadSupportButton({ canonicalThreadId }: { canonicalThreadId: string }) {
+function ThreadReclassifyMenu({
+  canonicalThreadId,
+  isNonSupport,
+}: {
+  canonicalThreadId: string;
+  isNonSupport: boolean;
+}) {
   const { t } = useTranslation();
   const fetcher = useFetcher();
-  const isSubmitting = fetcher.state === "submitting" || fetcher.state === "loading";
-  return (
-    <fetcher.Form method="post">
-      <input type="hidden" name="_action" value="bulkThreadAction" />
-      <input type="hidden" name="bulkAction" value="mark_support" />
-      <input type="hidden" name="threadIds" value={JSON.stringify([canonicalThreadId])} />
-      <button
-        type="submit"
-        disabled={isSubmitting}
-        style={{
-          background: "none", border: "none", padding: "2px 4px",
-          fontSize: "0.8125rem", color: "var(--ui-slate-500)", cursor: "pointer",
-          textDecoration: "underline", textUnderlineOffset: "2px", alignSelf: "center",
-        }}
-      >
-        {isSubmitting ? "…" : t("inbox.bulkMarkSupport")}
-      </button>
-    </fetcher.Form>
-  );
-}
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  const busy = fetcher.state !== "idle";
 
-/**
- * Per-thread "Mark as non-support" button shown on support cards/detail.
- * Inverse of MarkThreadSupportButton — reuses the bulk mark_non_support
- * handler with a single thread id so per-thread and bulk behave identically:
- * supportNature -> non_support, the thread moves to the "Other" bucket.
- */
-function MarkThreadNonSupportButton({ canonicalThreadId }: { canonicalThreadId: string }) {
-  const { t } = useTranslation();
-  const fetcher = useFetcher();
-  const isSubmitting = fetcher.state === "submitting" || fetcher.state === "loading";
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  const action = isNonSupport ? "mark_support" : "mark_non_support";
+  const label = isNonSupport ? t("inbox.bulkMarkSupport") : t("inbox.bulkMarkNonSupport");
+
   return (
-    <fetcher.Form method="post">
-      <input type="hidden" name="_action" value="bulkThreadAction" />
-      <input type="hidden" name="bulkAction" value="mark_non_support" />
-      <input type="hidden" name="threadIds" value={JSON.stringify([canonicalThreadId])} />
+    <div ref={ref} style={{ position: "relative", display: "inline-flex", alignSelf: "center" }}>
       <button
-        type="submit"
-        disabled={isSubmitting}
+        type="button"
+        aria-label={t("inbox.moreActions")}
+        disabled={busy}
+        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
         style={{
-          background: "none", border: "none", padding: "2px 4px",
-          fontSize: "0.8125rem", color: "var(--ui-slate-500)", cursor: "pointer",
-          textDecoration: "underline", textUnderlineOffset: "2px", alignSelf: "center",
+          background: "none", border: "none", cursor: "pointer",
+          color: "var(--ui-slate-400)", fontSize: "18px", lineHeight: 1,
+          padding: "2px 6px", borderRadius: 6,
         }}
       >
-        {isSubmitting ? "…" : t("inbox.bulkMarkNonSupport")}
+        ⋯
       </button>
-    </fetcher.Form>
+      {open && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "absolute", top: "calc(100% + 4px)", right: 0, zIndex: 30,
+            background: "#fff", border: "1px solid var(--ui-slate-200)",
+            borderRadius: 8, boxShadow: "var(--ui-shadow-card)", padding: 4, minWidth: 190,
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              fetcher.submit(
+                { _action: "bulkThreadAction", bulkAction: action, threadIds: JSON.stringify([canonicalThreadId]) },
+                { method: "post" },
+              );
+            }}
+            style={{
+              display: "block", width: "100%", textAlign: "left",
+              background: "none", border: "none", cursor: "pointer",
+              padding: "7px 10px", borderRadius: 6, fontSize: "0.8125rem",
+              color: "var(--ui-slate-700)",
+            }}
+          >
+            {label}
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

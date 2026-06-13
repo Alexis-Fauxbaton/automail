@@ -418,6 +418,7 @@
     "bulkConfirmGenerateDrafts": "Generate drafts for {{count}} conversations?",
     "bulkMarkSupport": "Treat as support",
     "bulkConfirmMarkSupport": "Treat {{count}} conversations as support? They'll move to the To-analyse queue.",
+    "moreActions": "More actions",
     "bulkAnalyzeWarning": "{{count}} of them have never been analyzed and will be analyzed to draft a reply. This uses {{count}} analyses from your quota.",
     "bulkToastUpdated": "{{count}} conversations updated",
     "bulkToastSkipped": "{{count}} skipped",
