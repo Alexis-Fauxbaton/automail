@@ -3135,9 +3135,17 @@ function MarkThreadSupportButton({ canonicalThreadId }: { canonicalThreadId: str
       <input type="hidden" name="_action" value="bulkThreadAction" />
       <input type="hidden" name="bulkAction" value="mark_support" />
       <input type="hidden" name="threadIds" value={JSON.stringify([canonicalThreadId])} />
-      <s-button type="submit" variant="secondary" {...(isSubmitting ? { loading: true } : {})}>
-        {t("inbox.bulkMarkSupport")}
-      </s-button>
+      <button
+        type="submit"
+        disabled={isSubmitting}
+        style={{
+          background: "none", border: "none", padding: "2px 4px",
+          fontSize: "0.8125rem", color: "var(--ui-slate-500)", cursor: "pointer",
+          textDecoration: "underline", textUnderlineOffset: "2px", alignSelf: "center",
+        }}
+      >
+        {isSubmitting ? "…" : t("inbox.bulkMarkSupport")}
+      </button>
     </fetcher.Form>
   );
 }
@@ -3157,9 +3165,17 @@ function MarkThreadNonSupportButton({ canonicalThreadId }: { canonicalThreadId: 
       <input type="hidden" name="_action" value="bulkThreadAction" />
       <input type="hidden" name="bulkAction" value="mark_non_support" />
       <input type="hidden" name="threadIds" value={JSON.stringify([canonicalThreadId])} />
-      <s-button type="submit" variant="tertiary" {...(isSubmitting ? { loading: true } : {})}>
-        {t("inbox.bulkMarkNonSupport")}
-      </s-button>
+      <button
+        type="submit"
+        disabled={isSubmitting}
+        style={{
+          background: "none", border: "none", padding: "2px 4px",
+          fontSize: "0.8125rem", color: "var(--ui-slate-500)", cursor: "pointer",
+          textDecoration: "underline", textUnderlineOffset: "2px", alignSelf: "center",
+        }}
+      >
+        {isSubmitting ? "…" : t("inbox.bulkMarkNonSupport")}
+      </button>
     </fetcher.Form>
   );
 }
