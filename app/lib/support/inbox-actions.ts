@@ -1,4 +1,5 @@
 import prisma from "../../db.server";
+import { Prisma } from "@prisma/client";
 import { canSend } from "../mail/scopes";
 import { createMailClient } from "../mail/client-factory";
 import { assembleRfc822 } from "../mail/assemble-rfc822";
@@ -1235,4 +1236,170 @@ async function runFakeSendForInternalShop(params: {
 
   console.log(`[send] FAKE SEND for internal shop ${shop} draftId=${draftId} (SEND_DISABLED_FOR_INTERNAL=true)`);
   return { sent: true, sentAt: result.sentAt!, rfcMessageId: result.sentRfcMessageId! };
+}
+
+// ---------------------------------------------------------------------------
+// Bulk thread actions
+// ---------------------------------------------------------------------------
+
+export type BulkThreadActionKind =
+  | "resolved"
+  | "reopen"
+  | "waiting_customer"
+  | "waiting_merchant"
+  | "non_support";
+
+const BULK_ACTION_KINDS = new Set<BulkThreadActionKind>([
+  "resolved",
+  "reopen",
+  "waiting_customer",
+  "waiting_merchant",
+  "non_support",
+]);
+
+const BULK_MAX_THREADS = 500;
+
+/**
+ * Apply a grouped operational/support-nature change to many threads at once.
+ *
+ * Multi-tenant: the thread set is read with `shop` in the WHERE so any id the
+ * caller doesn't own is silently dropped (anti-tamper).
+ *
+ * Side-effect parity with the single path (handleMoveThread, "site #2"):
+ * moving to a waiting state flips supportNature -> confirmed_support and, for
+ * never-analyzed threads, enqueues an `analyze_thread` job (first analysis,
+ * 1 billing unit). Reopen does NOT refresh tracking inline (deferred to the
+ * refresh-stale-analyses tick) to keep the bulk request bounded.
+ */
+export async function handleBulkThreadAction(params: {
+  shop: string;
+  threadIds: string[];
+  action: string;
+}): Promise<{ updated: number; skipped: number }> {
+  const { shop } = params;
+  const action = params.action as BulkThreadActionKind;
+  if (!BULK_ACTION_KINDS.has(action)) return { updated: 0, skipped: 0 };
+
+  const ids = Array.from(new Set(params.threadIds))
+    .filter((id) => typeof id === "string" && id.length > 0)
+    .slice(0, BULK_MAX_THREADS);
+  if (ids.length === 0) return { updated: 0, skipped: 0 };
+
+  const threads = await prisma.thread.findMany({
+    where: { id: { in: ids }, shop },
+    select: {
+      id: true,
+      operationalState: true,
+      previousOperationalState: true,
+      supportNature: true,
+      analyzedAt: true,
+      mailConnectionId: true,
+    },
+  });
+  if (threads.length === 0) return { updated: 0, skipped: 0 };
+
+  if (action === "resolved") {
+    const changed = threads.filter((t) => t.operationalState !== "resolved");
+    if (changed.length > 0) {
+      await prisma.$executeRaw`
+        UPDATE "Thread"
+        SET "previousOperationalState" = "operationalState",
+            "operationalState" = 'resolved',
+            "operationalStateUpdatedAt" = now()
+        WHERE "shop" = ${shop} AND "id" IN (${Prisma.join(changed.map((t) => t.id))})
+      `;
+      await prisma.threadStateHistory.createMany({
+        data: changed.map((t) => ({
+          shop,
+          threadId: t.id,
+          fromState: t.operationalState,
+          toState: "resolved",
+          reason: "bulk_action",
+        })),
+      });
+    }
+    return { updated: changed.length, skipped: threads.length - changed.length };
+  }
+
+  if (action === "reopen") {
+    const changed = threads.filter((t) => t.operationalState === "resolved");
+    if (changed.length > 0) {
+      await prisma.$executeRaw`
+        UPDATE "Thread"
+        SET "operationalState" = COALESCE("previousOperationalState", 'waiting_merchant'),
+            "previousOperationalState" = NULL,
+            "operationalStateUpdatedAt" = now()
+        WHERE "shop" = ${shop} AND "id" IN (${Prisma.join(changed.map((t) => t.id))})
+      `;
+      await prisma.threadStateHistory.createMany({
+        data: changed.map((t) => ({
+          shop,
+          threadId: t.id,
+          fromState: "resolved",
+          toState: t.previousOperationalState ?? "waiting_merchant",
+          reason: "bulk_action",
+        })),
+      });
+    }
+    return { updated: changed.length, skipped: threads.length - changed.length };
+  }
+
+  if (action === "non_support") {
+    const changed = threads.filter((t) => t.supportNature !== "non_support");
+    if (changed.length > 0) {
+      await prisma.thread.updateMany({
+        where: { shop, id: { in: changed.map((t) => t.id) } },
+        data: { supportNature: "non_support", supportNatureUpdatedAt: new Date() },
+      });
+    }
+    return { updated: changed.length, skipped: threads.length - changed.length };
+  }
+
+  // waiting_customer | waiting_merchant
+  const target = action;
+  const stateChanged = threads.filter((t) => t.operationalState !== target);
+  const supportFlip = threads.filter((t) => t.supportNature !== "confirmed_support");
+  const touched = threads.filter(
+    (t) => t.operationalState !== target || t.supportNature !== "confirmed_support",
+  );
+
+  if (stateChanged.length > 0) {
+    await prisma.thread.updateMany({
+      where: { shop, id: { in: stateChanged.map((t) => t.id) } },
+      data: { operationalState: target, operationalStateUpdatedAt: new Date() },
+    });
+    await prisma.threadStateHistory.createMany({
+      data: stateChanged.map((t) => ({
+        shop,
+        threadId: t.id,
+        fromState: t.operationalState,
+        toState: target,
+        reason: "bulk_action",
+      })),
+    });
+  }
+
+  if (supportFlip.length > 0) {
+    await prisma.thread.updateMany({
+      where: { shop, id: { in: supportFlip.map((t) => t.id) } },
+      data: { supportNature: "confirmed_support", supportNatureUpdatedAt: new Date() },
+    });
+  }
+
+  // Site #2 condition: flipped to confirmed_support AND never analyzed.
+  const toAnalyze = threads.filter(
+    (t) => t.supportNature !== "confirmed_support" && t.analyzedAt === null,
+  );
+  for (const t of toAnalyze) {
+    await enqueueJob({
+      shop,
+      kind: "analyze_thread",
+      mailConnectionId: t.mailConnectionId,
+      params: { threadId: t.id },
+    }).catch((err) => {
+      console.error(`[bulk] enqueueJob analyze_thread failed for thread=${t.id}:`, err);
+    });
+  }
+
+  return { updated: touched.length, skipped: threads.length - touched.length };
 }
