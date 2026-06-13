@@ -331,7 +331,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const generatingThreadIds = Array.from(
     new Set(
       generatingJobs
-        .map((j) => j.params as { threadId?: string; generateDraft?: boolean } | null)
+        .map((j) => {
+          // params is a String column holding stringified JSON — parse it (the
+          // job queue stores it via JSON.stringify; claimNextJob parses on read).
+          try {
+            return JSON.parse(j.params || "{}") as { threadId?: string; generateDraft?: boolean };
+          } catch {
+            return null;
+          }
+        })
         .filter(
           (p): p is { threadId: string; generateDraft?: boolean } =>
             !!p && typeof p.threadId === "string" && p.generateDraft === true,
