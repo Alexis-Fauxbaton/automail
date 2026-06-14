@@ -118,6 +118,7 @@
     "trackingLocation": "Localisation",
     "noTrackingData": "Pas de données de suivi disponibles.",
     "noTrackingResolved": "Suivi non rafraîchi : cette conversation est résolue. Réouvrez-la pour relancer la mise à jour.",
+    "notShippedTitle": "Pas encore expédié",
     "openTracking": "Voir le suivi →",
     "liveContextTitle": "Contexte récupéré en direct",
     "source": "Source",

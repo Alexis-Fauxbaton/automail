@@ -1,4 +1,5 @@
-import type { FulfillmentTrackingFacts, OrderFacts, SupportAnalysis, Warning } from "./types";
+import type { FulfillmentTrackingFacts, OrderFacts, OrderLineItemFacts, SupportAnalysis, Warning } from "./types";
+import { computeUnfulfilledItems } from "./fulfillment";
 
 const MAX_LINE_ITEMS = 5;
 
@@ -46,6 +47,19 @@ function renderOrderSection(order: OrderFacts): string {
     lines.push(`Customer: ${[name, email].filter(Boolean).join(" ")}`);
   }
 
+  return lines.join("\n");
+}
+
+function renderUnfulfilledSection(items: OrderLineItemFacts[]): string | null {
+  if (items.length === 0) return null;
+  const lines: string[] = ["=== NOT YET SHIPPED ==="];
+  for (const item of items.slice(0, MAX_LINE_ITEMS)) {
+    lines.push(`  • ${item.quantity}× ${item.title}`);
+  }
+  if (items.length > MAX_LINE_ITEMS) {
+    lines.push(`  + ${items.length - MAX_LINE_ITEMS} more`);
+  }
+  lines.push("These items have no tracking yet — do not imply they have shipped.");
   return lines.join("\n");
 }
 
@@ -99,6 +113,9 @@ export function buildRefineContext(analysis: SupportAnalysis): string | null {
   if (analysis.order) {
     sections.push(renderOrderSection(analysis.order));
   }
+
+  const unfulfilledBlock = renderUnfulfilledSection(computeUnfulfilledItems(analysis.order));
+  if (unfulfilledBlock) sections.push(unfulfilledBlock);
 
   for (const t of analysis.trackings) {
     const block = renderTrackingSection(t);

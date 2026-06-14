@@ -14,9 +14,9 @@ import { isOpen as is17trackBreakerOpen } from "./seventeen-track-breaker";
 async function resolveOneFulfillment(
   fulfillment: OrderFacts["fulfillments"][number],
   fulfillmentIndex: number,
+  trackingNumber: string | null,
+  trackingUrl: string | null,
 ): Promise<FulfillmentTrackingFacts> {
-  const trackingNumber = fulfillment.trackingNumbers[0] ?? null;
-  const trackingUrl = fulfillment.trackingUrls[0] ?? null;
   const lineItems = fulfillment.lineItems;
   const attemptAt = new Date().toISOString();
 
@@ -131,9 +131,20 @@ export async function getTrackingFacts(
 ): Promise<FulfillmentTrackingFacts[]> {
   if (!order || order.fulfillments.length === 0) return [];
 
-  return Promise.all(
-    order.fulfillments.map((fulfillment, index) =>
-      resolveOneFulfillment(fulfillment, index),
-    ),
-  );
+  // One entry per (fulfillment, tracking number). A fulfillment can carry
+  // several tracking numbers (split parcels under one shipment) — resolve each
+  // independently instead of dropping all but the first. Fulfillments with no
+  // tracking number still produce a single "none" entry.
+  const tasks: Array<Promise<FulfillmentTrackingFacts>> = [];
+  order.fulfillments.forEach((fulfillment, index) => {
+    const numbers =
+      fulfillment.trackingNumbers.length > 0 ? fulfillment.trackingNumbers : [null];
+    numbers.forEach((trackingNumber, ti) => {
+      const trackingUrl = trackingNumber
+        ? (fulfillment.trackingUrls[ti] ?? fulfillment.trackingUrls[0] ?? null)
+        : null;
+      tasks.push(resolveOneFulfillment(fulfillment, index, trackingNumber, trackingUrl));
+    });
+  });
+  return Promise.all(tasks);
 }
