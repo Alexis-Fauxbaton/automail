@@ -236,6 +236,11 @@ model IncomingEmail {
   extractedIdentifiers String         @default("{}")
   fromAddress          String
   fromName             String         @default("")
+  // Parsed email from the Reply-To header, when present. Replies target this
+  // over fromAddress (matches Gmail/Zoho/Outlook native reply behaviour) — e.g.
+  // a Shopify contact-form email is From mailer@shopify.com but Reply-To the
+  // customer.
+  replyToAddress       String?
   subject              String
   snippet              String         @default("")
   bodyText             String         @default("")

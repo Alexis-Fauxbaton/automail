@@ -1010,8 +1010,11 @@ export async function handleSendDraft(params: {
     shop,
     mailbox: { email: conn.email, fromName: "" },
     customer: {
-      email: draft.email.fromAddress,
-      name: draft.email.fromName ?? "",
+      // Reply-To wins over From — matches native mail-client reply behaviour
+      // (e.g. a Shopify contact-form email is From mailer@shopify.com but
+      // Reply-To the customer). Falls back to From when no Reply-To was captured.
+      email: draft.email.replyToAddress || draft.email.fromAddress,
+      name: draft.email.replyToAddress ? "" : (draft.email.fromName ?? ""),
     },
     originalIncoming: {
       rfcMessageId: draft.email.rfcMessageId,
@@ -1170,7 +1173,7 @@ async function runFakeSendForInternalShop(params: {
   const payload = assembleRfc822({
     shop,
     mailbox: { email: conn.email, fromName: "" },
-    customer: { email: draft.email.fromAddress, name: draft.email.fromName ?? "" },
+    customer: { email: draft.email.replyToAddress || draft.email.fromAddress, name: draft.email.replyToAddress ? "" : (draft.email.fromName ?? "") },
     originalIncoming: {
       rfcMessageId: draft.email.rfcMessageId,
       externalMessageId: draft.email.externalMessageId,
