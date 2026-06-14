@@ -11,11 +11,22 @@ import { isOpen as is17trackBreakerOpen } from "./seventeen-track-breaker";
  *   2. Shopify tracking URL / carrier data.
  *   3. Pattern-based carrier guess (inferred).
  */
+/** 17track `param` = "<Alpha-2 country>-<postal code>", required by some
+ *  carriers (Cainiao / postal) to register a number. Null when the order has
+ *  no usable destination. */
+function build17trackParam(order: OrderFacts): string | null {
+  const country = order.destinationCountry?.trim();
+  const zip = order.destinationZip?.trim();
+  if (!country || !zip) return null;
+  return `${country}-${zip}`;
+}
+
 async function resolveOneFulfillment(
   fulfillment: OrderFacts["fulfillments"][number],
   fulfillmentIndex: number,
   trackingNumber: string | null,
   trackingUrl: string | null,
+  param: string | null,
 ): Promise<FulfillmentTrackingFacts> {
   const lineItems = fulfillment.lineItems;
   const attemptAt = new Date().toISOString();
@@ -34,7 +45,7 @@ async function resolveOneFulfillment(
 
   // --- 1. Try 17track first ---
   try {
-    const result = await fetchTrackingFrom17track(trackingNumber, fulfillment.carrier ?? null);
+    const result = await fetchTrackingFrom17track(trackingNumber, fulfillment.carrier ?? null, param);
     if (result && result.state === "ok") {
       return {
         source: "seventeen_track",
@@ -135,6 +146,7 @@ export async function getTrackingFacts(
   // several tracking numbers (split parcels under one shipment) — resolve each
   // independently instead of dropping all but the first. Fulfillments with no
   // tracking number still produce a single "none" entry.
+  const param = build17trackParam(order);
   const tasks: Array<Promise<FulfillmentTrackingFacts>> = [];
   order.fulfillments.forEach((fulfillment, index) => {
     const numbers =
@@ -143,7 +155,7 @@ export async function getTrackingFacts(
       const trackingUrl = trackingNumber
         ? (fulfillment.trackingUrls[ti] ?? fulfillment.trackingUrls[0] ?? null)
         : null;
-      tasks.push(resolveOneFulfillment(fulfillment, index, trackingNumber, trackingUrl));
+      tasks.push(resolveOneFulfillment(fulfillment, index, trackingNumber, trackingUrl, param));
     });
   });
   return Promise.all(tasks);

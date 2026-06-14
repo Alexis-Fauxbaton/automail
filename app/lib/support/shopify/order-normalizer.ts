@@ -58,6 +58,8 @@ export function normalizeOrder(raw: RawOrderNode): OrderFacts {
     displayFulfillmentStatus: raw.displayFulfillmentStatus,
     customerName: customerName || null,
     customerEmail: customer?.email ?? null,
+    destinationCountry: raw.shippingAddress?.countryCodeV2 ?? null,
+    destinationZip: raw.shippingAddress?.zip ?? null,
     lineItems: (raw.lineItems?.edges ?? []).map((e) => ({
       title: e.node.title,
       quantity: e.node.quantity,
