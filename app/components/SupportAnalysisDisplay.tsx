@@ -253,14 +253,14 @@ export function TrackingsBlock({
           style={{
             display: "flex",
             flexDirection: "column",
-            gap: "4px",
-            paddingTop: trackings.length > 0 ? "10px" : 0,
+            gap: "8px",
+            paddingTop: trackings.length > 0 ? "12px" : 0,
             borderTop: trackings.length > 0 ? "1px solid #e1e3e5" : "none",
           }}
         >
-          <span style={{ fontSize: "12px", fontWeight: 600, color: "#8a6d00" }}>
-            ⏳ {t("analysis.notShippedTitle")}
-          </span>
+          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
+            <s-badge tone="warning">{t("analysis.notShippedTitle")}</s-badge>
+          </div>
           <span style={{ fontSize: "13px" }}>
             {unfulfilledItems.map((li) => `${li.quantity}× ${li.title}`).join(", ")}
           </span>
