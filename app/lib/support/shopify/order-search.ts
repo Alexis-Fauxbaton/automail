@@ -26,6 +26,10 @@ const ORDER_FIELDS = /* GraphQL */ `
       lastName
       email
     }
+    shippingAddress {
+      countryCodeV2
+      zip
+    }
     lineItems(first: 20) {
       edges {
         node {
@@ -136,6 +140,12 @@ export interface RawOrderNode {
     firstName: string | null;
     lastName: string | null;
     email: string | null;
+  } | null;
+  // Minimal address: only country + postal code, used solely to satisfy
+  // 17track's `param` requirement for carriers that demand a destination.
+  shippingAddress?: {
+    countryCodeV2: string | null;
+    zip: string | null;
   } | null;
   lineItems: { edges: Array<{ node: { title: string; quantity: number } }> };
   fulfillments: Array<{

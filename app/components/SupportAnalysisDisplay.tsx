@@ -1,7 +1,8 @@
 import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { SupportAnalysisExtended } from "../lib/support/orchestrator";
-import type { FulfillmentTrackingFacts, TrackingFacts } from "../lib/support/types";
+import type { FulfillmentTrackingFacts, OrderLineItemFacts, TrackingFacts } from "../lib/support/types";
+import { computeUnfulfilledItems } from "../lib/support/fulfillment";
 
 type TFn = ReturnType<typeof useTranslation>["t"];
 
@@ -220,13 +221,16 @@ function SingleFulfillmentTracking({ tracking, label }: { tracking: FulfillmentT
 
 export function TrackingsBlock({
   trackings,
+  unfulfilledItems = [],
   threadOperationalState,
 }: {
   trackings: FulfillmentTrackingFacts[];
+  unfulfilledItems?: OrderLineItemFacts[];
   threadOperationalState?: string | null;
 }) {
   const { t } = useTranslation();
-  if (trackings.length === 0) {
+  const hasUnfulfilled = unfulfilledItems.length > 0;
+  if (trackings.length === 0 && !hasUnfulfilled) {
     const skipped =
       threadOperationalState === "resolved" || threadOperationalState === "no_reply_needed";
     return (
@@ -244,6 +248,24 @@ export function TrackingsBlock({
           <SingleFulfillmentTracking tracking={tracking} label={multi ? t("analysis.shipment", { n: i + 1 }) : undefined} />
         </div>
       ))}
+      {hasUnfulfilled && (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: "8px",
+            paddingTop: trackings.length > 0 ? "12px" : 0,
+            borderTop: trackings.length > 0 ? "1px solid #e1e3e5" : "none",
+          }}
+        >
+          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
+            <s-badge tone="warning">{t("analysis.notShippedTitle")}</s-badge>
+          </div>
+          <span style={{ fontSize: "13px" }}>
+            {unfulfilledItems.map((li) => `${li.quantity}× ${li.title}`).join(", ")}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
@@ -320,6 +342,7 @@ export function AnalysisDisplay({
   const warnings = analysis.warnings ?? [];
 
   const trackings = resolveTrackings(analysis);
+  const unfulfilledItems = computeUnfulfilledItems(analysis.order ?? null);
 
   const directionLabel =
     conversation.lastMessageDirection === "incoming" ? t("analysis.directionIncoming")
@@ -409,7 +432,7 @@ export function AnalysisDisplay({
           : undefined
         }
       >
-        <TrackingsBlock trackings={trackings} threadOperationalState={threadOperationalState} />
+        <TrackingsBlock trackings={trackings} unfulfilledItems={unfulfilledItems} threadOperationalState={threadOperationalState} />
       </Card>
 
       <WarningsBlock warnings={warnings} />

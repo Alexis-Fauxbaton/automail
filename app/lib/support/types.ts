@@ -76,6 +76,11 @@ export interface OrderFacts {
   displayFulfillmentStatus?: string | null;
   customerName?: string | null;
   customerEmail?: string | null;
+  /** Destination country (Alpha-2) + postal code. Minimal address data, used
+   *  only to satisfy 17track's `param` requirement for carriers that need a
+   *  destination to register a tracking number. */
+  destinationCountry?: string | null;
+  destinationZip?: string | null;
   lineItems: OrderLineItemFacts[];
   fulfillments: OrderFulfillmentFacts[];
 }

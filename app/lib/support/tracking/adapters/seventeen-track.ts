@@ -262,6 +262,9 @@ export function guessCarrierCode(trackingNumber: string, carrierNameHint?: strin
 export async function fetchTrackingFrom17track(
   trackingNumber: string,
   _carrierNameHint?: string | null,
+  /** "<Alpha-2 country>-<postal code>" (e.g. "FR-75001"). Required by some
+   *  carriers (Cainiao / postal) to register a number; ignored by the rest. */
+  param?: string | null,
 ): Promise<SevenTrackResult | null> {
   const apiKey = getApiKey();
   if (!apiKey) return null;
@@ -270,7 +273,7 @@ export async function fetchTrackingFrom17track(
     return null;
   }
 
-  const payload = [{ number: trackingNumber }];
+  const payload = [{ number: trackingNumber, ...(param ? { param } : {}) }];
 
   seventeenTrackQueued.inc();
   const release = await sevenTrackSem.acquire();

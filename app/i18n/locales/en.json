@@ -118,6 +118,7 @@
     "trackingLocation": "Location",
     "noTrackingData": "No tracking data available yet.",
     "noTrackingResolved": "Tracking is not refreshed for resolved conversations. Reopen the conversation to refresh.",
+    "notShippedTitle": "Not yet shipped",
     "openTracking": "Open tracking page →",
     "liveContextTitle": "Live context retrieved",
     "source": "Source",
