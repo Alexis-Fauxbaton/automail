@@ -78,6 +78,7 @@ export async function exchangeZohoCode(code: string) {
     email: accountInfo.email,
     accountId: accountInfo.accountId,
     aliases: accountInfo.aliases,
+    displayName: accountInfo.displayName,
     scope: data.scope ?? null,
   };
 }
@@ -86,6 +87,7 @@ async function fetchZohoAccount(accessToken: string): Promise<{
   accountId: string;
   email: string;
   aliases: string[];
+  displayName: string | null;
 }> {
   const domain = getZohoApiDomain();
   const res = await fetch(`https://${domain}/api/accounts`, {
@@ -129,7 +131,9 @@ async function fetchZohoAccount(accessToken: string): Promise<{
         .filter((s): s is string => s.length > 0)
     : [];
 
-  return { accountId: String(account.accountId), email, aliases };
+  const displayName =
+    typeof account.displayName === "string" ? account.displayName.trim() || null : null;
+  return { accountId: String(account.accountId), email, aliases, displayName };
 }
 
 export async function saveZohoConnection(
@@ -141,6 +145,7 @@ export async function saveZohoConnection(
     email: string;
     accountId: string;
     aliases: string[];
+    displayName?: string | null;
     grantedScopes?: string | null;
   },
 ): Promise<{ id: string }> {
@@ -168,6 +173,7 @@ export async function saveZohoConnection(
       tokenExpiry: tokens.expiry,
       outgoingAliases,
       zohoAccountId: tokens.accountId,
+      displayName: tokens.displayName ?? null,
       grantedScopes: tokens.grantedScopes ?? null,
     },
     // Reconnect: wipe sync-state fields so the new connection starts clean.
@@ -182,6 +188,8 @@ export async function saveZohoConnection(
       tokenExpiry: tokens.expiry,
       outgoingAliases,
       zohoAccountId: tokens.accountId,
+      // Only overwrite when present, so a transient null doesn't wipe a name.
+      ...(tokens.displayName ? { displayName: tokens.displayName } : {}),
       grantedScopes: tokens.grantedScopes ?? null,
       lastSyncError: null,
       lastSyncAt: null,

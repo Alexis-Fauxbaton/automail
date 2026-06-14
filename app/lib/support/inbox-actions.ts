@@ -17,7 +17,6 @@ import { buildRefineContext } from "./refine-context";
 import { runDiagnosis } from "../gmail/diagnose";
 import { enqueueJob } from "../mail/job-queue";
 import { recordStateTransition } from "./thread-state-history";
-import { getSettings } from "./settings";
 import { isAnalysisStale, ANALYSIS_FRESHNESS_MS, refreshStaleAnalysesForShop } from "./refresh-stale-analyses";
 import type { AdminGraphqlClient } from "./shopify/order-search";
 import type { ClassificationEdit } from "./manual-classification";
@@ -944,16 +943,6 @@ export type SendDraftResult =
   | { error: string }
   | { needsReauth: true; reauthUrl: string };
 
-/**
- * Display name for the outgoing From header — the merchant's brand, falling
- * back to the signature name, so a reply reads as `AMBIENT HOME <info@…>`
- * instead of a bare `info@…` (which makes the customer think "info" replied).
- * Empty string → assembler emits just the address.
- */
-async function resolveSenderName(shop: string): Promise<string> {
-  const settings = await getSettings(shop);
-  return settings.brandName.trim() || settings.signatureName.trim() || "";
-}
 
 /**
  * Send a draft via the merchant's connected mailbox.
@@ -1018,10 +1007,9 @@ export async function handleSendDraft(params: {
   }
 
   // 4. Assemble RFC822 payload
-  const fromName = await resolveSenderName(shop);
   const payload = assembleRfc822({
     shop,
-    mailbox: { email: conn.email, fromName },
+    mailbox: { email: conn.email, fromName: conn.displayName ?? "" },
     customer: {
       // Reply-To wins over From — matches native mail-client reply behaviour
       // (e.g. a Shopify contact-form email is From mailer@shopify.com but
@@ -1183,10 +1171,9 @@ async function runFakeSendForInternalShop(params: {
   const thread = draft.email.thread!;
 
   // Assemble payload — same as real path
-  const fromName = await resolveSenderName(shop);
   const payload = assembleRfc822({
     shop,
-    mailbox: { email: conn.email, fromName },
+    mailbox: { email: conn.email, fromName: conn.displayName ?? "" },
     customer: { email: draft.email.replyToAddress || draft.email.fromAddress, name: draft.email.replyToAddress ? "" : (draft.email.fromName ?? "") },
     originalIncoming: {
       rfcMessageId: draft.email.rfcMessageId,

@@ -56,6 +56,10 @@ model MailConnection {
   shop                     String
   provider                 String    @default("gmail") // "gmail" | "zoho" | "outlook"
   email                    String    @default("") // connected email address
+  // Display name configured on the mail account (e.g. "AMBIENT HOME"), captured
+  // at OAuth. Used verbatim as the outgoing From display name so replies read
+  // as `AMBIENT HOME <info@…>`. Null → send with the bare address.
+  displayName              String?
   // Lowercased addresses from which the merchant can send via this account
   // (e.g. support@, contact@ aliases configured in Zoho/Gmail/Outlook).
   // Populated at OAuth completion by querying the provider, refreshed at
