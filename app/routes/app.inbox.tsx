@@ -265,6 +265,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         canonicalThreadId: t.id,
         mailConnectionId: "",
         fromAddress: "",
+        replyToAddress: null,
         fromName: "",
         subject: "",
         snippet: "",
@@ -682,6 +683,8 @@ interface SerializedEmail {
   canonicalThreadId: string | null;
   mailConnectionId: string;
   fromAddress: string;
+  /** Parsed Reply-To, when present. Replies target this over fromAddress. */
+  replyToAddress: string | null;
   fromName: string;
   subject: string;
   snippet: string;
@@ -722,6 +725,7 @@ function serializeEmail(row: {
   canonicalThreadId: string | null;
   mailConnectionId: string;
   fromAddress: string;
+  replyToAddress: string | null;
   fromName: string;
   subject: string;
   snippet: string;
@@ -786,6 +790,7 @@ function serializeEmail(row: {
     canonicalThreadId: row.canonicalThreadId,
     mailConnectionId: row.mailConnectionId,
     fromAddress: row.fromAddress,
+    replyToAddress: row.replyToAddress ?? null,
     fromName: decodeHtmlEntities(row.fromName),
     subject: decodeHtmlEntities(row.subject),
     snippet: decodeHtmlEntities(row.snippet).replace(/<[^>]*>/g, " ").replace(/[<>]/g, " ").replace(/\s{2,}/g, " ").trim(),
@@ -2853,7 +2858,7 @@ function ThreadDetailPanel({
               <SendButton
                 mailConnectionId={connection.id}
                 draftId={latest.replyDraftId}
-                customerEmail={latest.fromAddress}
+                customerEmail={latest.replyToAddress ?? latest.fromAddress}
                 canSend={connection.canSend}
                 immediateSend={loaderData.immediateSend}
                 reauthUrl={`/app/mail-auth/reauth?mailConnectionId=${connection.id}&returnTo=/app/inbox?thread=${latest.canonicalThreadId ?? ""}`}
@@ -2915,7 +2920,7 @@ function ThreadDetailPanel({
           <div>
             <div style={sectionLabel}>{t("inbox.sectionSuggestedDraft")}</div>
             {draftEmail && !noReplyNeeded ? (
-              <DraftBlock email={draftEmail} threadSenderEmail={latest.fromAddress} />
+              <DraftBlock email={draftEmail} threadSenderEmail={latest.replyToAddress ?? latest.fromAddress} />
             ) : noReplyNeeded ? (
               <div style={{ fontSize: "0.8125rem", color: "var(--ui-slate-500)", fontStyle: "italic" }}>
                 {t("inbox.noReplyNeededMsg")}
