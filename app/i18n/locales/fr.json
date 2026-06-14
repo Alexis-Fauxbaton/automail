@@ -409,6 +409,7 @@
     "bulkWaitingCustomer": "En attente client",
     "bulkWaitingMerchant": "En attente de moi",
     "bulkMarkNonSupport": "Marquer comme non-support",
+    "markNonSupportTitle": "Classer cette conversation comme non-support : elle quitte « À analyser » pour l'onglet « Autre ». Un nouveau message client classé support la ramènera automatiquement.",
     "bulkConfirm": "Confirmer",
     "bulkCancel": "Annuler",
     "bulkConfirmResolved": "Marquer {{count}} conversations comme résolues ?",

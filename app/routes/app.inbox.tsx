@@ -2111,9 +2111,11 @@ const ThreadCard = memo(function ThreadCard({
           </reanalyzeFetcher.Form>
         )}
         {bucket === "to_analyze" && latest.canonicalThreadId && (
-          <DismissThreadFromAnalyzeButton canonicalThreadId={latest.canonicalThreadId} />
+          <MarkThreadNonSupportButton canonicalThreadId={latest.canonicalThreadId} />
         )}
-        {latest.canonicalThreadId && (
+        {/* "⋯" reclassify menu is redundant in "À analyser" — the visible
+            "Marquer comme non-support" button above already covers it. */}
+        {latest.canonicalThreadId && bucket !== "to_analyze" && (
           <ThreadReclassifyMenu
             canonicalThreadId={latest.canonicalThreadId}
             isNonSupport={bucket === "other"}
@@ -2877,7 +2879,12 @@ function ThreadDetailPanel({
               />
             );
           })()}
-          {latest.canonicalThreadId && (
+          {bucket === "to_analyze" && latest.canonicalThreadId && (
+            <MarkThreadNonSupportButton canonicalThreadId={latest.canonicalThreadId} />
+          )}
+          {/* "⋯" reclassify menu is redundant in "À analyser" — the visible
+              "Marquer comme non-support" button above already covers it. */}
+          {latest.canonicalThreadId && bucket !== "to_analyze" && (
             <ThreadReclassifyMenu
               canonicalThreadId={latest.canonicalThreadId}
               isNonSupport={bucket === "other"}
@@ -3259,37 +3266,43 @@ function ThreadReclassifyMenu({
 }
 
 /**
- * Per-thread "Retirer de la file" button shown on cards in the À analyser tab.
- * Idempotent server-side; submits intent=dismissThreadFromAnalyze with the
- * canonical thread id.
+ * Per-thread "Marquer comme non-support" button shown on cards + detail in the
+ * À analyser tab. Reuses the bulk handler (mark_non_support) with a single
+ * thread id so per-thread and bulk behave identically — this flips the thread
+ * to non_support (→ "Autre" bucket) instead of just hiding it, so the stored
+ * classification stays truthful (no lingering confirmed_support stance). The
+ * bulk "Tout déplacer vers Autre" still uses the lighter dismiss path.
  */
-function DismissThreadFromAnalyzeButton({ canonicalThreadId }: { canonicalThreadId: string }) {
+function MarkThreadNonSupportButton({ canonicalThreadId }: { canonicalThreadId: string }) {
   const { t } = useTranslation();
   const fetcher = useFetcher();
   const isSubmitting = fetcher.state === "submitting" || fetcher.state === "loading";
   return (
-    <fetcher.Form method="post">
-      <input type="hidden" name="_action" value="dismissThreadFromAnalyze" />
-      <input type="hidden" name="canonicalThreadId" value={canonicalThreadId} />
-      <button
-        type="submit"
-        disabled={isSubmitting}
-        title={t("inbox.dismissFromAnalyzeQueueTitle")}
-        style={{
-          background: "transparent",
-          color: "#475569",
-          border: "1px solid #cbd5e1",
-          borderRadius: 6,
-          padding: "6px 10px",
-          fontSize: 12,
-          fontWeight: 500,
-          cursor: isSubmitting ? "wait" : "pointer",
-          whiteSpace: "nowrap",
-        }}
-      >
-        {isSubmitting ? "…" : t("inbox.dismissFromAnalyzeQueue")}
-      </button>
-    </fetcher.Form>
+    <button
+      type="button"
+      disabled={isSubmitting}
+      title={t("inbox.markNonSupportTitle")}
+      onClick={(e) => {
+        e.stopPropagation();
+        fetcher.submit(
+          { _action: "bulkThreadAction", bulkAction: "mark_non_support", threadIds: JSON.stringify([canonicalThreadId]) },
+          { method: "post" },
+        );
+      }}
+      style={{
+        background: "transparent",
+        color: "#475569",
+        border: "1px solid #cbd5e1",
+        borderRadius: 6,
+        padding: "6px 10px",
+        fontSize: 12,
+        fontWeight: 500,
+        cursor: isSubmitting ? "wait" : "pointer",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {isSubmitting ? "…" : t("inbox.bulkMarkNonSupport")}
+    </button>
   );
 }
 
