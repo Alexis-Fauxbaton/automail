@@ -613,12 +613,31 @@ async function fetchZohoMessageHeaders(
 ): Promise<Record<string, string>> {
   const domain = getApiDomain();
   const url = `https://${domain}/api/accounts/${accountId}/folders/${folderId}/messages/${messageId}/header`;
-  const r = await fetch(url, {
-    headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!r.ok) {
-    throw new Error(`Zoho /header ${r.status}`);
+  // One retry on transient failures (429 / 5xx / network). Bulk operations
+  // (resync, backfill) fan out many /header calls at once and Zoho throttles
+  // them; without a retry a throttled call would silently drop the Reply-To,
+  // sending contact-form replies to mailer@shopify.com instead of the customer.
+  let r: Response | null = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      r = await fetch(url, {
+        headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch (err) {
+      if (attempt === 1) throw err;
+      await new Promise((res) => setTimeout(res, 400));
+      continue;
+    }
+    if (r.ok) break;
+    const transient = r.status === 429 || r.status >= 500;
+    if (!transient || attempt === 1) {
+      throw new Error(`Zoho /header ${r.status}`);
+    }
+    await new Promise((res) => setTimeout(res, 400));
+  }
+  if (!r || !r.ok) {
+    throw new Error(`Zoho /header failed after retry`);
   }
   const json = (await r.json()) as {
     data?: string | { headerContent?: string; content?: string } | Record<string, unknown>;

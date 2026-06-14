@@ -943,6 +943,7 @@ export type SendDraftResult =
   | { error: string }
   | { needsReauth: true; reauthUrl: string };
 
+
 /**
  * Send a draft via the merchant's connected mailbox.
  *
@@ -1008,10 +1009,13 @@ export async function handleSendDraft(params: {
   // 4. Assemble RFC822 payload
   const payload = assembleRfc822({
     shop,
-    mailbox: { email: conn.email, fromName: "" },
+    mailbox: { email: conn.email, fromName: conn.displayName ?? "" },
     customer: {
-      email: draft.email.fromAddress,
-      name: draft.email.fromName ?? "",
+      // Reply-To wins over From — matches native mail-client reply behaviour
+      // (e.g. a Shopify contact-form email is From mailer@shopify.com but
+      // Reply-To the customer). Falls back to From when no Reply-To was captured.
+      email: draft.email.replyToAddress || draft.email.fromAddress,
+      name: draft.email.replyToAddress ? "" : (draft.email.fromName ?? ""),
     },
     originalIncoming: {
       rfcMessageId: draft.email.rfcMessageId,
@@ -1169,8 +1173,8 @@ async function runFakeSendForInternalShop(params: {
   // Assemble payload — same as real path
   const payload = assembleRfc822({
     shop,
-    mailbox: { email: conn.email, fromName: "" },
-    customer: { email: draft.email.fromAddress, name: draft.email.fromName ?? "" },
+    mailbox: { email: conn.email, fromName: conn.displayName ?? "" },
+    customer: { email: draft.email.replyToAddress || draft.email.fromAddress, name: draft.email.replyToAddress ? "" : (draft.email.fromName ?? "") },
     originalIncoming: {
       rfcMessageId: draft.email.rfcMessageId,
       externalMessageId: draft.email.externalMessageId,

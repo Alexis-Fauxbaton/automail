@@ -15,6 +15,7 @@
 import prisma from "../../db.server";
 import type { MailClient } from "./types";
 import { getMailClient } from "./types";
+import { extractEmailAddress } from "./parse-address";
 import type { AdminGraphqlClient } from "../support/shopify/order-search";
 import {
   resolveCanonicalThread,
@@ -355,6 +356,7 @@ async function ingestHistoricalMessage(
   const rfcMessageId = (msg.headers["message-id"] ?? "").replace(/^<|>$/g, "").trim();
   const inReplyTo = (msg.headers["in-reply-to"] ?? "").replace(/^<|>$/g, "").trim();
   const rfcReferences = (msg.headers["references"] ?? "").trim();
+  const replyToAddress = extractEmailAddress(msg.headers["reply-to"]);
 
   let canonicalThreadId: string;
   try {
@@ -401,6 +403,7 @@ async function ingestHistoricalMessage(
       rfcReferences,
       fromAddress: msg.from,
       fromName: msg.fromName,
+      replyToAddress,
       subject: msg.subject,
       snippet: msg.snippet,
       bodyText: msg.bodyText,

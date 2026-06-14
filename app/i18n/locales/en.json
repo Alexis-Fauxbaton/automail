@@ -410,6 +410,7 @@
     "bulkWaitingCustomer": "Waiting on customer",
     "bulkWaitingMerchant": "Waiting on me",
     "bulkMarkNonSupport": "Mark as not support",
+    "markNonSupportTitle": "Classify this conversation as not support: it leaves \"To analyse\" for the \"Other\" tab. A new customer message classified as support brings it back automatically.",
     "bulkConfirm": "Confirm",
     "bulkCancel": "Cancel",
     "bulkConfirmResolved": "Mark {{count}} conversations as resolved?",

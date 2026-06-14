@@ -58,6 +58,7 @@ export async function exchangeCodeForTokens(code: string) {
     expiry: tokens.expiry_date ? new Date(tokens.expiry_date) : new Date(Date.now() + 3600_000),
     email,
     aliases,
+    displayName: (typeof data.name === "string" ? data.name.trim() : "") || null,
     scope: tokens.scope ?? null,
   };
 }
@@ -96,6 +97,7 @@ export async function saveConnection(
     expiry: Date;
     email: string;
     aliases?: string[];
+    displayName?: string | null;
     grantedScopes?: string | null;
   },
 ): Promise<{ id: string }> {
@@ -110,6 +112,7 @@ export async function saveConnection(
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
       outgoingAliases,
+      displayName: tokens.displayName ?? null,
       grantedScopes: tokens.grantedScopes ?? null,
     },
     // Reconnect: wipe sync-state fields so the new connection starts clean.
@@ -123,6 +126,7 @@ export async function saveConnection(
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
       outgoingAliases,
+      ...(tokens.displayName ? { displayName: tokens.displayName } : {}),
       grantedScopes: tokens.grantedScopes ?? null,
       lastSyncError: null,
       lastSyncAt: null,

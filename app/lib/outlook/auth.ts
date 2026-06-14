@@ -6,7 +6,7 @@ import { signOAuthState } from "../mail/oauth-state";
 
 const TOKEN_ENDPOINT = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
 const AUTH_ENDPOINT = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
-const GRAPH_ME = "https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName";
+const GRAPH_ME = "https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName,displayName";
 const GRAPH_ME_PROXY = "https://graph.microsoft.com/v1.0/me?$select=mail,proxyAddresses";
 // User.Read is required to read `proxyAddresses` from Graph /me for the
 // outgoing-aliases allow-list. Without it, the field is silently omitted
@@ -89,7 +89,7 @@ export async function exchangeCodeForTokens(code: string) {
   if (!meRes.ok) {
     console.warn("[outlook/auth] failed to fetch user email from Graph /me, using 'unknown'");
   }
-  const meData = meRes.ok ? await meRes.json() as { mail?: string; userPrincipalName?: string; otherMails?: string[] } : {};
+  const meData = meRes.ok ? await meRes.json() as { mail?: string; userPrincipalName?: string; otherMails?: string[]; displayName?: string } : {};
   // Some Microsoft accounts return `mail: null` (no Exchange mailbox configured
   // yet) and a non-email userPrincipalName (e.g. live.com#alias@…). Fall back
   // through `otherMails` and proxyAddresses before giving up.
@@ -143,6 +143,7 @@ export async function exchangeCodeForTokens(code: string) {
     expiry: new Date(Date.now() + tokenData.expires_in * 1000),
     email,
     aliases,
+    displayName: (typeof meData.displayName === "string" ? meData.displayName.trim() : "") || null,
     scope: tokenData.scope ?? null,
   };
 }
@@ -240,6 +241,7 @@ export async function saveConnection(
     expiry: Date;
     email: string;
     aliases?: string[];
+    displayName?: string | null;
     grantedScopes?: string | null;
   },
 ): Promise<{ id: string }> {
@@ -254,6 +256,7 @@ export async function saveConnection(
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
       outgoingAliases,
+      displayName: tokens.displayName ?? null,
       grantedScopes: tokens.grantedScopes ?? null,
     },
     // Reconnect: wipe sync-state fields so the new connection starts clean.
@@ -269,6 +272,8 @@ export async function saveConnection(
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
       outgoingAliases,
+      // Only overwrite when present, so a transient null doesn't wipe a name.
+      ...(tokens.displayName ? { displayName: tokens.displayName } : {}),
       grantedScopes: tokens.grantedScopes ?? null,
       lastSyncError: null,
       lastSyncAt: null,

@@ -4,6 +4,7 @@ import type { AdminGraphqlClient } from "../support/shopify/order-search";
 import { analyzeSupportEmail } from "../support/orchestrator";
 import type { MailAttachment, MailClient, MailMessage } from "../mail/types";
 import { getMailClient } from "../mail/types";
+import { extractEmailAddress } from "../mail/parse-address";
 import type { ConversationMessage } from "../support/types";
 import { fetchCustomerEmails } from "./customers";
 import { prefilterEmail } from "./prefilter";
@@ -373,12 +374,15 @@ export async function ingestAndPrefilter(
   const isOutgoing = isOutgoingMessage(msg, outgoingCtx);
   const mailboxAddress = outgoingCtx.mailboxAddress;
 
-  // Extract RFC 5322 headers for thread reconciliation. Gmail populates
-  // msg.headers with lower-cased keys; Zoho currently does not expose
-  // them, so these will be empty strings for Zoho messages.
+  // Extract RFC 5322 headers for thread reconciliation. All providers
+  // (Gmail, Zoho via /header, Outlook via internetMessageHeaders) populate
+  // msg.headers with lower-cased keys.
   const rfcMessageId = (msg.headers["message-id"] ?? "").replace(/^<|>$/g, "").trim();
   const inReplyTo = (msg.headers["in-reply-to"] ?? "").replace(/^<|>$/g, "").trim();
   const rfcReferences = (msg.headers["references"] ?? "").trim();
+  // Reply-To, when set, is where replies should go (e.g. Shopify contact-form
+  // notifications are From mailer@shopify.com but Reply-To the customer).
+  const replyToAddress = extractEmailAddress(msg.headers["reply-to"]);
 
   // Resolve (or create) the canonical Thread BEFORE upserting the email,
   // so we can write canonicalThreadId atomically.
@@ -421,6 +425,7 @@ export async function ingestAndPrefilter(
       rfcReferences,
       fromAddress: msg.from,
       fromName: msg.fromName,
+      replyToAddress,
       subject: msg.subject,
       snippet: msg.snippet,
       bodyText: msg.bodyText,
@@ -438,6 +443,7 @@ export async function ingestAndPrefilter(
       ...(rfcMessageId ? { rfcMessageId } : {}),
       ...(inReplyTo ? { inReplyTo } : {}),
       ...(rfcReferences ? { rfcReferences } : {}),
+      ...(replyToAddress ? { replyToAddress } : {}),
       // Always refresh HTML body and attachments when re-encountering a message.
       ...(msg.bodyHtml !== undefined ? { bodyHtml: msg.bodyHtml } : {}),
       ...(hasAttachments ? { hasAttachments } : {}),
