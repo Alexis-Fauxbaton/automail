@@ -2079,8 +2079,14 @@ const ThreadCard = memo(function ThreadCard({
           (bucket === "to_process" || bucket === "waiting_merchant" || bucket === "to_analyze") &&
           !latest.draftReply &&
           !noReplyNeeded &&
-          !latest.tier1Result?.startsWith("filtered:") &&
-          latest.tier2Result !== "probable_non_client" && (
+          // In "À analyser" the thread-level support stance is authoritative.
+          // A later message-level tier2 flip (LLM non-determinism, held back
+          // from downgrading the thread by the sticky confirmed_support rule)
+          // must not hide the Analyser button — otherwise the thread is stuck
+          // in the tab with no way to analyze it.
+          (bucket === "to_analyze" ||
+            (!latest.tier1Result?.startsWith("filtered:") &&
+              latest.tier2Result !== "probable_non_client")) && (
           <reanalyzeFetcher.Form method="post">
             <input type="hidden" name="_action" value="reanalyze" />
             <input type="hidden" name="emailId" value={latest.id} />
@@ -2829,8 +2835,12 @@ function ThreadDetailPanel({
             />
           )}
           {!noReplyNeeded &&
-            !latest.tier1Result?.startsWith("filtered:") &&
-            latest.tier2Result !== "probable_non_client" && (
+            // In "À analyser" the thread-level support stance is authoritative
+            // (see card render above) — don't let a later message-level tier2
+            // flip hide the Analyser button.
+            (bucket === "to_analyze" ||
+              (!latest.tier1Result?.startsWith("filtered:") &&
+                latest.tier2Result !== "probable_non_client")) && (
             <reanalyzeFetcher.Form method="post">
               <input type="hidden" name="_action" value="reanalyze" />
               <input type="hidden" name="emailId" value={latest.id} />
