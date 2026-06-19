@@ -72,8 +72,17 @@ export function RichDraftEditor({ content, onChange, readOnly = false }: RichDra
 
   return (
     <div>
+      {/* Structural flex layout is set inline (not only in the .css) so the toolbar
+          never collapses into a stacked column during the brief window where the
+          component's stylesheet hasn't applied yet (async CSS chunk / dev FOUC).
+          As flex items, the separators can no longer force line breaks. */}
       {!readOnly && (
-      <div className="rich-draft-toolbar" role="toolbar" aria-label="Formatting options">
+      <div
+        className="rich-draft-toolbar"
+        role="toolbar"
+        aria-label="Formatting options"
+        style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "2px" }}
+      >
         <button
           type="button"
           title="Gras"
