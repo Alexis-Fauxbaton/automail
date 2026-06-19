@@ -256,6 +256,44 @@ export function guessCarrierCode(trackingNumber: string, carrierNameHint?: strin
 }
 
 // ---------------------------------------------------------------------------
+// Carrier hint from the Shopify tracking URL host.
+//
+// The tracking number alone is often ambiguous (e.g. an "AP…" Cainiao number
+// looks like Australia Post), and Shopify's `company` field is frequently
+// "Other". The Shopify tracking URL host, when it is a real carrier domain, is
+// the merchant's de-facto declared carrier — the same link shown as "Voir le
+// suivi". We map a curated allowlist of carrier hosts to 17track codes and pass
+// that as a register hint. Unknown hosts return null → no hint → 17track
+// auto-detects exactly as before. See spec 2026-06-19.
+// ---------------------------------------------------------------------------
+const CARRIER_URL_HOSTS: Array<{ host: string; code: number; name: string }> = [
+  { host: "cainiao.com", code: 190271, name: "Cainiao" }, // covers global.cainiao.com
+  { host: "laposte.fr",  code: 100068, name: "La Poste" },
+  { host: "ups.com",     code: 100002, name: "UPS" },
+];
+
+/**
+ * Return the 17track carrier code for a Shopify tracking URL whose host is a
+ * known carrier domain, or null otherwise. Matches on exact host or exact
+ * dot-boundary suffix (so "notcainiao.com" never matches "cainiao.com").
+ */
+export function carrierCodeFromTrackingUrl(
+  url: string | null | undefined,
+): number | null {
+  if (!url) return null;
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+  for (const { host: h, code } of CARRIER_URL_HOSTS) {
+    if (host === h || host.endsWith("." + h)) return code;
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Main export
 // ---------------------------------------------------------------------------
 
