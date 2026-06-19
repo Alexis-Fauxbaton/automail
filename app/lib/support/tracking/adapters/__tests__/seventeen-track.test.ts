@@ -382,6 +382,35 @@ describe("parseTrackInfo — delivered detection", () => {
 });
 
 // ---------------------------------------------------------------------------
+// parseTrackInfo — recipient country + carrier code
+// ---------------------------------------------------------------------------
+
+describe("parseTrackInfo — recipientCountry and carrierCode", () => {
+  it("extracts recipient country and carrier code", () => {
+    const result = parseTrackInfo({
+      number: "X",
+      carrier: 190271,
+      track_info: {
+        latest_status: { status: "Delivered" },
+        latest_event: { description: "Delivered", time_iso: "2026-06-12T00:00:00Z" },
+        shipping_info: { recipient_address: { country: "FR" } },
+        tracking: { providers: [{ provider: { name: "Cainiao" }, events: [] }] },
+      },
+    } as unknown as Parameters<typeof parseTrackInfo>[0]);
+    expect(result.recipientCountry).toBe("FR");
+    expect(result.carrierCode).toBe(190271);
+  });
+
+  it("recipientCountry is null when absent", () => {
+    const result = parseTrackInfo({
+      number: "X",
+      track_info: { latest_status: { status: "InTransit" } },
+    } as unknown as Parameters<typeof parseTrackInfo>[0]);
+    expect(result.recipientCountry).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // fetchTrackingFrom17track — retry logic and edge cases
 // ---------------------------------------------------------------------------
 

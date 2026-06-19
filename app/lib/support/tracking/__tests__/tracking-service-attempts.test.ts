@@ -30,9 +30,9 @@ describe("getTrackingFacts — last17trackAttempt stamping", () => {
 
   it("stamps 'ok' when 17track returns ok", async () => {
     vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue({
-      state: "ok", carrierName: "La Poste", status: "InTransit",
+      state: "ok", carrierName: "La Poste", carrierCode: 6051, status: "InTransit",
       lastEvent: "Sorted", lastLocation: "Paris", lastEventDate: "2026-05-14T08:00:00Z",
-      delivered: false, events: [],
+      delivered: false, events: [], recipientCountry: null,
     });
     const [t] = await getTrackingFacts(makeOrder());
     expect(t.last17trackAttempt).toBe("ok");
@@ -42,8 +42,8 @@ describe("getTrackingFacts — last17trackAttempt stamping", () => {
 
   it("stamps 'pending' when 17track is pending", async () => {
     vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue({
-      state: "pending", carrierName: null, status: null, lastEvent: null,
-      lastLocation: null, lastEventDate: null, delivered: false, events: [],
+      state: "pending", carrierName: null, carrierCode: null, status: null, lastEvent: null,
+      lastLocation: null, lastEventDate: null, delivered: false, events: [], recipientCountry: null,
     });
     const [t] = await getTrackingFacts(makeOrder());
     expect(t.last17trackAttempt).toBe("pending");

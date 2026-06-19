@@ -66,6 +66,10 @@ interface TrackInfo {
   misc_info?: {
     local_provider?: string;
   };
+  shipping_info?: {
+    recipient_address?: { country?: string };
+    shipper_address?: { country?: string };
+  };
   tracking?: {
     providers?: Array<{
       provider?: { name?: string; homepage?: string };
@@ -107,12 +111,17 @@ export interface SevenTrackResult {
    */
   state: "ok" | "pending" | "error" | "quota_exhausted";
   carrierName: string | null;
+  carrierCode: number | null;
   status: string | null;
   lastEvent: string | null;
   lastLocation: string | null;
   lastEventDate: string | null;
   delivered: boolean;
   events: Array<{ date: string | null; description: string | null; location: string | null }>;
+  /** Alpha-2 country code of the recipient as reported by 17track (e.g. "FR").
+   *  Used downstream to corroborate against the Shopify shipping address country.
+   *  Null when 17track does not provide it. */
+  recipientCountry: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -147,7 +156,7 @@ export const parseTrackInfoForTest = parseTrackInfo;
 function parseTrackInfo(item: AcceptedItem): SevenTrackResult {
   const info = item.track_info;
   if (!info) {
-    return { state: "pending", carrierName: null, status: null, lastEvent: null, lastLocation: null, lastEventDate: null, delivered: false, events: [] };
+    return { state: "pending", carrierName: null, carrierCode: null, status: null, lastEvent: null, lastLocation: null, lastEventDate: null, delivered: false, events: [], recipientCountry: null };
   }
 
   const latestEvent = info.latest_event;
@@ -174,15 +183,19 @@ function parseTrackInfo(item: AcceptedItem): SevenTrackResult {
     status === "Delivered" ||
     (description ? DELIVERED_RE.test(description) : false);
 
+  const recipientCountry = info.shipping_info?.recipient_address?.country ?? null;
+
   return {
     state: "ok",
     carrierName,
+    carrierCode: item.carrier ?? null,
     status,
     lastEvent: description,
     lastLocation,
     lastEventDate,
     delivered,
     events,
+    recipientCountry,
   };
 }
 
@@ -374,8 +387,8 @@ export async function fetchTrackingFrom17track(
         breakerSuccess();
         return {
           state: "pending",
-          carrierName: null, status: null, lastEvent: null,
-          lastLocation: null, lastEventDate: null, delivered: false, events: [],
+          carrierName: null, carrierCode: null, status: null, lastEvent: null,
+          lastLocation: null, lastEventDate: null, delivered: false, events: [], recipientCountry: null,
         };
       }
 
@@ -392,8 +405,8 @@ export async function fetchTrackingFrom17track(
         breakerSuccess();
         return {
           state: "quota_exhausted",
-          carrierName: null, status: null, lastEvent: null,
-          lastLocation: null, lastEventDate: null, delivered: false, events: [],
+          carrierName: null, carrierCode: null, status: null, lastEvent: null,
+          lastLocation: null, lastEventDate: null, delivered: false, events: [], recipientCountry: null,
         };
       }
 
