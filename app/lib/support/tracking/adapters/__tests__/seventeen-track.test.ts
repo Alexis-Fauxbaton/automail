@@ -40,11 +40,11 @@ describe("guessCarrierCode — pattern matching", () => {
   });
 
   it("returns La Poste code for 13-digit numbers", () => {
-    expect(guessCarrierCode("6123456789012")).toBe(100068);
+    expect(guessCarrierCode("6123456789012")).toBe(6051);
   });
 
   it("returns La Poste code for international format (2L+9D+2L)", () => {
-    expect(guessCarrierCode("AB123456789FR")).toBe(100068);
+    expect(guessCarrierCode("AB123456789FR")).toBe(6051);
   });
 
   it("returns FedEx code for 12-digit numbers", () => {
@@ -72,11 +72,11 @@ describe("guessCarrierCode — pattern matching", () => {
   });
 
   it("falls back to carrier name hint when pattern is unknown", () => {
-    expect(guessCarrierCode("UNKNOWNXYZ", "Colissimo")).toBe(100068);
+    expect(guessCarrierCode("UNKNOWNXYZ", "Colissimo")).toBe(6051);
   });
 
   it("falls back to carrier name hint for 'La Poste'", () => {
-    expect(guessCarrierCode("UNKNOWNXYZ", "La Poste")).toBe(100068);
+    expect(guessCarrierCode("UNKNOWNXYZ", "La Poste")).toBe(6051);
   });
 
   it("falls back to carrier name hint for 'DHL Express'", () => {
@@ -85,7 +85,7 @@ describe("guessCarrierCode — pattern matching", () => {
 
   it("pattern match takes priority over carrier name hint", () => {
     // 13-digit number → La Poste by pattern, even if hint says UPS
-    expect(guessCarrierCode("6123456789012", "UPS")).toBe(100068);
+    expect(guessCarrierCode("6123456789012", "UPS")).toBe(6051);
   });
 
   it("returns null when neither pattern nor hint matches", () => {
@@ -105,11 +105,11 @@ describe("guessCarrierCode — pattern matching", () => {
   });
 
   it("returns La Poste code for real prod number LV109807596FR (2L+9D+2L)", () => {
-    expect(guessCarrierCode("LV109807596FR")).toBe(100068);
+    expect(guessCarrierCode("LV109807596FR")).toBe(6051);
   });
 
   it("returns Chronopost code for 2L+8D+2L format", () => {
-    expect(guessCarrierCode("AB12345678FR")).toBe(100174);
+    expect(guessCarrierCode("AB12345678FR")).toBe(100273);
   });
 
   it("returns Mondial Relay code for MR-prefixed numbers (validates bug 3 fix)", () => {
@@ -129,7 +129,7 @@ describe("guessCarrierCode — pattern matching", () => {
   });
 
   it("DPD number is NOT classified as La Poste (regression guard for bug 2)", () => {
-    expect(guessCarrierCode("0812345678901")).not.toBe(100068);
+    expect(guessCarrierCode("0812345678901")).not.toBe(6051);
   });
 
   it("falls back to carrier name hint for 'TNT'", () => {
@@ -187,8 +187,8 @@ describe("carrierCodeFromTrackingUrl — host allowlist", () => {
     expect(carrierCodeFromTrackingUrl("https://cainiao.com/x")).toBe(190271);
   });
 
-  it("maps laposte.fr to La Poste (100068)", () => {
-    expect(carrierCodeFromTrackingUrl("https://www.laposte.fr/outils/suivre?code=x")).toBe(100068);
+  it("maps laposte.fr to La Poste (6051)", () => {
+    expect(carrierCodeFromTrackingUrl("https://www.laposte.fr/outils/suivre?code=x")).toBe(6051);
   });
 
   it("maps ups.com to UPS (100002)", () => {

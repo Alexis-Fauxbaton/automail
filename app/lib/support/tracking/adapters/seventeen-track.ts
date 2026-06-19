@@ -191,7 +191,7 @@ function parseTrackInfo(item: AcceptedItem): SevenTrackResult {
 // Numeric codes from https://www.17track.net/en/apidoc (carrier list)
 // ---------------------------------------------------------------------------
 
-const CARRIER_CODE_HINTS: Array<{ re: RegExp; code: number; name: string }> = [
+export const CARRIER_CODE_HINTS: Array<{ re: RegExp; code: number; name: string }> = [
   // Cainiao (190271 — NOT 190072 which is SUNYOU)
   { re: /^CK\d/i,         code: 190271, name: "Cainiao" },
   { re: /^CNFR/i,         code: 190271, name: "Cainiao" },
@@ -207,12 +207,12 @@ const CARRIER_CODE_HINTS: Array<{ re: RegExp; code: number; name: string }> = [
   { re: /^\d{10}$/, code: 100001, name: "DHL Express" },
   // DPD France (13 digits starting with 08 or 09 — must come BEFORE generic 13-digit La Poste)
   { re: /^(08|09)\d{11}$/, code: 100016, name: "DPD" },
-  // La Poste Colissimo (13 digits)
-  { re: /^\d{13}$/, code: 100068, name: "La Poste" },
-  // La Poste / ePacket international (2 letters + 9 digits + 2 letters)
-  { re: /^[A-Z]{2}\d{9}[A-Z]{2}$/, code: 100068, name: "La Poste" },
-  // Chronopost
-  { re: /^[A-Z]{2}\d{8}[A-Z]{2}$/i, code: 100174, name: "Chronopost" },
+  // La Poste Colissimo (13 digits) — official 17track code: 6051
+  { re: /^\d{13}$/, code: 6051, name: "La Poste" },
+  // La Poste / ePacket international (2 letters + 9 digits + 2 letters) — official 17track code: 6051
+  { re: /^[A-Z]{2}\d{9}[A-Z]{2}$/, code: 6051, name: "La Poste" },
+  // Chronopost — official 17track code: 100273 (not 100174)
+  { re: /^[A-Z]{2}\d{8}[A-Z]{2}$/i, code: 100273, name: "Chronopost" },
   // GLS (11 digits)
   { re: /^\d{11}$/, code: 100066, name: "GLS" },
   // Mondial Relay (MR or 24R prefix followed by digits)
@@ -225,7 +225,7 @@ const CARRIER_CODE_HINTS: Array<{ re: RegExp; code: number; name: string }> = [
  * detection rates for carriers 17track doesn't auto-detect.
  */
 // Carrier name keywords (from Shopify) → 17track numeric code
-const CARRIER_NAME_MAP: Array<{ keywords: RegExp; code: number }> = [
+export const CARRIER_NAME_MAP: Array<{ keywords: RegExp; code: number }> = [
   // Cainiao (190271 — NOT 190072 which is SUNYOU)
   { keywords: /cainiao/i,         code: 190271 },
   { keywords: /yanwen/i,          code: 190150 },
@@ -233,8 +233,10 @@ const CARRIER_NAME_MAP: Array<{ keywords: RegExp; code: number }> = [
   { keywords: /ups/i,             code: 100002 },
   { keywords: /fedex/i,           code: 100003 },
   { keywords: /dhl/i,             code: 100001 },
-  { keywords: /colissimo|la.?poste/i, code: 100068 },
-  { keywords: /chronopost/i,      code: 100174 },
+  // La Poste / Colissimo — official 17track code: 6051 (not 100068)
+  { keywords: /colissimo|la.?poste/i, code: 6051 },
+  // Chronopost — official 17track code: 100273 (not 100174)
+  { keywords: /chronopost/i,      code: 100273 },
   { keywords: /mondial.?relay/i,  code: 100162 },
   { keywords: /gls/i,             code: 100066 },
   { keywords: /dpd/i,             code: 100016 },
@@ -266,9 +268,10 @@ export function guessCarrierCode(trackingNumber: string, carrierNameHint?: strin
 // that as a register hint. Unknown hosts return null → no hint → 17track
 // auto-detects exactly as before. See spec 2026-06-19.
 // ---------------------------------------------------------------------------
-const CARRIER_URL_HOSTS: Array<{ host: string; code: number; name: string }> = [
+export const CARRIER_URL_HOSTS: Array<{ host: string; code: number; name: string }> = [
   { host: "cainiao.com", code: 190271, name: "Cainiao" }, // covers global.cainiao.com
-  { host: "laposte.fr",  code: 100068, name: "La Poste" },
+  // La Poste — official 17track code: 6051 (Colissimo), not 100068
+  { host: "laposte.fr",  code: 6051, name: "La Poste" },
   { host: "ups.com",     code: 100002, name: "UPS" },
 ];
 
