@@ -107,6 +107,41 @@ describe("resolveTrackingForFulfillment", () => {
     );
     expect(result.status).toBe("IN_TRANSIT");
   });
+
+  it("uses the passed tracking number/URL, not the first, for a multi-parcel fulfillment", () => {
+    // Regression: a fulfillment can carry several parcels. The fallback must
+    // resolve the specific number it was given, not always trackingNumbers[0].
+    const result = resolveTrackingForFulfillment(
+      makeFulfillment({
+        trackingNumbers: ["CNFR1", "AP2", "AP3"],
+        trackingUrls: [
+          "https://global.cainiao.com/x?n=CNFR1",
+          "https://global.cainiao.com/x?n=AP2",
+          "https://global.cainiao.com/x?n=AP3",
+        ],
+        carrier: "Other",
+      }),
+      "AP2",
+      "https://global.cainiao.com/x?n=AP2",
+    );
+    expect(result.trackingNumber).toBe("AP2");
+    expect(result.trackingUrl).toBe("https://global.cainiao.com/x?n=AP2");
+    expect(result.source).toBe("shopify_url");
+  });
+
+  it("defaults to the first tracking number/URL when none is passed (backward compat)", () => {
+    const result = resolveTrackingForFulfillment(
+      makeFulfillment({
+        trackingNumbers: ["CNFR1", "AP2"],
+        trackingUrls: [
+          "https://global.cainiao.com/x?n=CNFR1",
+          "https://global.cainiao.com/x?n=AP2",
+        ],
+      }),
+    );
+    expect(result.trackingNumber).toBe("CNFR1");
+    expect(result.trackingUrl).toBe("https://global.cainiao.com/x?n=CNFR1");
+  });
 });
 
 describe("resolveTracking (deprecated wrapper)", () => {

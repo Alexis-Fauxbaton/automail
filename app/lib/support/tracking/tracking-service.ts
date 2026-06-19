@@ -33,7 +33,7 @@ async function resolveOneFulfillment(
 
   // No tracking number → nothing to ask 17track about.
   if (!trackingNumber) {
-    const base = resolveTrackingForFulfillment(fulfillment);
+    const base = resolveTrackingForFulfillment(fulfillment, trackingNumber, trackingUrl);
     return {
       ...base,
       fulfillmentIndex,
@@ -91,7 +91,7 @@ async function resolveOneFulfillment(
       // tracking and mark the attempt as "skipped" so the adaptive retry
       // logic doesn't burn 17track quota uselessly trying again soon.
       console.warn(`[tracking] 17track quota exhausted for ${trackingNumber}; using Shopify fallback`);
-      const base = resolveTrackingForFulfillment(fulfillment);
+      const base = resolveTrackingForFulfillment(fulfillment, trackingNumber, trackingUrl);
       return {
         ...base,
         fulfillmentIndex,
@@ -112,7 +112,7 @@ async function resolveOneFulfillment(
     if (!keyConfigured) attempt = "skipped";
     else if (is17trackBreakerOpen()) attempt = "skipped";
     else attempt = "error";
-    const base = resolveTrackingForFulfillment(fulfillment);
+    const base = resolveTrackingForFulfillment(fulfillment, trackingNumber, trackingUrl);
     return {
       ...base,
       fulfillmentIndex,
@@ -122,7 +122,7 @@ async function resolveOneFulfillment(
     };
   } catch (err) {
     console.error(`[tracking] 17track failed for fulfillment ${fulfillmentIndex}, using Shopify:`, err);
-    const base = resolveTrackingForFulfillment(fulfillment);
+    const base = resolveTrackingForFulfillment(fulfillment, trackingNumber, trackingUrl);
     return {
       ...base,
       fulfillmentIndex,

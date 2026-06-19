@@ -62,6 +62,27 @@ describe("getTrackingFacts — last17trackAttempt stamping", () => {
     expect(t.last17trackAttempt).toBe("error");
   });
 
+  it("keeps each parcel's own tracking number in the Shopify fallback (multi-parcel fulfillment)", async () => {
+    // Regression: when 17track returns null for a fulfillment carrying several
+    // tracking numbers, every entry must keep its OWN number/URL — not collapse
+    // to the first parcel (the "ça prend only le premier" bug).
+    vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue(null);
+    const order = makeOrder();
+    order.fulfillments[0].trackingNumbers = ["CNFR1", "AP2", "AP3"];
+    order.fulfillments[0].trackingUrls = [
+      "https://global.cainiao.com/x?n=CNFR1",
+      "https://global.cainiao.com/x?n=AP2",
+      "https://global.cainiao.com/x?n=AP3",
+    ];
+    const facts = await getTrackingFacts(order);
+    expect(facts.map((f) => f.trackingNumber)).toEqual(["CNFR1", "AP2", "AP3"]);
+    expect(facts.map((f) => f.trackingUrl)).toEqual([
+      "https://global.cainiao.com/x?n=CNFR1",
+      "https://global.cainiao.com/x?n=AP2",
+      "https://global.cainiao.com/x?n=AP3",
+    ]);
+  });
+
   it("stamps 'skipped' when no tracking number is present", async () => {
     const order = makeOrder();
     order.fulfillments[0].trackingNumbers = [];
