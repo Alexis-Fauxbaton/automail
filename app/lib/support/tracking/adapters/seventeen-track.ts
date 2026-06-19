@@ -303,6 +303,9 @@ export async function fetchTrackingFrom17track(
   /** "<Alpha-2 country>-<postal code>" (e.g. "FR-75001"). Required by some
    *  carriers (Cainiao / postal) to register a number; ignored by the rest. */
   param?: string | null,
+  /** Shopify tracking URL — its host, when a known carrier domain, gives 17track
+   *  a carrier hint so ambiguous numbers resolve against the right carrier. */
+  trackingUrl?: string | null,
 ): Promise<SevenTrackResult | null> {
   const apiKey = getApiKey();
   if (!apiKey) return null;
@@ -311,7 +314,14 @@ export async function fetchTrackingFrom17track(
     return null;
   }
 
-  const payload = [{ number: trackingNumber, ...(param ? { param } : {}) }];
+  const carrierCode = carrierCodeFromTrackingUrl(trackingUrl);
+  const payload = [
+    {
+      number: trackingNumber,
+      ...(param ? { param } : {}),
+      ...(carrierCode ? { carrier: carrierCode } : {}),
+    },
+  ];
 
   seventeenTrackQueued.inc();
   const release = await sevenTrackSem.acquire();
