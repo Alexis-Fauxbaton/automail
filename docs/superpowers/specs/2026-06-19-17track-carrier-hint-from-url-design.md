@@ -106,6 +106,42 @@ into the adapter call at line ~48.
 `AP00819233764158` has URL `global.cainiao.com` → code `190271` sent to 17track →
 Cainiao network queried → real status instead of "Australia Post / NotFound".
 
+## Reliability & wrong-parcel risk (honest assessment)
+
+**There is no 100%-reliable carrier signal.** Carrier identity is irreducibly
+probabilistic. Ranked by reliability:
+
+1. Shopify `trackingInfo.company` — the field designed for this. Authoritative
+   when set to a real name, but dropship apps routinely set `"Other"` (our case).
+2. Shopify tracking URL host — the merchant's *de facto* declared carrier, and the
+   exact link already shown to the customer as "Voir le suivi". Best available
+   proxy, but not always parseable (custom domains / aggregators).
+3. Number format / 17track auto-detection — pure heuristics, demonstrably wrong
+   (this whole bug).
+
+We pick (2) because it's the strongest signal that is reliably present for dropship
+shipments, and because we are echoing the merchant's own declaration rather than
+guessing.
+
+**Why the residual wrong-parcel risk is negligible — but not zero:**
+
+- We only force a carrier when the URL host is in the **curated allowlist of real
+  carrier domains**. We never force a carrier off a number-format guess.
+- We are following the carrier the merchant *already declared* via the tracking URL
+  — the same URL already opened by the "Voir le suivi" link today. The change adds
+  no new exposure; it makes 17track agree with the link the merchant already trusts.
+- A *wrong-format* hint fails loud: 17track returns `NotFound` (no data), not a
+  fabricated parcel. The only silent-wrong case is a genuine cross-carrier number
+  **collision** (the same string being a valid-but-different parcel under the forced
+  carrier). For the long, effectively-unique Cainiao-style numbers this targets, that
+  is astronomically unlikely, and the recovered data is corroborated by the order
+  (verified on `AP00819233764158`: shipper CN → recipient FR, route via Yiwu,
+  delivered 2026-06-12 — consistent with order `#257371322`, FR 91120).
+
+This is documented explicitly so the limitation is acknowledged, not hidden. The
+app's truth-seeking principle is satisfied: we prefer the merchant's declared source
+over a heuristic guess, and we do not invent a carrier when no trusted signal exists.
+
 ## Testing
 
 Unit tests in the existing
