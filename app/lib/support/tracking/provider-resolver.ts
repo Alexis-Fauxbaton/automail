@@ -27,9 +27,13 @@ const CARRIER_PATTERNS: Array<{ carrier: string; re: RegExp; urlFor?: (n: string
  */
 export function resolveTrackingForFulfillment(
   fulfillment: OrderFulfillmentFacts,
+  // A fulfillment can carry several parcels. Callers resolving a specific
+  // tracking number must pass it (with its URL) so the fallback doesn't collapse
+  // every parcel onto trackingNumbers[0]. Defaults preserve the single-parcel
+  // and deprecated-wrapper behaviour.
+  trackingNumber: string | null = fulfillment.trackingNumbers[0] ?? null,
+  trackingUrl: string | null = fulfillment.trackingUrls[0] ?? null,
 ): TrackingFacts {
-  const trackingNumber = fulfillment.trackingNumbers[0] ?? null;
-  const trackingUrl = fulfillment.trackingUrls[0] ?? null;
   const carrier = fulfillment.carrier ?? null;
 
   if (trackingUrl) {
