@@ -20,6 +20,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import {
   guessCarrierCode,
+  carrierCodeFromTrackingUrl,
   parseTrackInfoForTest as parseTrackInfo,
   fetchTrackingFrom17track,
 } from "../seventeen-track";
@@ -170,6 +171,46 @@ describe("guessCarrierCode — regression: real production numbers", () => {
 
   it("carrier name hint 'SUNYOU' does not override correct CNFR pattern detection", () => {
     expect(guessCarrierCode("CNFR9010488691705HD", "SUNYOU")).toBe(190271);
+  });
+});
+
+describe("carrierCodeFromTrackingUrl — host allowlist", () => {
+  it("maps a global.cainiao.com URL to Cainiao (190271)", () => {
+    expect(
+      carrierCodeFromTrackingUrl(
+        "https://global.cainiao.com/newDetail.htm?mailNoList=AP00819233764158",
+      ),
+    ).toBe(190271);
+  });
+
+  it("maps a bare cainiao.com host to Cainiao (190271)", () => {
+    expect(carrierCodeFromTrackingUrl("https://cainiao.com/x")).toBe(190271);
+  });
+
+  it("maps laposte.fr to La Poste (100068)", () => {
+    expect(carrierCodeFromTrackingUrl("https://www.laposte.fr/outils/suivre?code=x")).toBe(100068);
+  });
+
+  it("maps ups.com to UPS (100002)", () => {
+    expect(carrierCodeFromTrackingUrl("https://www.ups.com/track?tracknum=x")).toBe(100002);
+  });
+
+  it("returns null for a merchant custom domain", () => {
+    expect(carrierCodeFromTrackingUrl("https://shop.example.com/apps/track?n=x")).toBeNull();
+  });
+
+  it("returns null for an aggregator we do not map", () => {
+    expect(carrierCodeFromTrackingUrl("https://t.17track.net/en#nums=x")).toBeNull();
+  });
+
+  it("does not match a look-alike suffix (notcainiao.com)", () => {
+    expect(carrierCodeFromTrackingUrl("https://notcainiao.com/x")).toBeNull();
+  });
+
+  it("returns null for null, empty, or malformed input", () => {
+    expect(carrierCodeFromTrackingUrl(null)).toBeNull();
+    expect(carrierCodeFromTrackingUrl("")).toBeNull();
+    expect(carrierCodeFromTrackingUrl("not a url")).toBeNull();
   });
 });
 
@@ -393,6 +434,41 @@ describe("fetchTrackingFrom17track — retry logic", () => {
     expect(result?.state).toBe("ok");
     expect(result?.status).toBe("InTransit");
     expect(result?.carrierName).toBe("La Poste");
+  });
+
+  it("adds the carrier code to the register payload when the tracking URL maps to a known carrier", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(mockOkFetch({ code: 0 }) as unknown as Response)   // register
+      .mockResolvedValueOnce(mockOkFetch(OK_RESPONSE) as unknown as Response);  // gettrackinfo
+
+    await fetchTrackingFrom17track(
+      "AP00819233764158",
+      null,
+      "FR-91120",
+      "https://global.cainiao.com/newDetail.htm?mailNoList=AP00819233764158",
+    );
+
+    const registerInit = vi.mocked(fetch).mock.calls[0][1] as RequestInit;
+    const body = JSON.parse(registerInit.body as string);
+    expect(body[0].carrier).toBe(190271);
+    expect(body[0].param).toBe("FR-91120");
+  });
+
+  it("omits the carrier code when the tracking URL is unknown/custom", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(mockOkFetch({ code: 0 }) as unknown as Response)
+      .mockResolvedValueOnce(mockOkFetch(OK_RESPONSE) as unknown as Response);
+
+    await fetchTrackingFrom17track(
+      "LV109807596FR",
+      null,
+      null,
+      "https://shop.example.com/apps/track?n=LV109807596FR",
+    );
+
+    const registerInit = vi.mocked(fetch).mock.calls[0][1] as RequestInit;
+    const body = JSON.parse(registerInit.body as string);
+    expect(body[0].carrier).toBeUndefined();
   });
 
   it("retries on pending (-18019909) and returns result on second poll", async () => {
