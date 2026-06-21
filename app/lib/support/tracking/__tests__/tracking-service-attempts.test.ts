@@ -122,5 +122,6 @@ describe("getTrackingFacts — last17trackAttempt stamping", () => {
     const [t] = await getTrackingFacts(makeOrder());
     expect(t.source).not.toBe("seventeen_track");
     expect(t.inferred).toBe(true);
+    expect(t.last17trackAttempt).toBe("ok");
   });
 });
