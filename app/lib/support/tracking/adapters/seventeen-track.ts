@@ -157,7 +157,11 @@ async function postJson<T>(url: string, body: unknown, apiKey: string): Promise<
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(10000),
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) {
+    const err = new Error(`HTTP ${res.status}`) as Error & { httpStatus?: number };
+    err.httpStatus = res.status;
+    throw err;
+  }
   return res.json() as Promise<T>;
 }
 
@@ -397,12 +401,22 @@ export async function fetchTrackingFrom17track(
       const rejected = res.data?.rejected ?? [];
       if (accepted.length > 0) { breakerSuccess(); return accepted.map(parseTrackInfo); }
       const code = rejected[0]?.error?.code;
-      if (code === -18019909) { if (p < MAX_POLL) continue; breakerSuccess(); return "pending"; }
-      if (typeof code === "number" && (code === -18010008 || code === -18010009 || code === -18019902 || (code <= -18010000 && code >= -18019999))) {
-        breakerSuccess(); return "quota";
+      if (code === -18019909 || code === -18019902) {
+        // -18019909 = data not ready; -18019902 = not registered yet (we just
+        // registered bare). Both are transient → keep polling, then pending.
+        if (p < MAX_POLL) continue;
+        breakerSuccess();
+        return "pending";
+      }
+      // Real account/quota errors only (-180100xx); NOT the -180199xx
+      // registration/status family.
+      if (typeof code === "number" && code <= -18010000 && code >= -18010999) {
+        breakerSuccess();
+        return "quota";
       }
       console.warn("[17track] Unexpected rejection:", rejected[0]);
-      breakerFailure(); return null;
+      breakerFailure();
+      return null;
     }
     return null;
   }
@@ -444,6 +458,11 @@ export async function fetchTrackingFrom17track(
     if (!selection.chosen) return emptyState("pending"); // registered but no data yet
     return { ...selection.chosen, inferredCarrier: selection.unverified, recoveredViaHint } as SevenTrackResult;
   } catch (err) {
+    if ((err as { httpStatus?: number })?.httpStatus === 429) {
+      console.warn(`[17track] rate-limited (429) for ${trackingNumber}; transient`);
+      breakerSuccess(); // a rate-limit is not a breaker-worthy failure
+      return emptyState("pending");
+    }
     console.error("[17track] Request failed:", err);
     breakerFailure();
     return null;

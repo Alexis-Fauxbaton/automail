@@ -600,6 +600,38 @@ describe("fetchTrackingFrom17track — retry logic", () => {
     const result = await fetchTrackingFrom17track("LV109807596FR");
     expect(result).toBeNull();
   });
+
+  it("treats an HTTP 429 as transient pending, and does NOT trip the breaker", async () => {
+    const { isOpen, __resetForTest } = await import("../../seventeen-track-breaker");
+    __resetForTest();
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(mockOkFetch({ code: 0 }) as unknown as Response)            // register
+      .mockResolvedValueOnce({ ok: false, status: 429 } as unknown as Response);          // gettrackinfo 429
+    const r = await fetchTrackingFrom17track("LV109807596FR");
+    expect(r?.state).toBe("pending");
+    expect(isOpen()).toBe(false); // rate-limit must not open the breaker
+    __resetForTest();
+  });
+
+  it("treats a -18019902 (not-registered) rejection as pending, not quota_exhausted", async () => {
+    const NOTREG = { code: 0, data: { rejected: [{ number: "X", error: { code: -18019902, message: "not registered" } }] } };
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(mockOkFetch({ code: 0 }) as unknown as Response)
+      .mockResolvedValueOnce(mockOkFetch(NOTREG) as unknown as Response)
+      .mockResolvedValueOnce(mockOkFetch(NOTREG) as unknown as Response)
+      .mockResolvedValueOnce(mockOkFetch(NOTREG) as unknown as Response);
+    const r = await fetchTrackingFrom17track("X");
+    expect(r?.state).toBe("pending");
+  });
+
+  it("still treats a real quota code (-18010008) as quota_exhausted", async () => {
+    const QUOTA = { code: 0, data: { rejected: [{ number: "X", error: { code: -18010008, message: "quota" } }] } };
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(mockOkFetch({ code: 0 }) as unknown as Response)
+      .mockResolvedValueOnce(mockOkFetch(QUOTA) as unknown as Response);
+    const r = await fetchTrackingFrom17track("X");
+    expect(r?.state).toBe("quota_exhausted");
+  });
 });
 
 describe("fetchTrackingFrom17track — circuit breaker", () => {
