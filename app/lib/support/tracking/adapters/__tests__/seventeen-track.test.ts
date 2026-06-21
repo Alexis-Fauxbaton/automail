@@ -449,6 +449,20 @@ const OK_RESPONSE = {
   },
 };
 const OTHER_REJECTION = { code: 0, data: { rejected: [{ number: "LV109807596FR", error: { code: -99999, message: "invalid carrier" } }] } };
+const MULTI_RESPONSE = {
+  code: 0,
+  data: {
+    accepted: [
+      { number: "CK1", carrier: 14041, track_info: { latest_status: { status: "NotFound" } } },
+      { number: "CK1", carrier: 190271, track_info: {
+        latest_status: { status: "InTransit" },
+        latest_event: { description: "In transit", time_iso: "2026-06-11T00:00:00Z" },
+        shipping_info: { recipient_address: { country: "FR" } },
+        tracking: { providers: [{ provider: { name: "Cainiao" }, events: [] }] },
+      } },
+    ],
+  },
+};
 
 function mockOkFetch(response: unknown) {
   return { ok: true, json: () => Promise.resolve(response) };
@@ -485,39 +499,51 @@ describe("fetchTrackingFrom17track — retry logic", () => {
     expect(result?.carrierName).toBe("La Poste");
   });
 
-  it("adds the carrier code to the register payload when the tracking URL maps to a known carrier", async () => {
+  it("does NOT send a carrier filter in the gettrackinfo payload", async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(mockOkFetch({ code: 0 }) as unknown as Response)   // register
       .mockResolvedValueOnce(mockOkFetch(OK_RESPONSE) as unknown as Response);  // gettrackinfo
-
-    await fetchTrackingFrom17track(
-      "AP00819233764158",
-      null,
-      "FR-91120",
-      "https://global.cainiao.com/newDetail.htm?mailNoList=AP00819233764158",
-    );
-
-    const registerInit = vi.mocked(fetch).mock.calls[0][1] as RequestInit;
-    const body = JSON.parse(registerInit.body as string);
-    expect(body[0].carrier).toBe(190271);
-    expect(body[0].param).toBe("FR-91120");
+    await fetchTrackingFrom17track("LV109807596FR", { trackingUrl: "https://www.laposte.fr/x", param: "FR-75001" });
+    const getInit = vi.mocked(fetch).mock.calls[1][1] as RequestInit; // 2nd call = gettrackinfo
+    const body = JSON.parse(getInit.body as string);
+    expect(body[0].carrier).toBeUndefined();
   });
 
-  it("omits the carrier code when the tracking URL is unknown/custom", async () => {
+  it("selects the non-NotFound carrier when gettrackinfo returns several", async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(mockOkFetch({ code: 0 }) as unknown as Response)
-      .mockResolvedValueOnce(mockOkFetch(OK_RESPONSE) as unknown as Response);
+      .mockResolvedValueOnce(mockOkFetch(MULTI_RESPONSE) as unknown as Response);
+    const r = await fetchTrackingFrom17track("CK1", { orderCountry: "FR" });
+    expect(r?.carrierCode).toBe(190271);
+    expect(r?.status).toBe("InTransit");
+  });
 
-    await fetchTrackingFrom17track(
-      "LV109807596FR",
-      null,
-      null,
-      "https://shop.example.com/apps/track?n=LV109807596FR",
-    );
+  it("on NotFound with a derivable hint, register-adds the hint and re-reads", async () => {
+    const NF = { code: 0, data: { accepted: [{ number: "AP1", carrier: 1151, track_info: { latest_status: { status: "NotFound" } } }] } };
+    const RECOVERED = { code: 0, data: { accepted: [
+      { number: "AP1", carrier: 1151, track_info: { latest_status: { status: "NotFound" } } },
+      { number: "AP1", carrier: 190271, track_info: { latest_status: { status: "Delivered" }, shipping_info: { recipient_address: { country: "FR" } }, tracking: { providers: [{ provider: { name: "Cainiao" }, events: [] }] } } },
+    ] } };
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(mockOkFetch({ code: 0 }) as unknown as Response)  // register bare
+      .mockResolvedValueOnce(mockOkFetch(NF) as unknown as Response)           // gettrackinfo → NotFound
+      .mockResolvedValueOnce(mockOkFetch({ code: 0 }) as unknown as Response)  // register-add hint
+      .mockResolvedValueOnce(mockOkFetch(RECOVERED) as unknown as Response);   // gettrackinfo → recovered
+    const r = await fetchTrackingFrom17track("AP1", { trackingUrl: "https://global.cainiao.com/x", orderCountry: "FR" });
+    expect(r?.carrierCode).toBe(190271);
+    expect(r?.status).toBe("Delivered");
+    // the register-add call (3rd fetch) carried the hint code
+    const addInit = vi.mocked(fetch).mock.calls[2][1] as RequestInit;
+    expect(JSON.parse(addInit.body as string)[0].carrier).toBe(190271);
+  });
 
-    const registerInit = vi.mocked(fetch).mock.calls[0][1] as RequestInit;
-    const body = JSON.parse(registerInit.body as string);
-    expect(body[0].carrier).toBeUndefined();
+  it("returns a corroboration_mismatch result when the only data contradicts the order country", async () => {
+    const DE = { code: 0, data: { accepted: [{ number: "X", carrier: 100016, track_info: { latest_status: { status: "Delivered" }, shipping_info: { recipient_address: { country: "DE" } }, tracking: { providers: [{ provider: { name: "DPD (DE)" }, events: [] }] } } }] } };
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(mockOkFetch({ code: 0 }) as unknown as Response)
+      .mockResolvedValueOnce(mockOkFetch(DE) as unknown as Response);
+    const r = await fetchTrackingFrom17track("X", { orderCountry: "FR" });
+    expect(r?.state).toBe("corroboration_mismatch");
   });
 
   it("retries on pending (-18019909) and returns result on second poll", async () => {

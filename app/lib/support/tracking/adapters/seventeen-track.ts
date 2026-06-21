@@ -18,6 +18,7 @@ import {
   recordFailure as breakerFailure,
 } from "../seventeen-track-breaker";
 import { createSemaphore } from "../../../util/semaphore";
+import { selectCarrierCandidate } from "../carrier-selection";
 import {
   seventeenTrackInFlight,
   seventeenTrackQueued,
@@ -108,8 +109,11 @@ export interface SevenTrackResult {
    * - "quota_exhausted": our 17track plan ran out for the period — not a
    *   transient error, retry won't help until the next billing cycle
    * - "error": transient or unexpected failure
+   * - "corroboration_mismatch": every data candidate's recipient country
+   *   contradicts the order country — likely another customer's parcel, so we
+   *   refuse to surface it and fall back to Shopify data downstream.
    */
-  state: "ok" | "pending" | "error" | "quota_exhausted";
+  state: "ok" | "pending" | "error" | "quota_exhausted" | "corroboration_mismatch";
   carrierName: string | null;
   carrierCode: number | null;
   status: string | null;
@@ -122,6 +126,10 @@ export interface SevenTrackResult {
    *  Used downstream to corroborate against the Shopify shipping address country.
    *  Null when 17track does not provide it. */
   recipientCountry: string | null;
+  /** True when the chosen carrier could not be corroborated against the order
+   *  country (its recipient country was absent) — the result is usable but the
+   *  carrier identity is a best guess, not verified. */
+  inferredCarrier?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -329,29 +337,33 @@ export function deriveCarrierHint(
 
 export async function fetchTrackingFrom17track(
   trackingNumber: string,
-  _carrierNameHint?: string | null,
-  /** "<Alpha-2 country>-<postal code>" (e.g. "FR-75001"). Required by some
-   *  carriers (Cainiao / postal) to register a number; ignored by the rest. */
-  param?: string | null,
-  /** Shopify tracking URL — its host, when a known carrier domain, gives 17track
-   *  a carrier hint so ambiguous numbers resolve against the right carrier. */
-  trackingUrl?: string | null,
+  opts: {
+    /** "<Alpha-2 country>-<postal code>" (e.g. "FR-75001"). Required by some
+     *  carriers (Cainiao / postal) to register a number; ignored by the rest. */
+    param?: string | null;
+    /** Shopify tracking URL — its host, when a known carrier domain, feeds the
+     *  reactive carrier hint when 17track returns NotFound. */
+    trackingUrl?: string | null;
+    /** Shopify shipping-address country (alpha-2) used to corroborate the
+     *  recipient country reported by 17track and reject other-customer parcels. */
+    orderCountry?: string | null;
+    /** Carrier code chosen on a previous resolution, used as a tie-breaker so
+     *  the displayed carrier stays stable across refreshes. */
+    previousCarrierCode?: number | null;
+  } = {},
 ): Promise<SevenTrackResult | null> {
-  const apiKey = getApiKey();
-  if (!apiKey) return null;
+  const { param = null, trackingUrl = null, orderCountry = null, previousCarrierCode = null } = opts;
+  const maybeKey = getApiKey();
+  if (!maybeKey) return null;
+  // Bind to a non-null const so the nested `poll` closure keeps the narrowing
+  // (TS widens captured `let`/outer vars back to nullable inside closures).
+  const apiKey: string = maybeKey;
   if (breakerOpen()) {
     console.log(`[17track] breaker open — skipping call for ${trackingNumber}`);
     return null;
   }
 
-  const carrierCode = carrierCodeFromTrackingUrl(trackingUrl);
-  const payload = [
-    {
-      number: trackingNumber,
-      ...(param ? { param } : {}),
-      ...(carrierCode ? { carrier: carrierCode } : {}),
-    },
-  ];
+  const bare = [{ number: trackingNumber, ...(param ? { param } : {}) }];
 
   seventeenTrackQueued.inc();
   const release = await sevenTrackSem.acquire();
@@ -367,69 +379,60 @@ export async function fetchTrackingFrom17track(
     return null;
   }
 
-  try {
-    await postJson<ApiResponse>(`${BASE}/register`, payload, apiKey);
-
-    const MAX_POLL = 3;
-    const RETRY_DELAY_MS = 1500;
-
-    for (let poll = 1; poll <= MAX_POLL; poll++) {
-      if (poll > 1) {
-        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
-      }
-
-      const infoRes = await postJson<ApiResponse>(`${BASE}/gettrackinfo`, payload, apiKey);
-
-      const accepted = infoRes.data?.accepted ?? [];
-      const rejected = infoRes.data?.rejected ?? [];
-
-      if (accepted.length > 0) {
-        const best =
-          accepted.find((a) => a.track_info?.latest_status?.status !== "NotFound") ??
-          accepted[0];
-        breakerSuccess();
-        return parseTrackInfo(best);
-      }
-
-      const rejection = rejected[0];
-      if (rejection?.error?.code === -18019909) {
-        if (poll < MAX_POLL) {
-          console.log(`[17track] pending for ${trackingNumber}, retry ${poll}/${MAX_POLL - 1}…`);
-          continue;
-        }
-        // "pending" is NOT a breaker failure — the API is up, data is just not ready.
-        breakerSuccess();
-        return {
-          state: "pending",
-          carrierName: null, carrierCode: null, status: null, lastEvent: null,
-          lastLocation: null, lastEventDate: null, delivered: false, events: [], recipientCountry: null,
-        };
-      }
-
-      // Quota / billing errors from 17track are upstream-healthy: the API is
-      // up, our account has just run out of quota for the period. Treat them
-      // as a success from the breaker's POV (the API isn't broken) and
-      // surface a typed state so the caller can show "wait until quota
-      // resets" instead of breaking tracking for all shops.
-      // Codes -18010008 / -18010009 / -18019902 are observed quota-exhausted
-      // signals; we also catch the generic -1801_xxxx family defensively.
-      const code = rejection?.error?.code;
+  // Poll gettrackinfo (carrier-agnostic) up to MAX_POLL; returns the typed
+  // outcome. `null` = API failure; "pending" / "quota" passthrough; otherwise
+  // the array of parsed candidates (possibly empty).
+  const MAX_POLL = 3;
+  const RETRY_DELAY_MS = 1500;
+  async function poll(): Promise<SevenTrackResult[] | "pending" | "quota" | null> {
+    for (let p = 1; p <= MAX_POLL; p++) {
+      if (p > 1) await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+      const res = await postJson<ApiResponse>(`${BASE}/gettrackinfo`, bare, apiKey);
+      const accepted = res.data?.accepted ?? [];
+      const rejected = res.data?.rejected ?? [];
+      if (accepted.length > 0) { breakerSuccess(); return accepted.map(parseTrackInfo); }
+      const code = rejected[0]?.error?.code;
+      if (code === -18019909) { if (p < MAX_POLL) continue; breakerSuccess(); return "pending"; }
       if (typeof code === "number" && (code === -18010008 || code === -18010009 || code === -18019902 || (code <= -18010000 && code >= -18019999))) {
-        console.warn(`[17track] quota exhausted for ${trackingNumber} (code=${code})`);
-        breakerSuccess();
-        return {
-          state: "quota_exhausted",
-          carrierName: null, carrierCode: null, status: null, lastEvent: null,
-          lastLocation: null, lastEventDate: null, delivered: false, events: [], recipientCountry: null,
-        };
+        breakerSuccess(); return "quota";
       }
+      console.warn("[17track] Unexpected rejection:", rejected[0]);
+      breakerFailure(); return null;
+    }
+    return null;
+  }
 
-      console.warn("[17track] Unexpected rejection:", rejection);
-      breakerFailure();
-      return null;
+  function emptyState(state: SevenTrackResult["state"]): SevenTrackResult {
+    return { state, carrierName: null, carrierCode: null, status: null, recipientCountry: null,
+      lastEvent: null, lastLocation: null, lastEventDate: null, delivered: false, events: [] };
+  }
+
+  try {
+    await postJson<ApiResponse>(`${BASE}/register`, bare, apiKey);
+    let candidates = await poll();
+    if (candidates === "pending") return emptyState("pending");
+    if (candidates === "quota") return emptyState("quota_exhausted");
+    if (candidates === null) return null;
+
+    let selection = selectCarrierCandidate(candidates, orderCountry, { previousCarrierCode });
+
+    // Reactive recovery: nothing usable AND we can derive a carrier hint not
+    // already among the candidates → register-add the hint and re-read once.
+    const noData = !selection.chosen || selection.chosen.status === "NotFound";
+    const hint = deriveCarrierHint(trackingNumber, trackingUrl);
+    const alreadyHave = hint != null && candidates.some((c) => c.carrierCode === hint);
+    if (noData && hint != null && !alreadyHave && !selection.corroborationMismatch) {
+      await postJson<ApiResponse>(`${BASE}/register`, [{ number: trackingNumber, carrier: hint, ...(param ? { param } : {}) }], apiKey);
+      const recovered = await poll();
+      if (Array.isArray(recovered)) {
+        candidates = recovered;
+        selection = selectCarrierCandidate(candidates, orderCountry, { hintCarrierCode: hint, previousCarrierCode });
+      }
     }
 
-    return null;
+    if (selection.corroborationMismatch) return emptyState("corroboration_mismatch");
+    if (!selection.chosen) return emptyState("pending"); // registered but no data yet
+    return { ...selection.chosen, inferredCarrier: selection.unverified } as SevenTrackResult;
   } catch (err) {
     console.error("[17track] Request failed:", err);
     breakerFailure();
