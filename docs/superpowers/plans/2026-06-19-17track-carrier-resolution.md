@@ -804,3 +804,236 @@ git commit -m "feat(tracking): metrics for resolution/hint/corroboration outcome
 - **changecarrier / re-registration of `-18019902` / scraping** are explicitly out of scope per the spec — not in the plan.
 - **Type consistency:** `SevenTrackResult` gains `recipientCountry`, `carrierCode`, `inferredCarrier`, and the `state` union gains `"corroboration_mismatch"` (Tasks 2 & 5). `selectCarrierCandidate` signature is identical in Task 3 (definition) and Task 5 (call). `fetchTrackingFrom17track(trackingNumber, opts)` is identical in Task 5 (definition) and Task 6 (call).
 - **Carefulness:** the breaker/semaphore/poll machinery is preserved; metrics increments are pure counter `.inc()` and never gate tracking; nothing ships as a behaviour change until Task 6 wires it; corroboration prevents confident-wrong output (the core-of-app safety property).
+
+---
+
+## Resilience tasks (added 2026-06-21)
+
+See the spec's "Resilience" section. These make a transient 17track failure
+non-destructive and self-healing — needed on this branch because the reactive
+register-add increases 17track call volume, aggravating rate-limit failures.
+
+### Task 8: Treat 17track rate-limit (429) and `-18019902` as transient, not destructive
+
+**Files:**
+- Modify: `app/lib/support/tracking/adapters/seventeen-track.ts` (`postJson`, the `poll()` rejection handling, and the `catch`)
+- Test: `app/lib/support/tracking/adapters/__tests__/seventeen-track.test.ts`
+
+**Interfaces:**
+- Consumes: existing `fetchTrackingFrom17track` flow, `emptyState`, breaker helpers.
+- Produces: a 429 anywhere → `state: "pending"` + `breakerSuccess` (breaker not tripped); a `-18019902` gettrackinfo rejection → `pending` (not `quota_exhausted`); quota code range narrowed to `-18010000…-18010999`.
+
+- [ ] **Step 1: Write the failing tests**
+
+Add to `describe("fetchTrackingFrom17track — retry logic", …)`:
+
+```ts
+it("treats an HTTP 429 as transient pending, and does NOT trip the breaker", async () => {
+  const { isOpen, __resetForTest } = await import("../../seventeen-track-breaker");
+  __resetForTest();
+  vi.mocked(fetch)
+    .mockResolvedValueOnce(mockOkFetch({ code: 0 }) as unknown as Response)            // register
+    .mockResolvedValueOnce({ ok: false, status: 429 } as unknown as Response);          // gettrackinfo 429
+  const r = await fetchTrackingFrom17track("LV109807596FR");
+  expect(r?.state).toBe("pending");
+  expect(isOpen()).toBe(false); // rate-limit must not open the breaker
+  __resetForTest();
+});
+
+it("treats a -18019902 (not-registered) rejection as pending, not quota_exhausted", async () => {
+  const NOTREG = { code: 0, data: { rejected: [{ number: "X", error: { code: -18019902, message: "not registered" } }] } };
+  vi.mocked(fetch)
+    .mockResolvedValueOnce(mockOkFetch({ code: 0 }) as unknown as Response)
+    .mockResolvedValueOnce(mockOkFetch(NOTREG) as unknown as Response)
+    .mockResolvedValueOnce(mockOkFetch(NOTREG) as unknown as Response)
+    .mockResolvedValueOnce(mockOkFetch(NOTREG) as unknown as Response);
+  const r = await fetchTrackingFrom17track("X");
+  expect(r?.state).toBe("pending");
+});
+
+it("still treats a real quota code (-18010008) as quota_exhausted", async () => {
+  const QUOTA = { code: 0, data: { rejected: [{ number: "X", error: { code: -18010008, message: "quota" } }] } };
+  vi.mocked(fetch)
+    .mockResolvedValueOnce(mockOkFetch({ code: 0 }) as unknown as Response)
+    .mockResolvedValueOnce(mockOkFetch(QUOTA) as unknown as Response);
+  const r = await fetchTrackingFrom17track("X");
+  expect(r?.state).toBe("quota_exhausted");
+});
+```
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `npm test -- seventeen-track`
+Expected: FAIL — 429 currently throws → `null`; `-18019902` currently → quota_exhausted.
+
+- [ ] **Step 3: Implement**
+
+In `seventeen-track.ts`:
+
+a) `postJson` — attach the HTTP status to the thrown error:
+```ts
+  if (!res.ok) {
+    const err = new Error(`HTTP ${res.status}`) as Error & { httpStatus?: number };
+    err.httpStatus = res.status;
+    throw err;
+  }
+```
+
+b) In `poll()`, handle `-18019902` as pending and narrow the quota range. Replace the rejection handling so it reads:
+```ts
+      const code = rejected[0]?.error?.code;
+      if (code === -18019909 || code === -18019902) {
+        // -18019909 = data not ready; -18019902 = not registered yet (we just
+        // registered bare). Both are transient → keep polling, then pending.
+        if (p < MAX_POLL) continue;
+        breakerSuccess();
+        return "pending";
+      }
+      // Real account/quota errors only (-180100xx); NOT the -180199xx
+      // registration/status family.
+      if (typeof code === "number" && code <= -18010000 && code >= -18010999) {
+        breakerSuccess();
+        return "quota";
+      }
+      console.warn("[17track] Unexpected rejection:", rejected[0]);
+      breakerFailure();
+      return null;
+```
+
+c) In the outer `catch (err)`, treat a 429 as transient (API up, throttled):
+```ts
+  } catch (err) {
+    if ((err as { httpStatus?: number })?.httpStatus === 429) {
+      console.warn(`[17track] rate-limited (429) for ${trackingNumber}; transient`);
+      breakerSuccess(); // a rate-limit is not a breaker-worthy failure
+      return emptyState("pending");
+    }
+    console.error("[17track] Request failed:", err);
+    breakerFailure();
+    return null;
+  }
+```
+
+- [ ] **Step 4: Run to verify they pass**
+
+Run: `npm test -- seventeen-track`
+Expected: PASS — including existing breaker/quota tests (the `-18010008` quota test stays green; the generic HTTP-500 test still returns `null` and trips the breaker).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add app/lib/support/tracking/adapters/seventeen-track.ts app/lib/support/tracking/adapters/__tests__/seventeen-track.test.ts
+git commit -m "fix(tracking): 17track 429 + not-registered are transient, not destructive"
+```
+
+---
+
+### Task 9: Non-destructive refresh — preserve last-known-good 17track data
+
+**Files:**
+- Modify: `app/lib/support/tracking/tracking-service.ts` (`getTrackingFacts` + `resolveOneFulfillment`)
+- Modify: `app/lib/support/orchestrator.ts` (`AnalyzeInput` + the `getTrackingFacts` call ~line 211)
+- Modify: `app/lib/support/analyze-thread.ts` (forward `previousAnalysis?.trackings` in the `analyzeSupportEmail` call ~line 364)
+- Modify: `app/lib/metrics/definitions.ts` (add `preserved_stale` as a valid `outcome` value — documentation only; the label is free-form so no code change is strictly required, but note it in the comment)
+- Test: `app/lib/support/tracking/__tests__/tracking-service-attempts.test.ts`
+
+**Interfaces:**
+- Consumes: `FulfillmentTrackingFacts` (existing), `getTrackingFacts`.
+- Produces: `getTrackingFacts(order, opts?: { previousTrackings?: FulfillmentTrackingFacts[] })`; on a Shopify-fallback outcome for a number whose previous fact had `source: "seventeen_track"`, the previous fact is returned (data preserved) with the new `last17trackAttempt`/`At`.
+
+- [ ] **Step 1: Write the failing tests**
+
+Add to `tracking-service-attempts.test.ts`:
+
+```ts
+it("preserves the previous 17track data when the refresh attempt errors (no downgrade to Shopify)", async () => {
+  vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue(null); // transient failure
+  const order = makeOrder(); // fulfillment trackingNumbers = ["LV109807596FR"]
+  const previousTrackings = [{
+    source: "seventeen_track", carrier: "Cainiao", trackingNumber: "LV109807596FR",
+    trackingUrl: null, status: "InTransit", inferred: false, events: [],
+    lastEvent: "Sorted", lastLocation: "Paris", lastEventDate: "2026-06-10T00:00:00Z",
+    delivered: false, fulfillmentIndex: 0, lineItems: [],
+    last17trackAttempt: "ok", last17trackAttemptAt: "2026-06-10T00:00:00Z",
+  }] as unknown as Parameters<typeof getTrackingFacts>[1]["previousTrackings"];
+  const [t] = await getTrackingFacts(order, { previousTrackings });
+  expect(t.source).toBe("seventeen_track");   // kept, not downgraded
+  expect(t.status).toBe("InTransit");
+  expect(t.carrier).toBe("Cainiao");
+  expect(t.last17trackAttempt).toBe("error"); // retry bookkeeping still updated
+});
+
+it("falls back to Shopify when there is no previous 17track data", async () => {
+  vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue(null);
+  const [t] = await getTrackingFacts(makeOrder()); // no previousTrackings
+  expect(t.source).not.toBe("seventeen_track");
+  expect(t.last17trackAttempt).toBe("error");
+});
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `npm test -- tracking-service-attempts`
+Expected: FAIL — `getTrackingFacts` takes no opts; the error path always returns the Shopify fallback.
+
+- [ ] **Step 3: Implement**
+
+In `tracking-service.ts`:
+- Signature: `export async function getTrackingFacts(order: OrderFacts | null, opts: { previousTrackings?: FulfillmentTrackingFacts[] } = {}): Promise<FulfillmentTrackingFacts[]>`.
+- Pass `opts.previousTrackings` into `resolveOneFulfillment` as a new last parameter `previousTrackings: FulfillmentTrackingFacts[] | undefined`.
+- At the top of `resolveOneFulfillment` (after `attemptAt`), add the preserve helper:
+```ts
+  const prevGood = trackingNumber
+    ? previousTrackings?.find(
+        (p) => p.trackingNumber === trackingNumber && p.source === "seventeen_track",
+      )
+    : undefined;
+  const fallback = (
+    attempt: FulfillmentTrackingFacts["last17trackAttempt"],
+    inferredOverride?: boolean,
+  ): FulfillmentTrackingFacts => {
+    if (prevGood) {
+      // Last-known-good 17track data — never downgrade it to Shopify on a blip.
+      return { ...prevGood, fulfillmentIndex, lineItems, last17trackAttempt: attempt, last17trackAttemptAt: attemptAt };
+    }
+    const base = resolveTrackingForFulfillment(fulfillment, trackingNumber, trackingUrl);
+    return {
+      ...base,
+      ...(inferredOverride !== undefined ? { inferred: inferredOverride } : {}),
+      fulfillmentIndex, lineItems, last17trackAttempt: attempt, last17trackAttemptAt: attemptAt,
+    };
+  };
+```
+- Replace the four Shopify-fallback return sites to use `fallback(...)`:
+  - no tracking number branch → unchanged (keep `resolveTrackingForFulfillment(fulfillment, trackingNumber, trackingUrl)` with `last17trackAttempt: "skipped"`; `prevGood` is undefined here anyway since there is no number).
+  - `quota_exhausted` → `return fallback("skipped");`
+  - the `result === null` branch → `return fallback(attempt);`
+  - the `catch` branch → `return fallback("error");`
+  - the `corroboration_mismatch` branch (from Task 6) → `return fallback("ok", true);` (preserve good if present, else Shopify marked `inferred: true`).
+- In `getTrackingFacts`, thread `opts.previousTrackings` through to each `resolveOneFulfillment(..., param, opts.previousTrackings)` call.
+
+In `orchestrator.ts`:
+- `AnalyzeInput` += `previousTrackings?: FulfillmentTrackingFacts[];`
+- Line ~211: `trackings = await getTrackingFacts(order, { previousTrackings: input.previousTrackings });`
+
+In `analyze-thread.ts`:
+- In the `analyzeSupportEmail({...})` call (~line 364), add: `previousTrackings: previousAnalysis?.trackings ?? undefined,`
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `npm test -- tracking-service-attempts tracking` then `npm test`
+Expected: PASS (full suite green).
+
+- [ ] **Step 5: Typecheck + commit**
+
+Run: `npm run typecheck` (no new errors).
+```bash
+git add app/lib/support/tracking/tracking-service.ts app/lib/support/orchestrator.ts app/lib/support/analyze-thread.ts app/lib/support/tracking/__tests__/tracking-service-attempts.test.ts
+git commit -m "fix(tracking): preserve last-known-good 17track data across transient refresh failures"
+```
+
+## Resilience self-review
+
+- **Spec coverage:** non-destructive refresh (Task 9), 429-transient (Task 8), `-18019902` reclassification (Task 8). All three resilience root-causes covered.
+- **Carefulness:** Task 8 keeps the breaker from tripping on rate-limits (the amplifier) and the generic HTTP-error/`null`→breaker path is unchanged for real failures; Task 9 only ever *keeps better data* — it cannot fabricate or worsen, and falls back to today's Shopify behaviour when there is no prior 17track fact. Retry bookkeeping (`last17trackAttempt`) is always stamped so cadence is unaffected.
+- **Type consistency:** `getTrackingFacts(order, opts?)` defined in Task 9 (tracking-service) and called in Task 9 (orchestrator); `AnalyzeInput.previousTrackings` defined and consumed in Task 9.

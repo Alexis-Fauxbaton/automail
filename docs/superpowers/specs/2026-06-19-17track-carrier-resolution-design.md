@@ -173,12 +173,58 @@ The sample is one Cainiao-heavy dropship shop. Why the design holds beyond it:
   only for genuinely-NotFound numbers; idempotent on refresh. Tracked.
 - The ">99%" target is **measured in prod**, not asserted here.
 
+## Resilience (added 2026-06-21 — same branch)
+
+A production survey (read-only, 800 latest stored analyses) found **~17% of shipped
+parcels displayed a Shopify-fallback source instead of 17track**, almost all stamped
+`last17trackAttempt: "error"`. Investigation (verified):
+
+- **Root cause 1 — refreshes overwrite, destructively.** `orchestrator.ts` recomputes
+  `trackings = await getTrackingFacts(order)` on every refresh with **no** reuse of
+  the previous trackings (there is `reuseOrder`/`reuseIntents` but no `reuseTracking`).
+  So a *transient* 17track failure replaces a good `seventeen_track` result with the
+  Shopify fallback, and if the thread then goes inactive it stays frozen on Shopify.
+- **Root cause 2 — transient HTTP failures are hard + untreated.** `postJson` throws on
+  any `!res.ok` (incl. **HTTP 429 rate-limit**); the adapter turns that into a `null`
+  (→ `error` → Shopify overwrite) and a breaker failure. 8/10 surveyed stuck numbers
+  resolve fine on a later query — the failures were point-in-time rate-limits. This
+  feature's reactive register-add modestly *increases* 17track call volume, so it
+  aggravates exactly this weakness — hence it ships on the same branch.
+- **Root cause 3 — `-18019902` mis-classified as quota.** Official 17track docs:
+  `-18019902` = *"the tracking number does not register, please register first"* (not
+  indexed yet), **not** quota. The adapter's over-broad quota range
+  (`-18010000 … -18019999`) swallows it → `quota_exhausted` → `skipped`/1h retry
+  instead of register + fast retry.
+
+### Resilience design
+
+1. **Non-destructive refresh.** Thread the previous analysis's trackings into the
+   orchestrator (`analyze-thread.ts` already holds `previousAnalysis.trackings`) →
+   `getTrackingFacts(order, { previousTrackings })`. In `resolveOneFulfillment`, when
+   the 17track outcome is a Shopify-fallback case (null/error, quota, catch,
+   `corroboration_mismatch`) **and** a previous fact for the same `trackingNumber` had
+   `source: "seventeen_track"`, return that previous fact (preserve its data) with the
+   new `last17trackAttempt`/`At` stamped so retry cadence still fires. Shopify fallback
+   only when there is no prior 17track data. Never downgrade good data to Shopify on a
+   blip.
+2. **Treat HTTP 429 (and rate-limit) as transient, not destructive.** On 429, do a
+   bounded retry honoring `Retry-After`; if still limited, return a `pending`-like
+   state with `breakerSuccess` (the API is up, just throttled) instead of a breaker
+   failure + `null`. A rate-limit must not trip the breaker or overwrite data.
+3. **Reclassify `-18019902`.** Remove it from the quota classification; treat it as
+   "not registered yet" → `pending` (fast retry), since we already register bare first.
+   Narrow the quota code set to the real account/quota codes only.
+
+These make a transient 17track failure non-destructive and self-healing, and stop the
+feature's extra load from degrading display quality.
+
 ## Out of scope
 
 - `changecarrier` (we use additive `register`; keep as a possible cleanup later).
-- Re-registration of `-18019902` ("not registered") numbers — a separate concern.
 - Scraping / crawl changes.
 - Display-layer redesign beyond the existing `inferred` / unverified badge.
+- Refreshing inactive (resolved/no_reply_needed) threads — they intentionally do not
+  refresh; non-destructive refresh only protects them from a *future* downgrade.
 
 ## Related
 
