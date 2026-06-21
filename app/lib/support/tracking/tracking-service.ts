@@ -34,9 +34,43 @@ async function resolveOneFulfillment(
   param: string | null,
   orderCountry: string | null,
   previousCarrierCode: number | null = null,
+  previousTrackings?: FulfillmentTrackingFacts[],
 ): Promise<FulfillmentTrackingFacts> {
   const lineItems = fulfillment.lineItems;
   const attemptAt = new Date().toISOString();
+
+  // Last-known-good 17track fact for this tracking number, if any.
+  // Used by the fallback helper to avoid downgrading good data on a transient failure.
+  const prevGood = trackingNumber
+    ? previousTrackings?.find(
+        (p) => p.trackingNumber === trackingNumber && p.source === "seventeen_track",
+      )
+    : undefined;
+
+  /**
+   * Return either the last-known-good 17track fact (preserving carrier/status/events)
+   * or the Shopify fallback — whichever is appropriate.
+   * Always stamps `last17trackAttempt` and `last17trackAttemptAt` so retry cadence fires.
+   * Never fabricates data: only returns pre-existing 17track data or live Shopify data.
+   */
+  const fallback = (
+    attempt: FulfillmentTrackingFacts["last17trackAttempt"],
+    inferredOverride?: boolean,
+  ): FulfillmentTrackingFacts => {
+    if (prevGood) {
+      // Last-known-good 17track data — never downgrade it to Shopify on a blip.
+      return { ...prevGood, fulfillmentIndex, lineItems, last17trackAttempt: attempt, last17trackAttemptAt: attemptAt };
+    }
+    const base = resolveTrackingForFulfillment(fulfillment, trackingNumber, trackingUrl);
+    return {
+      ...base,
+      ...(inferredOverride !== undefined ? { inferred: inferredOverride } : {}),
+      fulfillmentIndex,
+      lineItems,
+      last17trackAttempt: attempt,
+      last17trackAttemptAt: attemptAt,
+    };
+  };
 
   // No tracking number → nothing to ask 17track about.
   if (!trackingNumber) {
@@ -108,32 +142,17 @@ async function resolveOneFulfillment(
     if (result && result.state === "quota_exhausted") {
       // Our 17track plan ran out for the period. The API is healthy, retry
       // won't help until the next billing cycle. Fall back to Shopify-only
-      // tracking and mark the attempt as "skipped" so the adaptive retry
-      // logic doesn't burn 17track quota uselessly trying again soon.
+      // tracking (or last-known-good) and mark the attempt as "skipped" so
+      // the adaptive retry logic doesn't burn 17track quota uselessly trying again soon.
       console.warn(`[tracking] 17track quota exhausted for ${trackingNumber}; using Shopify fallback`);
-      const base = resolveTrackingForFulfillment(fulfillment, trackingNumber, trackingUrl);
-      return {
-        ...base,
-        fulfillmentIndex,
-        lineItems,
-        last17trackAttempt: "skipped",
-        last17trackAttemptAt: attemptAt,
-      };
+      return fallback("skipped");
     }
     if (result && result.state === "corroboration_mismatch") {
       // 17track's recipient country contradicts the order country — likely another
-      // customer's parcel. Fall back to Shopify data and mark it unverified.
+      // customer's parcel. Fall back to Shopify data (or last-known-good) and mark it unverified.
       trackingCorroborationTotal.inc({ result: "mismatch_rejected" });
       trackingResolutionTotal.inc({ outcome: "notfound" });
-      const base = resolveTrackingForFulfillment(fulfillment, trackingNumber, trackingUrl);
-      return {
-        ...base,
-        inferred: true,
-        fulfillmentIndex,
-        lineItems,
-        last17trackAttempt: "ok",
-        last17trackAttemptAt: attemptAt,
-      };
+      return fallback("ok", true);
     }
     // result === null → 17track failed (HTTP error, breaker open, no API key, or unexpected rejection).
     // Three buckets:
@@ -148,34 +167,27 @@ async function resolveOneFulfillment(
     else if (is17trackBreakerOpen()) attempt = "skipped";
     else attempt = "error";
     if (attempt === "error") trackingResolutionTotal.inc({ outcome: "error" });
-    const base = resolveTrackingForFulfillment(fulfillment, trackingNumber, trackingUrl);
-    return {
-      ...base,
-      fulfillmentIndex,
-      lineItems,
-      last17trackAttempt: attempt,
-      last17trackAttemptAt: attemptAt,
-    };
+    return fallback(attempt);
   } catch (err) {
     trackingResolutionTotal.inc({ outcome: "error" });
     console.error(`[tracking] 17track failed for fulfillment ${fulfillmentIndex}, using Shopify:`, err);
-    const base = resolveTrackingForFulfillment(fulfillment, trackingNumber, trackingUrl);
-    return {
-      ...base,
-      fulfillmentIndex,
-      lineItems,
-      last17trackAttempt: "error",
-      last17trackAttemptAt: attemptAt,
-    };
+    return fallback("error");
   }
 }
 
 /**
  * Returns one `FulfillmentTrackingFacts` per fulfillment in the order.
  * Fulfillments with no tracking info produce a `source: "none"` entry.
+ *
+ * Pass `opts.previousTrackings` to enable non-destructive refresh: when a
+ * 17track attempt fails transiently, the last-known-good 17track fact for
+ * the same tracking number is preserved instead of being replaced by a
+ * Shopify fallback. Retry bookkeeping (`last17trackAttempt`) is always
+ * stamped so the adaptive retry cadence still fires correctly.
  */
 export async function getTrackingFacts(
   order: OrderFacts | null,
+  opts: { previousTrackings?: FulfillmentTrackingFacts[] } = {},
 ): Promise<FulfillmentTrackingFacts[]> {
   if (!order || order.fulfillments.length === 0) return [];
 
@@ -192,7 +204,7 @@ export async function getTrackingFacts(
       const trackingUrl = trackingNumber
         ? (fulfillment.trackingUrls[ti] ?? fulfillment.trackingUrls[0] ?? null)
         : null;
-      tasks.push(resolveOneFulfillment(fulfillment, index, trackingNumber, trackingUrl, param, order.destinationCountry ?? null, null));
+      tasks.push(resolveOneFulfillment(fulfillment, index, trackingNumber, trackingUrl, param, order.destinationCountry ?? null, null, opts.previousTrackings));
     });
   });
   return Promise.all(tasks);

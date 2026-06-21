@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { getTrackingFacts } from "../tracking-service";
 import * as adapter from "../adapters/seventeen-track";
-import type { OrderFacts } from "../../types";
+import type { FulfillmentTrackingFacts, OrderFacts } from "../../types";
 import {
   trackingResolutionTotal,
   trackingCorroborationTotal,
@@ -248,5 +248,35 @@ describe("getTrackingFacts — production metrics", () => {
     await getTrackingFacts(makeOrder());
     expect(findCounterValue(trackingResolutionTotal.collect(), { outcome: "ok_auto" })).toBe(beforeRes + 1);
     expect(findCounterValue(trackingCorroborationTotal.collect(), { result: "match" })).toBe(beforeCorr + 1);
+  });
+});
+
+describe("getTrackingFacts — non-destructive refresh (task 9)", () => {
+  const KEY = process.env.SEVENTEEN_TRACK_API_KEY;
+  beforeEach(() => { process.env.SEVENTEEN_TRACK_API_KEY = "test-key"; });
+  afterEach(() => { process.env.SEVENTEEN_TRACK_API_KEY = KEY; vi.restoreAllMocks(); });
+
+  it("preserves the previous 17track data when the refresh attempt errors (no downgrade to Shopify)", async () => {
+    vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue(null); // transient failure
+    const order = makeOrder(); // fulfillment trackingNumbers = ["LV109807596FR"]
+    const previousTrackings = [{
+      source: "seventeen_track", carrier: "Cainiao", trackingNumber: "LV109807596FR",
+      trackingUrl: null, status: "InTransit", inferred: false, events: [],
+      lastEvent: "Sorted", lastLocation: "Paris", lastEventDate: "2026-06-10T00:00:00Z",
+      delivered: false, fulfillmentIndex: 0, lineItems: [],
+      last17trackAttempt: "ok", last17trackAttemptAt: "2026-06-10T00:00:00Z",
+    }] as unknown as FulfillmentTrackingFacts[];
+    const [t] = await getTrackingFacts(order, { previousTrackings });
+    expect(t.source).toBe("seventeen_track");   // kept, not downgraded
+    expect(t.status).toBe("InTransit");
+    expect(t.carrier).toBe("Cainiao");
+    expect(t.last17trackAttempt).toBe("error"); // retry bookkeeping still updated
+  });
+
+  it("falls back to Shopify when there is no previous 17track data", async () => {
+    vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue(null);
+    const [t] = await getTrackingFacts(makeOrder()); // no previousTrackings
+    expect(t.source).not.toBe("seventeen_track");
+    expect(t.last17trackAttempt).toBe("error");
   });
 });
