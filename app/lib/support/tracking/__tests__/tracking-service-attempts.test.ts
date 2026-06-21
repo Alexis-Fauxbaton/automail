@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { getTrackingFacts } from "../tracking-service";
 import * as adapter from "../adapters/seventeen-track";
-import type { OrderFacts } from "../../types";
+import type { FulfillmentTrackingFacts, OrderFacts } from "../../types";
+import {
+  trackingResolutionTotal,
+  trackingCorroborationTotal,
+  trackingHintTotal,
+} from "../../../metrics/definitions";
 
 function makeOrder(): OrderFacts {
   return {
@@ -30,9 +35,9 @@ describe("getTrackingFacts — last17trackAttempt stamping", () => {
 
   it("stamps 'ok' when 17track returns ok", async () => {
     vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue({
-      state: "ok", carrierName: "La Poste", status: "InTransit",
+      state: "ok", carrierName: "La Poste", carrierCode: 6051, status: "InTransit",
       lastEvent: "Sorted", lastLocation: "Paris", lastEventDate: "2026-05-14T08:00:00Z",
-      delivered: false, events: [],
+      delivered: false, events: [], recipientCountry: null,
     });
     const [t] = await getTrackingFacts(makeOrder());
     expect(t.last17trackAttempt).toBe("ok");
@@ -42,8 +47,8 @@ describe("getTrackingFacts — last17trackAttempt stamping", () => {
 
   it("stamps 'pending' when 17track is pending", async () => {
     vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue({
-      state: "pending", carrierName: null, status: null, lastEvent: null,
-      lastLocation: null, lastEventDate: null, delivered: false, events: [],
+      state: "pending", carrierName: null, carrierCode: null, status: null, lastEvent: null,
+      lastLocation: null, lastEventDate: null, delivered: false, events: [], recipientCountry: null,
     });
     const [t] = await getTrackingFacts(makeOrder());
     expect(t.last17trackAttempt).toBe("pending");
@@ -98,5 +103,227 @@ describe("getTrackingFacts — last17trackAttempt stamping", () => {
     const [t] = await getTrackingFacts(makeOrder());
     expect(t.last17trackAttempt).toBe("skipped");
     __resetForTest(); // restore for subsequent tests
+  });
+
+  it("passes orderCountry and tracking URL to the adapter", async () => {
+    const spy = vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue({
+      state: "ok", carrierName: "Cainiao", carrierCode: 190271, status: "Delivered",
+      recipientCountry: "FR", lastEvent: null, lastLocation: null, lastEventDate: null,
+      delivered: true, events: [],
+    } as unknown as Awaited<ReturnType<typeof adapter.fetchTrackingFrom17track>>);
+    const order = makeOrder();
+    (order as unknown as { destinationCountry: string }).destinationCountry = "FR";
+    order.fulfillments[0].trackingUrls = ["https://global.cainiao.com/x"];
+    await getTrackingFacts(order);
+    expect(spy).toHaveBeenCalledWith("LV109807596FR", expect.objectContaining({ orderCountry: "FR", trackingUrl: "https://global.cainiao.com/x" }));
+  });
+
+  it("marks the fact unverified when the adapter returns corroboration_mismatch", async () => {
+    vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue({
+      state: "corroboration_mismatch", carrierName: null, carrierCode: null, status: null,
+      recipientCountry: null, lastEvent: null, lastLocation: null, lastEventDate: null,
+      delivered: false, events: [],
+    } as unknown as Awaited<ReturnType<typeof adapter.fetchTrackingFrom17track>>);
+    const [t] = await getTrackingFacts(makeOrder());
+    expect(t.source).not.toBe("seventeen_track");
+    expect(t.inferred).toBe(true);
+    expect(t.last17trackAttempt).toBe("ok");
+  });
+});
+
+// Helper: find the value for a specific label set in a counter's series.
+function findCounterValue(
+  series: Array<{ labels: Record<string, string>; value: number }>,
+  labels: Record<string, string>,
+): number {
+  const match = series.find((s) =>
+    Object.entries(labels).every(([k, v]) => s.labels[k] === v),
+  );
+  return match?.value ?? 0;
+}
+
+describe("getTrackingFacts — production metrics", () => {
+  // The metrics registry is a singleton whose counter series survive between
+  // tests (the exported counter objects close over the internal series Map, so
+  // __resetMetricsForTest only disconnects them from the registry index — it
+  // does NOT zero the series). We therefore use a before/after delta pattern:
+  // capture the value BEFORE the call under test and assert it increased by 1.
+  const KEY = process.env.SEVENTEEN_TRACK_API_KEY;
+  beforeEach(() => {
+    process.env.SEVENTEEN_TRACK_API_KEY = "test-key";
+  });
+  afterEach(() => { process.env.SEVENTEEN_TRACK_API_KEY = KEY; vi.restoreAllMocks(); });
+
+  it("increments tracking_resolution_total{outcome=ok_auto} on a plain ok result (no inferred carrier)", async () => {
+    const before = findCounterValue(trackingResolutionTotal.collect(), { outcome: "ok_auto" });
+    vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue({
+      state: "ok", carrierName: "Cainiao", carrierCode: 190271, status: "Delivered",
+      recipientCountry: "FR", lastEvent: null, lastLocation: null, lastEventDate: null,
+      delivered: true, events: [], inferredCarrier: false,
+    } as unknown as Awaited<ReturnType<typeof adapter.fetchTrackingFrom17track>>);
+    await getTrackingFacts(makeOrder());
+    expect(findCounterValue(trackingResolutionTotal.collect(), { outcome: "ok_auto" })).toBe(before + 1);
+  });
+
+  it("increments tracking_resolution_total{outcome=ok_hint_recovered} + trackingHintTotal{source=reactive,result=recovered} when recoveredViaHint is true", async () => {
+    const beforeRes = findCounterValue(trackingResolutionTotal.collect(), { outcome: "ok_hint_recovered" });
+    const beforeHint = findCounterValue(trackingHintTotal.collect(), { source: "reactive", result: "recovered" });
+    vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue({
+      state: "ok", carrierName: "Cainiao", carrierCode: 190271, status: "InTransit",
+      recipientCountry: null, lastEvent: null, lastLocation: null, lastEventDate: null,
+      delivered: false, events: [], recoveredViaHint: true,
+    } as unknown as Awaited<ReturnType<typeof adapter.fetchTrackingFrom17track>>);
+    await getTrackingFacts(makeOrder());
+    expect(findCounterValue(trackingResolutionTotal.collect(), { outcome: "ok_hint_recovered" })).toBe(beforeRes + 1);
+    expect(findCounterValue(trackingHintTotal.collect(), { source: "reactive", result: "recovered" })).toBe(beforeHint + 1);
+  });
+
+  it("increments tracking_resolution_total{outcome=pending} on pending state", async () => {
+    const before = findCounterValue(trackingResolutionTotal.collect(), { outcome: "pending" });
+    vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue({
+      state: "pending", carrierName: null, carrierCode: null, status: null, lastEvent: null,
+      lastLocation: null, lastEventDate: null, delivered: false, events: [], recipientCountry: null,
+    });
+    await getTrackingFacts(makeOrder());
+    expect(findCounterValue(trackingResolutionTotal.collect(), { outcome: "pending" })).toBe(before + 1);
+  });
+
+  it("increments tracking_resolution_total{outcome=notfound} + corroboration{result=mismatch_rejected} on corroboration_mismatch", async () => {
+    const beforeRes = findCounterValue(trackingResolutionTotal.collect(), { outcome: "notfound" });
+    const beforeCorr = findCounterValue(trackingCorroborationTotal.collect(), { result: "mismatch_rejected" });
+    vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue({
+      state: "corroboration_mismatch", carrierName: null, carrierCode: null, status: null,
+      recipientCountry: null, lastEvent: null, lastLocation: null, lastEventDate: null,
+      delivered: false, events: [],
+    } as unknown as Awaited<ReturnType<typeof adapter.fetchTrackingFrom17track>>);
+    await getTrackingFacts(makeOrder());
+    expect(findCounterValue(trackingResolutionTotal.collect(), { outcome: "notfound" })).toBe(beforeRes + 1);
+    expect(findCounterValue(trackingCorroborationTotal.collect(), { result: "mismatch_rejected" })).toBe(beforeCorr + 1);
+  });
+
+  it("increments tracking_resolution_total{outcome=error} when adapter throws", async () => {
+    const before = findCounterValue(trackingResolutionTotal.collect(), { outcome: "error" });
+    vi.spyOn(adapter, "fetchTrackingFrom17track").mockRejectedValue(new Error("boom"));
+    await getTrackingFacts(makeOrder());
+    expect(findCounterValue(trackingResolutionTotal.collect(), { outcome: "error" })).toBe(before + 1);
+  });
+
+  it("increments tracking_resolution_total{outcome=error} when adapter returns null (real transient failure)", async () => {
+    const before = findCounterValue(trackingResolutionTotal.collect(), { outcome: "error" });
+    vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue(null);
+    await getTrackingFacts(makeOrder());
+    expect(findCounterValue(trackingResolutionTotal.collect(), { outcome: "error" })).toBe(before + 1);
+  });
+
+  it("increments corroboration{result=match} when recipientCountry is set and carrier is confirmed", async () => {
+    const before = findCounterValue(trackingCorroborationTotal.collect(), { result: "match" });
+    vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue({
+      state: "ok", carrierName: "La Poste", carrierCode: 6051, status: "InTransit",
+      recipientCountry: "FR", lastEvent: null, lastLocation: null, lastEventDate: null,
+      delivered: false, events: [], inferredCarrier: false,
+    } as unknown as Awaited<ReturnType<typeof adapter.fetchTrackingFrom17track>>);
+    await getTrackingFacts(makeOrder());
+    expect(findCounterValue(trackingCorroborationTotal.collect(), { result: "match" })).toBe(before + 1);
+  });
+
+  it("increments corroboration{result=absent_unverified} when recipientCountry is null and recoveredViaHint is false (no gap case)", async () => {
+    const before = findCounterValue(trackingCorroborationTotal.collect(), { result: "absent_unverified" });
+    vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue({
+      state: "ok", carrierName: "Cainiao", carrierCode: 190271, status: "InTransit",
+      recipientCountry: null, lastEvent: null, lastLocation: null, lastEventDate: null,
+      delivered: false, events: [], recoveredViaHint: false,
+    } as unknown as Awaited<ReturnType<typeof adapter.fetchTrackingFrom17track>>);
+    await getTrackingFacts(makeOrder());
+    expect(findCounterValue(trackingCorroborationTotal.collect(), { result: "absent_unverified" })).toBe(before + 1);
+  });
+
+  it("increments tracking_resolution_total{outcome=notfound} when state is ok but status is NotFound", async () => {
+    const beforeNotFound = findCounterValue(trackingResolutionTotal.collect(), { outcome: "notfound" });
+    const beforeOkAuto = findCounterValue(trackingResolutionTotal.collect(), { outcome: "ok_auto" });
+    vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue({
+      state: "ok", carrierName: null, carrierCode: null, status: "NotFound",
+      recipientCountry: null, lastEvent: null, lastLocation: null, lastEventDate: null,
+      delivered: false, events: [],
+    } as unknown as Awaited<ReturnType<typeof adapter.fetchTrackingFrom17track>>);
+    await getTrackingFacts(makeOrder());
+    expect(findCounterValue(trackingResolutionTotal.collect(), { outcome: "notfound" })).toBe(beforeNotFound + 1);
+    // Must NOT increment ok_auto
+    expect(findCounterValue(trackingResolutionTotal.collect(), { outcome: "ok_auto" })).toBe(beforeOkAuto);
+  });
+
+  it("increments tracking_resolution_total{outcome=ok_auto} (not notfound) when state is ok and status is Delivered", async () => {
+    const beforeOkAuto = findCounterValue(trackingResolutionTotal.collect(), { outcome: "ok_auto" });
+    const beforeNotFound = findCounterValue(trackingResolutionTotal.collect(), { outcome: "notfound" });
+    vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue({
+      state: "ok", carrierName: "La Poste", carrierCode: 6051, status: "Delivered",
+      recipientCountry: "FR", lastEvent: null, lastLocation: null, lastEventDate: null,
+      delivered: true, events: [],
+    } as unknown as Awaited<ReturnType<typeof adapter.fetchTrackingFrom17track>>);
+    await getTrackingFacts(makeOrder());
+    expect(findCounterValue(trackingResolutionTotal.collect(), { outcome: "ok_auto" })).toBe(beforeOkAuto + 1);
+    // Must NOT increment notfound
+    expect(findCounterValue(trackingResolutionTotal.collect(), { outcome: "notfound" })).toBe(beforeNotFound);
+  });
+
+  it("ok_auto + corroboration{match} when recipientCountry is set and recoveredViaHint is absent/false", async () => {
+    const beforeRes = findCounterValue(trackingResolutionTotal.collect(), { outcome: "ok_auto" });
+    const beforeCorr = findCounterValue(trackingCorroborationTotal.collect(), { result: "match" });
+    vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue({
+      state: "ok", carrierName: "La Poste", carrierCode: 6051, status: "InTransit",
+      recipientCountry: "FR", lastEvent: null, lastLocation: null, lastEventDate: null,
+      delivered: false, events: [],
+    } as unknown as Awaited<ReturnType<typeof adapter.fetchTrackingFrom17track>>);
+    await getTrackingFacts(makeOrder());
+    expect(findCounterValue(trackingResolutionTotal.collect(), { outcome: "ok_auto" })).toBe(beforeRes + 1);
+    expect(findCounterValue(trackingCorroborationTotal.collect(), { result: "match" })).toBe(beforeCorr + 1);
+  });
+});
+
+describe("getTrackingFacts — non-destructive refresh (task 9)", () => {
+  const KEY = process.env.SEVENTEEN_TRACK_API_KEY;
+  beforeEach(() => { process.env.SEVENTEEN_TRACK_API_KEY = "test-key"; });
+  afterEach(() => { process.env.SEVENTEEN_TRACK_API_KEY = KEY; vi.restoreAllMocks(); });
+
+  it("preserves the previous 17track data when the refresh attempt errors (no downgrade to Shopify)", async () => {
+    vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue(null); // transient failure
+    const order = makeOrder(); // fulfillment trackingNumbers = ["LV109807596FR"]
+    const previousTrackings = [{
+      source: "seventeen_track", carrier: "Cainiao", trackingNumber: "LV109807596FR",
+      trackingUrl: null, status: "InTransit", inferred: false, events: [],
+      lastEvent: "Sorted", lastLocation: "Paris", lastEventDate: "2026-06-10T00:00:00Z",
+      delivered: false, fulfillmentIndex: 0, lineItems: [],
+      last17trackAttempt: "ok", last17trackAttemptAt: "2026-06-10T00:00:00Z",
+    }] as unknown as FulfillmentTrackingFacts[];
+    const [t] = await getTrackingFacts(order, { previousTrackings });
+    expect(t.source).toBe("seventeen_track");   // kept, not downgraded
+    expect(t.status).toBe("InTransit");
+    expect(t.carrier).toBe("Cainiao");
+    expect(t.last17trackAttempt).toBe("error"); // retry bookkeeping still updated
+  });
+
+  it("falls back to Shopify when there is no previous 17track data", async () => {
+    vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue(null);
+    const [t] = await getTrackingFacts(makeOrder()); // no previousTrackings
+    expect(t.source).not.toBe("seventeen_track");
+    expect(t.last17trackAttempt).toBe("error");
+  });
+
+  it("preserves previous 17track data on corroboration_mismatch and flags it unverified", async () => {
+    vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue({
+      state: "corroboration_mismatch",
+    } as unknown as Awaited<ReturnType<typeof adapter.fetchTrackingFrom17track>>);
+    const order = makeOrder(); // fulfillment trackingNumbers = ["LV109807596FR"]
+    const previousTrackings = [{
+      source: "seventeen_track", carrier: "Cainiao", trackingNumber: "LV109807596FR",
+      trackingUrl: null, status: "InTransit", inferred: false, events: [],
+      lastEvent: "Sorted", lastLocation: "Paris", lastEventDate: "2026-06-10T00:00:00Z",
+      delivered: false, fulfillmentIndex: 0, lineItems: [],
+      last17trackAttempt: "ok", last17trackAttemptAt: "2026-06-10T00:00:00Z",
+    }] as unknown as FulfillmentTrackingFacts[];
+    const [t] = await getTrackingFacts(order, { previousTrackings });
+    expect(t.source).toBe("seventeen_track"); // data preserved, not downgraded
+    expect(t.status).toBe("InTransit");
+    expect(t.inferred).toBe(true);            // but flagged unverified due to mismatch
+    expect(t.last17trackAttempt).toBe("ok");
   });
 });

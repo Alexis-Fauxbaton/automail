@@ -85,6 +85,36 @@ export const seventeenTrackQueued = metrics.gauge(
   "Number of 17track callers currently queued behind the semaphore.",
 );
 
+// --- Tracking carrier resolution ---
+// outcome ∈ ok_auto | ok_hint_recovered | notfound | pending | error
+// ok_auto           = 17track resolved without needing a carrier hint
+// ok_hint_recovered = 17track resolved via the reactive hint branch (first poll
+//                     was NotFound; re-registered with derived hint; re-poll succeeded)
+// notfound          = genuine 17track NotFound (no carrier had data) OR corroboration
+//                     mismatch (wrong-parcel rejection)
+// pending           = 17track reports tracking initializing
+// error             = 17track call failed (transient failure; will be retried)
+export const trackingResolutionTotal = metrics.counter(
+  "tracking_resolution_total",
+  "17track resolution outcome per parcel. outcome ∈ ok_auto | ok_hint_recovered | notfound | pending | error.",
+);
+
+// source ∈ shopify_carrier | url_pattern | explicit_code | ...
+// result ∈ used | ignored (hint was derived but 17track already knew the carrier)
+export const trackingHintTotal = metrics.counter(
+  "tracking_hint_total",
+  "Carrier hint derivation outcomes. Labels: source (how the hint was obtained), result (used|ignored).",
+);
+
+// result ∈ match | mismatch_rejected | absent_unverified
+// match              = 17track recipient country matches order country
+// mismatch_rejected  = country mismatch → parcel rejected (corroboration guard)
+// absent_unverified  = no country available to verify; carrier inferred unverified
+export const trackingCorroborationTotal = metrics.counter(
+  "tracking_corroboration_total",
+  "Country corroboration outcome per parcel. result ∈ match | mismatch_rejected | absent_unverified.",
+);
+
 // --- Circuit breakers ---
 export const breakerState = metrics.gauge(
   "breaker_state",

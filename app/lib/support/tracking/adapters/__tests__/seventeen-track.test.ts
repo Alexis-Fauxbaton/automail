@@ -21,6 +21,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   guessCarrierCode,
   carrierCodeFromTrackingUrl,
+  deriveCarrierHint,
   parseTrackInfoForTest as parseTrackInfo,
   fetchTrackingFrom17track,
 } from "../seventeen-track";
@@ -40,11 +41,11 @@ describe("guessCarrierCode — pattern matching", () => {
   });
 
   it("returns La Poste code for 13-digit numbers", () => {
-    expect(guessCarrierCode("6123456789012")).toBe(100068);
+    expect(guessCarrierCode("6123456789012")).toBe(6051);
   });
 
   it("returns La Poste code for international format (2L+9D+2L)", () => {
-    expect(guessCarrierCode("AB123456789FR")).toBe(100068);
+    expect(guessCarrierCode("AB123456789FR")).toBe(6051);
   });
 
   it("returns FedEx code for 12-digit numbers", () => {
@@ -72,11 +73,11 @@ describe("guessCarrierCode — pattern matching", () => {
   });
 
   it("falls back to carrier name hint when pattern is unknown", () => {
-    expect(guessCarrierCode("UNKNOWNXYZ", "Colissimo")).toBe(100068);
+    expect(guessCarrierCode("UNKNOWNXYZ", "Colissimo")).toBe(6051);
   });
 
   it("falls back to carrier name hint for 'La Poste'", () => {
-    expect(guessCarrierCode("UNKNOWNXYZ", "La Poste")).toBe(100068);
+    expect(guessCarrierCode("UNKNOWNXYZ", "La Poste")).toBe(6051);
   });
 
   it("falls back to carrier name hint for 'DHL Express'", () => {
@@ -85,7 +86,7 @@ describe("guessCarrierCode — pattern matching", () => {
 
   it("pattern match takes priority over carrier name hint", () => {
     // 13-digit number → La Poste by pattern, even if hint says UPS
-    expect(guessCarrierCode("6123456789012", "UPS")).toBe(100068);
+    expect(guessCarrierCode("6123456789012", "UPS")).toBe(6051);
   });
 
   it("returns null when neither pattern nor hint matches", () => {
@@ -105,11 +106,11 @@ describe("guessCarrierCode — pattern matching", () => {
   });
 
   it("returns La Poste code for real prod number LV109807596FR (2L+9D+2L)", () => {
-    expect(guessCarrierCode("LV109807596FR")).toBe(100068);
+    expect(guessCarrierCode("LV109807596FR")).toBe(6051);
   });
 
   it("returns Chronopost code for 2L+8D+2L format", () => {
-    expect(guessCarrierCode("AB12345678FR")).toBe(100174);
+    expect(guessCarrierCode("AB12345678FR")).toBe(100273);
   });
 
   it("returns Mondial Relay code for MR-prefixed numbers (validates bug 3 fix)", () => {
@@ -129,7 +130,7 @@ describe("guessCarrierCode — pattern matching", () => {
   });
 
   it("DPD number is NOT classified as La Poste (regression guard for bug 2)", () => {
-    expect(guessCarrierCode("0812345678901")).not.toBe(100068);
+    expect(guessCarrierCode("0812345678901")).not.toBe(6051);
   });
 
   it("falls back to carrier name hint for 'TNT'", () => {
@@ -187,8 +188,8 @@ describe("carrierCodeFromTrackingUrl — host allowlist", () => {
     expect(carrierCodeFromTrackingUrl("https://cainiao.com/x")).toBe(190271);
   });
 
-  it("maps laposte.fr to La Poste (100068)", () => {
-    expect(carrierCodeFromTrackingUrl("https://www.laposte.fr/outils/suivre?code=x")).toBe(100068);
+  it("maps laposte.fr to La Poste (6051)", () => {
+    expect(carrierCodeFromTrackingUrl("https://www.laposte.fr/outils/suivre?code=x")).toBe(6051);
   });
 
   it("maps ups.com to UPS (100002)", () => {
@@ -211,6 +212,25 @@ describe("carrierCodeFromTrackingUrl — host allowlist", () => {
     expect(carrierCodeFromTrackingUrl(null)).toBeNull();
     expect(carrierCodeFromTrackingUrl("")).toBeNull();
     expect(carrierCodeFromTrackingUrl("not a url")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// deriveCarrierHint — URL host first, then number pattern
+// ---------------------------------------------------------------------------
+
+describe("deriveCarrierHint — URL host first, then number pattern", () => {
+  it("uses the URL host when it is a known carrier (AP… + cainiao URL → Cainiao)", () => {
+    expect(deriveCarrierHint("AP00819233764158", "https://global.cainiao.com/x")).toBe(190271);
+  });
+  it("falls back to the number pattern when the URL is unknown (CK… + postnl URL → Cainiao)", () => {
+    expect(deriveCarrierHint("CK094884943NL", "https://jouw.postnl.nl/track-and-trace/")).toBe(190271);
+  });
+  it("uses the number pattern when there is no URL", () => {
+    expect(deriveCarrierHint("CNFR9010529191101HD", null)).toBe(190271);
+  });
+  it("returns null when neither signal recognises the carrier", () => {
+    expect(deriveCarrierHint("ZZ999", "https://shop.example.com/track")).toBeNull();
   });
 });
 
@@ -382,6 +402,35 @@ describe("parseTrackInfo — delivered detection", () => {
 });
 
 // ---------------------------------------------------------------------------
+// parseTrackInfo — recipient country + carrier code
+// ---------------------------------------------------------------------------
+
+describe("parseTrackInfo — recipientCountry and carrierCode", () => {
+  it("extracts recipient country and carrier code", () => {
+    const result = parseTrackInfo({
+      number: "X",
+      carrier: 190271,
+      track_info: {
+        latest_status: { status: "Delivered" },
+        latest_event: { description: "Delivered", time_iso: "2026-06-12T00:00:00Z" },
+        shipping_info: { recipient_address: { country: "FR" } },
+        tracking: { providers: [{ provider: { name: "Cainiao" }, events: [] }] },
+      },
+    } as unknown as Parameters<typeof parseTrackInfo>[0]);
+    expect(result.recipientCountry).toBe("FR");
+    expect(result.carrierCode).toBe(190271);
+  });
+
+  it("recipientCountry is null when absent", () => {
+    const result = parseTrackInfo({
+      number: "X",
+      track_info: { latest_status: { status: "InTransit" } },
+    } as unknown as Parameters<typeof parseTrackInfo>[0]);
+    expect(result.recipientCountry).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // fetchTrackingFrom17track — retry logic and edge cases
 // ---------------------------------------------------------------------------
 
@@ -400,6 +449,20 @@ const OK_RESPONSE = {
   },
 };
 const OTHER_REJECTION = { code: 0, data: { rejected: [{ number: "LV109807596FR", error: { code: -99999, message: "invalid carrier" } }] } };
+const MULTI_RESPONSE = {
+  code: 0,
+  data: {
+    accepted: [
+      { number: "CK1", carrier: 14041, track_info: { latest_status: { status: "NotFound" } } },
+      { number: "CK1", carrier: 190271, track_info: {
+        latest_status: { status: "InTransit" },
+        latest_event: { description: "In transit", time_iso: "2026-06-11T00:00:00Z" },
+        shipping_info: { recipient_address: { country: "FR" } },
+        tracking: { providers: [{ provider: { name: "Cainiao" }, events: [] }] },
+      } },
+    ],
+  },
+};
 
 function mockOkFetch(response: unknown) {
   return { ok: true, json: () => Promise.resolve(response) };
@@ -436,39 +499,62 @@ describe("fetchTrackingFrom17track — retry logic", () => {
     expect(result?.carrierName).toBe("La Poste");
   });
 
-  it("adds the carrier code to the register payload when the tracking URL maps to a known carrier", async () => {
+  it("does NOT send a carrier filter in the gettrackinfo payload", async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(mockOkFetch({ code: 0 }) as unknown as Response)   // register
       .mockResolvedValueOnce(mockOkFetch(OK_RESPONSE) as unknown as Response);  // gettrackinfo
-
-    await fetchTrackingFrom17track(
-      "AP00819233764158",
-      null,
-      "FR-91120",
-      "https://global.cainiao.com/newDetail.htm?mailNoList=AP00819233764158",
-    );
-
-    const registerInit = vi.mocked(fetch).mock.calls[0][1] as RequestInit;
-    const body = JSON.parse(registerInit.body as string);
-    expect(body[0].carrier).toBe(190271);
-    expect(body[0].param).toBe("FR-91120");
+    await fetchTrackingFrom17track("LV109807596FR", { trackingUrl: "https://www.laposte.fr/x", param: "FR-75001" });
+    const getInit = vi.mocked(fetch).mock.calls[1][1] as RequestInit; // 2nd call = gettrackinfo
+    const body = JSON.parse(getInit.body as string);
+    expect(body[0].carrier).toBeUndefined();
   });
 
-  it("omits the carrier code when the tracking URL is unknown/custom", async () => {
+  it("selects the non-NotFound carrier when gettrackinfo returns several", async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(mockOkFetch({ code: 0 }) as unknown as Response)
-      .mockResolvedValueOnce(mockOkFetch(OK_RESPONSE) as unknown as Response);
+      .mockResolvedValueOnce(mockOkFetch(MULTI_RESPONSE) as unknown as Response);
+    const r = await fetchTrackingFrom17track("CK1", { orderCountry: "FR" });
+    expect(r?.carrierCode).toBe(190271);
+    expect(r?.status).toBe("InTransit");
+  });
 
-    await fetchTrackingFrom17track(
-      "LV109807596FR",
-      null,
-      null,
-      "https://shop.example.com/apps/track?n=LV109807596FR",
-    );
+  it("on NotFound with a derivable hint, register-adds the hint and re-reads", async () => {
+    const NF = { code: 0, data: { accepted: [{ number: "AP1", carrier: 1151, track_info: { latest_status: { status: "NotFound" } } }] } };
+    const RECOVERED = { code: 0, data: { accepted: [
+      { number: "AP1", carrier: 1151, track_info: { latest_status: { status: "NotFound" } } },
+      { number: "AP1", carrier: 190271, track_info: { latest_status: { status: "Delivered" }, shipping_info: { recipient_address: { country: "FR" } }, tracking: { providers: [{ provider: { name: "Cainiao" }, events: [] }] } } },
+    ] } };
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(mockOkFetch({ code: 0 }) as unknown as Response)  // register bare
+      .mockResolvedValueOnce(mockOkFetch(NF) as unknown as Response)           // gettrackinfo → NotFound
+      .mockResolvedValueOnce(mockOkFetch({ code: 0 }) as unknown as Response)  // register-add hint
+      .mockResolvedValueOnce(mockOkFetch(RECOVERED) as unknown as Response);   // gettrackinfo → recovered
+    const r = await fetchTrackingFrom17track("AP1", { trackingUrl: "https://global.cainiao.com/x", orderCountry: "FR" });
+    expect(r?.carrierCode).toBe(190271);
+    expect(r?.status).toBe("Delivered");
+    // the register-add call (3rd fetch) carried the hint code
+    const addInit = vi.mocked(fetch).mock.calls[2][1] as RequestInit;
+    expect(JSON.parse(addInit.body as string)[0].carrier).toBe(190271);
+    // recoveredViaHint must be true: the reactive hint branch ran and produced a result
+    expect(r?.recoveredViaHint).toBe(true);
+  });
 
-    const registerInit = vi.mocked(fetch).mock.calls[0][1] as RequestInit;
-    const body = JSON.parse(registerInit.body as string);
-    expect(body[0].carrier).toBeUndefined();
+  it("recoveredViaHint is falsy on a plain first-poll success (no hint needed)", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(mockOkFetch({ code: 0 }) as unknown as Response)   // register
+      .mockResolvedValueOnce(mockOkFetch(OK_RESPONSE) as unknown as Response);  // gettrackinfo
+    const r = await fetchTrackingFrom17track("LV109807596FR");
+    expect(r?.state).toBe("ok");
+    expect(r?.recoveredViaHint).toBeFalsy();
+  });
+
+  it("returns a corroboration_mismatch result when the only data contradicts the order country", async () => {
+    const DE = { code: 0, data: { accepted: [{ number: "X", carrier: 100016, track_info: { latest_status: { status: "Delivered" }, shipping_info: { recipient_address: { country: "DE" } }, tracking: { providers: [{ provider: { name: "DPD (DE)" }, events: [] }] } } }] } };
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(mockOkFetch({ code: 0 }) as unknown as Response)
+      .mockResolvedValueOnce(mockOkFetch(DE) as unknown as Response);
+    const r = await fetchTrackingFrom17track("X", { orderCountry: "FR" });
+    expect(r?.state).toBe("corroboration_mismatch");
   });
 
   it("retries on pending (-18019909) and returns result on second poll", async () => {
@@ -513,6 +599,38 @@ describe("fetchTrackingFrom17track — retry logic", () => {
 
     const result = await fetchTrackingFrom17track("LV109807596FR");
     expect(result).toBeNull();
+  });
+
+  it("treats an HTTP 429 as transient pending, and does NOT trip the breaker", async () => {
+    const { isOpen, __resetForTest } = await import("../../seventeen-track-breaker");
+    __resetForTest();
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(mockOkFetch({ code: 0 }) as unknown as Response)            // register
+      .mockResolvedValueOnce({ ok: false, status: 429 } as unknown as Response);          // gettrackinfo 429
+    const r = await fetchTrackingFrom17track("LV109807596FR");
+    expect(r?.state).toBe("pending");
+    expect(isOpen()).toBe(false); // rate-limit must not open the breaker
+    __resetForTest();
+  });
+
+  it("treats a -18019902 (not-registered) rejection as pending, not quota_exhausted", async () => {
+    const NOTREG = { code: 0, data: { rejected: [{ number: "X", error: { code: -18019902, message: "not registered" } }] } };
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(mockOkFetch({ code: 0 }) as unknown as Response)
+      .mockResolvedValueOnce(mockOkFetch(NOTREG) as unknown as Response)
+      .mockResolvedValueOnce(mockOkFetch(NOTREG) as unknown as Response)
+      .mockResolvedValueOnce(mockOkFetch(NOTREG) as unknown as Response);
+    const r = await fetchTrackingFrom17track("X");
+    expect(r?.state).toBe("pending");
+  });
+
+  it("still treats a real quota code (-18010008) as quota_exhausted", async () => {
+    const QUOTA = { code: 0, data: { rejected: [{ number: "X", error: { code: -18010008, message: "quota" } }] } };
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(mockOkFetch({ code: 0 }) as unknown as Response)
+      .mockResolvedValueOnce(mockOkFetch(QUOTA) as unknown as Response);
+    const r = await fetchTrackingFrom17track("X");
+    expect(r?.state).toBe("quota_exhausted");
   });
 });
 

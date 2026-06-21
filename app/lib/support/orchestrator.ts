@@ -83,6 +83,14 @@ export interface AnalyzeInput {
     order: OrderFacts | null;
     orderCandidates: OrderFacts[];
   };
+  /**
+   * Tracking facts from the previous analysis run.
+   * When provided, a transient 17track failure for a tracking number that
+   * previously had a good `source: "seventeen_track"` result will preserve
+   * that data rather than downgrading it to a Shopify fallback.
+   * Pass `undefined` (or omit) to keep today's behaviour.
+   */
+  previousTrackings?: FulfillmentTrackingFacts[];
 }
 
 export interface SupportAnalysisExtended extends SupportAnalysis {
@@ -208,7 +216,7 @@ export async function analyzeSupportEmail(
   let trackings: FulfillmentTrackingFacts[] = [];
   if (!input.skipTracking) {
     try {
-      trackings = await getTrackingFacts(order);
+      trackings = await getTrackingFacts(order, { previousTrackings: input.previousTrackings });
     } catch (err) {
       warnings.push({
         code: "tracking_lookup_error",

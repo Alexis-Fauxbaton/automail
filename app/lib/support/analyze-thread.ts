@@ -399,6 +399,7 @@ export async function analyzeThread(
           orderCandidates: previousAnalysis.orderCandidates ?? [],
         }
       : undefined,
+    previousTrackings: previousAnalysis?.trackings ?? undefined,
   });
 
   // Carry forward manual override markers so they survive this analysis.
