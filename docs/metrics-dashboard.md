@@ -120,7 +120,7 @@ Three counters emitted by `resolveOneFulfillment` in `tracking-service.ts` on ev
 | outcome | meaning |
 |---|---|
 | `ok_auto` | 17track resolved the parcel; carrier confirmed without a hint |
-| `ok_hint_recovered` | 17track resolved but used an inferred/hinted carrier code |
+| `ok_hint_recovered` | 17track returned NotFound on first poll; recovered after an additive carrier-hint re-registration |
 | `pending` | 17track reports tracking initialising (retry in 5 min) |
 | `notfound` | corroboration mismatch — likely a wrong-parcel rejection |
 | `error` | transient 17track failure (HTTP error or uncaught throw) |

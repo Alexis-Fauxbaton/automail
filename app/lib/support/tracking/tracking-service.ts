@@ -52,7 +52,7 @@ async function resolveOneFulfillment(
 
   // --- 1. Try 17track first ---
   try {
-    const result = await fetchTrackingFrom17track(trackingNumber, { param, trackingUrl, orderCountry, previousCarrierCode });
+    const result = await fetchTrackingFrom17track(trackingNumber, { param, trackingUrl, orderCountry, previousCarrierCode /* TODO populate from last persisted carrier code (stable tie-breaker) */ });
     if (result && result.state === "ok") {
       // Corroboration: emit for every ok result — either a country was returned
       // (match) or it was absent (unverified). This covers both the inferred
