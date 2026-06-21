@@ -279,4 +279,23 @@ describe("getTrackingFacts — non-destructive refresh (task 9)", () => {
     expect(t.source).not.toBe("seventeen_track");
     expect(t.last17trackAttempt).toBe("error");
   });
+
+  it("preserves previous 17track data on corroboration_mismatch and flags it unverified", async () => {
+    vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue({
+      state: "corroboration_mismatch",
+    } as unknown as Awaited<ReturnType<typeof adapter.fetchTrackingFrom17track>>);
+    const order = makeOrder(); // fulfillment trackingNumbers = ["LV109807596FR"]
+    const previousTrackings = [{
+      source: "seventeen_track", carrier: "Cainiao", trackingNumber: "LV109807596FR",
+      trackingUrl: null, status: "InTransit", inferred: false, events: [],
+      lastEvent: "Sorted", lastLocation: "Paris", lastEventDate: "2026-06-10T00:00:00Z",
+      delivered: false, fulfillmentIndex: 0, lineItems: [],
+      last17trackAttempt: "ok", last17trackAttemptAt: "2026-06-10T00:00:00Z",
+    }] as unknown as FulfillmentTrackingFacts[];
+    const [t] = await getTrackingFacts(order, { previousTrackings });
+    expect(t.source).toBe("seventeen_track"); // data preserved, not downgraded
+    expect(t.status).toBe("InTransit");
+    expect(t.inferred).toBe(true);            // but flagged unverified due to mismatch
+    expect(t.last17trackAttempt).toBe("ok");
+  });
 });

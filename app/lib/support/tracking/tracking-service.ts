@@ -59,7 +59,16 @@ async function resolveOneFulfillment(
   ): FulfillmentTrackingFacts => {
     if (prevGood) {
       // Last-known-good 17track data — never downgrade it to Shopify on a blip.
-      return { ...prevGood, fulfillmentIndex, lineItems, last17trackAttempt: attempt, last17trackAttemptAt: attemptAt };
+      // inferredOverride (only set on corroboration_mismatch) flags the preserved
+      // fact as unverified: genuine doubt was introduced so truth-seeking requires it.
+      return {
+        ...prevGood,
+        fulfillmentIndex,
+        lineItems,
+        last17trackAttempt: attempt,
+        last17trackAttemptAt: attemptAt,
+        ...(inferredOverride !== undefined ? { inferred: inferredOverride } : {}),
+      };
     }
     const base = resolveTrackingForFulfillment(fulfillment, trackingNumber, trackingUrl);
     return {
