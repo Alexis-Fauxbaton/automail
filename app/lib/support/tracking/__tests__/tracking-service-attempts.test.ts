@@ -5,6 +5,7 @@ import type { OrderFacts } from "../../types";
 import {
   trackingResolutionTotal,
   trackingCorroborationTotal,
+  trackingHintTotal,
 } from "../../../metrics/definitions";
 
 function makeOrder(): OrderFacts {
@@ -164,15 +165,17 @@ describe("getTrackingFacts — production metrics", () => {
     expect(findCounterValue(trackingResolutionTotal.collect(), { outcome: "ok_auto" })).toBe(before + 1);
   });
 
-  it("increments tracking_resolution_total{outcome=ok_hint_recovered} when the carrier was inferred", async () => {
-    const before = findCounterValue(trackingResolutionTotal.collect(), { outcome: "ok_hint_recovered" });
+  it("increments tracking_resolution_total{outcome=ok_hint_recovered} + trackingHintTotal{source=reactive,result=recovered} when recoveredViaHint is true", async () => {
+    const beforeRes = findCounterValue(trackingResolutionTotal.collect(), { outcome: "ok_hint_recovered" });
+    const beforeHint = findCounterValue(trackingHintTotal.collect(), { source: "reactive", result: "recovered" });
     vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue({
       state: "ok", carrierName: "Cainiao", carrierCode: 190271, status: "InTransit",
       recipientCountry: null, lastEvent: null, lastLocation: null, lastEventDate: null,
-      delivered: false, events: [], inferredCarrier: true,
+      delivered: false, events: [], recoveredViaHint: true,
     } as unknown as Awaited<ReturnType<typeof adapter.fetchTrackingFrom17track>>);
     await getTrackingFacts(makeOrder());
-    expect(findCounterValue(trackingResolutionTotal.collect(), { outcome: "ok_hint_recovered" })).toBe(before + 1);
+    expect(findCounterValue(trackingResolutionTotal.collect(), { outcome: "ok_hint_recovered" })).toBe(beforeRes + 1);
+    expect(findCounterValue(trackingHintTotal.collect(), { source: "reactive", result: "recovered" })).toBe(beforeHint + 1);
   });
 
   it("increments tracking_resolution_total{outcome=pending} on pending state", async () => {
@@ -223,14 +226,27 @@ describe("getTrackingFacts — production metrics", () => {
     expect(findCounterValue(trackingCorroborationTotal.collect(), { result: "match" })).toBe(before + 1);
   });
 
-  it("increments corroboration{result=absent_unverified} when carrier was inferred (no country check possible)", async () => {
+  it("increments corroboration{result=absent_unverified} when recipientCountry is null and recoveredViaHint is false (no gap case)", async () => {
     const before = findCounterValue(trackingCorroborationTotal.collect(), { result: "absent_unverified" });
     vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue({
       state: "ok", carrierName: "Cainiao", carrierCode: 190271, status: "InTransit",
       recipientCountry: null, lastEvent: null, lastLocation: null, lastEventDate: null,
-      delivered: false, events: [], inferredCarrier: true,
+      delivered: false, events: [], recoveredViaHint: false,
     } as unknown as Awaited<ReturnType<typeof adapter.fetchTrackingFrom17track>>);
     await getTrackingFacts(makeOrder());
     expect(findCounterValue(trackingCorroborationTotal.collect(), { result: "absent_unverified" })).toBe(before + 1);
+  });
+
+  it("ok_auto + corroboration{match} when recipientCountry is set and recoveredViaHint is absent/false", async () => {
+    const beforeRes = findCounterValue(trackingResolutionTotal.collect(), { outcome: "ok_auto" });
+    const beforeCorr = findCounterValue(trackingCorroborationTotal.collect(), { result: "match" });
+    vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue({
+      state: "ok", carrierName: "La Poste", carrierCode: 6051, status: "InTransit",
+      recipientCountry: "FR", lastEvent: null, lastLocation: null, lastEventDate: null,
+      delivered: false, events: [],
+    } as unknown as Awaited<ReturnType<typeof adapter.fetchTrackingFrom17track>>);
+    await getTrackingFacts(makeOrder());
+    expect(findCounterValue(trackingResolutionTotal.collect(), { outcome: "ok_auto" })).toBe(beforeRes + 1);
+    expect(findCounterValue(trackingCorroborationTotal.collect(), { result: "match" })).toBe(beforeCorr + 1);
   });
 });

@@ -5,6 +5,7 @@ import { isOpen as is17trackBreakerOpen } from "./seventeen-track-breaker";
 import {
   trackingResolutionTotal,
   trackingCorroborationTotal,
+  trackingHintTotal,
 } from "../../metrics/definitions";
 
 /**
@@ -53,16 +54,18 @@ async function resolveOneFulfillment(
   try {
     const result = await fetchTrackingFrom17track(trackingNumber, { param, trackingUrl, orderCountry, previousCarrierCode });
     if (result && result.state === "ok") {
-      // Corroboration: if recipientCountry came back from 17track, check it
-      // against the order country to determine the verification outcome.
-      // inferredCarrier = true means 17track couldn't confirm the carrier code
-      // from its database and used our hint instead.
-      if (result.inferredCarrier) {
-        trackingCorroborationTotal.inc({ result: "absent_unverified" });
-      } else if (result.recipientCountry) {
-        trackingCorroborationTotal.inc({ result: "match" });
+      // Corroboration: emit for every ok result — either a country was returned
+      // (match) or it was absent (unverified). This covers both the inferred
+      // and the plain-ok cases without a gap.
+      trackingCorroborationTotal.inc({ result: result.recipientCountry ? "match" : "absent_unverified" });
+      // Resolution outcome: recoveredViaHint is the authoritative signal for
+      // whether the reactive hint branch ran and produced the result.
+      // inferredCarrier only means the carrier was unverified (recipientCountry absent)
+      // — it is NOT equivalent to a hint recovery.
+      trackingResolutionTotal.inc({ outcome: result.recoveredViaHint ? "ok_hint_recovered" : "ok_auto" });
+      if (result.recoveredViaHint) {
+        trackingHintTotal.inc({ source: "reactive", result: "recovered" });
       }
-      trackingResolutionTotal.inc({ outcome: result.inferredCarrier ? "ok_hint_recovered" : "ok_auto" });
       return {
         source: "seventeen_track",
         carrier: result.carrierName ?? fulfillment.carrier ?? null,

@@ -129,7 +129,7 @@ Healthy reading: `ok_auto` dominates. `pending` is small and decays as parcels r
 
 Degrading signal: a rising `notfound` with low `ok_hint_recovered` indicates hint coverage is too narrow for the carrier mix. A rising `error` sustained beyond a breaker window indicates a 17track API reliability issue.
 
-**`tracking_hint_total`** — labelled by `source` (how the hint was derived, e.g. `shopify_carrier`, `url_pattern`) and `result` (`used` | `ignored`). Incremented by the hint-derivation layer when it produces a candidate carrier code. Currently not incremented in the service layer (the hint plumbing does not yet surface a structured outcome to this counter — mark as "deferred" until the hint path is fully wired).
+**`tracking_hint_total`** — labelled by `source` and `result`. The label `{source:"reactive", result:"recovered"}` counts parcels where the reactive register-add hint branch ran and successfully produced tracking data (i.e. the first poll was NotFound, we re-registered with a derived carrier code, and the re-poll found the parcel). Comparing `ok_hint_recovered` in `tracking_resolution_total` against `ok_auto` gives the efficacy of the hint-recovery feature: a high ratio means many parcels would be lost without it.
 
 **`tracking_corroboration_total`** — labelled by `result`:
 | result | meaning |

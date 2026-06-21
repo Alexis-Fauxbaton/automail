@@ -130,6 +130,11 @@ export interface SevenTrackResult {
    *  country (its recipient country was absent) — the result is usable but the
    *  carrier identity is a best guess, not verified. */
   inferredCarrier?: boolean;
+  /** True when data was retrieved only after the reactive register-add (hint)
+   *  branch ran — i.e. the first poll returned NotFound, we re-registered with
+   *  a derived carrier hint, and the re-poll found the parcel. This is the
+   *  signal for the `ok_hint_recovered` resolution metric. */
+  recoveredViaHint?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -421,18 +426,23 @@ export async function fetchTrackingFrom17track(
     const noData = !selection.chosen || selection.chosen.status === "NotFound";
     const hint = deriveCarrierHint(trackingNumber, trackingUrl);
     const alreadyHave = hint != null && candidates.some((c) => c.carrierCode === hint);
+    let recoveredViaHint = false;
     if (noData && hint != null && !alreadyHave && !selection.corroborationMismatch) {
       await postJson<ApiResponse>(`${BASE}/register`, [{ number: trackingNumber, carrier: hint, ...(param ? { param } : {}) }], apiKey);
       const recovered = await poll();
       if (Array.isArray(recovered)) {
         candidates = recovered;
         selection = selectCarrierCandidate(candidates, orderCountry, { hintCarrierCode: hint, previousCarrierCode });
+        // Mark recovered only when the re-poll actually yielded a usable (non-NotFound) result.
+        if (selection.chosen && selection.chosen.status !== "NotFound" && !selection.corroborationMismatch) {
+          recoveredViaHint = true;
+        }
       }
     }
 
     if (selection.corroborationMismatch) return emptyState("corroboration_mismatch");
     if (!selection.chosen) return emptyState("pending"); // registered but no data yet
-    return { ...selection.chosen, inferredCarrier: selection.unverified } as SevenTrackResult;
+    return { ...selection.chosen, inferredCarrier: selection.unverified, recoveredViaHint } as SevenTrackResult;
   } catch (err) {
     console.error("[17track] Request failed:", err);
     breakerFailure();

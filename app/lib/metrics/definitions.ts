@@ -87,11 +87,12 @@ export const seventeenTrackQueued = metrics.gauge(
 
 // --- Tracking carrier resolution ---
 // outcome ∈ ok_auto | ok_hint_recovered | notfound | pending | error
-// ok_auto        = 17track resolved without inferring a carrier
-// ok_hint_recovered = 17track resolved using an inferred/hinted carrier
-// notfound       = corroboration mismatch (wrong parcel rejected) or no data
-// pending        = 17track reports tracking initializing
-// error          = 17track call failed (transient failure; will be retried)
+// ok_auto           = 17track resolved without needing a carrier hint
+// ok_hint_recovered = 17track resolved via the reactive hint branch (first poll
+//                     was NotFound; re-registered with derived hint; re-poll succeeded)
+// notfound          = corroboration mismatch (likely wrong-parcel rejection)
+// pending           = 17track reports tracking initializing
+// error             = 17track call failed (transient failure; will be retried)
 export const trackingResolutionTotal = metrics.counter(
   "tracking_resolution_total",
   "17track resolution outcome per parcel. outcome ∈ ok_auto | ok_hint_recovered | notfound | pending | error.",

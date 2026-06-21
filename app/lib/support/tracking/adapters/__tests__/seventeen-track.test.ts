@@ -535,6 +535,17 @@ describe("fetchTrackingFrom17track — retry logic", () => {
     // the register-add call (3rd fetch) carried the hint code
     const addInit = vi.mocked(fetch).mock.calls[2][1] as RequestInit;
     expect(JSON.parse(addInit.body as string)[0].carrier).toBe(190271);
+    // recoveredViaHint must be true: the reactive hint branch ran and produced a result
+    expect(r?.recoveredViaHint).toBe(true);
+  });
+
+  it("recoveredViaHint is falsy on a plain first-poll success (no hint needed)", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(mockOkFetch({ code: 0 }) as unknown as Response)   // register
+      .mockResolvedValueOnce(mockOkFetch(OK_RESPONSE) as unknown as Response);  // gettrackinfo
+    const r = await fetchTrackingFrom17track("LV109807596FR");
+    expect(r?.state).toBe("ok");
+    expect(r?.recoveredViaHint).toBeFalsy();
   });
 
   it("returns a corroboration_mismatch result when the only data contradicts the order country", async () => {
