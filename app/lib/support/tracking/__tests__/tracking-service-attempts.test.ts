@@ -99,4 +99,28 @@ describe("getTrackingFacts — last17trackAttempt stamping", () => {
     expect(t.last17trackAttempt).toBe("skipped");
     __resetForTest(); // restore for subsequent tests
   });
+
+  it("passes orderCountry and tracking URL to the adapter", async () => {
+    const spy = vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue({
+      state: "ok", carrierName: "Cainiao", carrierCode: 190271, status: "Delivered",
+      recipientCountry: "FR", lastEvent: null, lastLocation: null, lastEventDate: null,
+      delivered: true, events: [],
+    } as unknown as Awaited<ReturnType<typeof adapter.fetchTrackingFrom17track>>);
+    const order = makeOrder();
+    (order as unknown as { destinationCountry: string }).destinationCountry = "FR";
+    order.fulfillments[0].trackingUrls = ["https://global.cainiao.com/x"];
+    await getTrackingFacts(order);
+    expect(spy).toHaveBeenCalledWith("LV109807596FR", expect.objectContaining({ orderCountry: "FR", trackingUrl: "https://global.cainiao.com/x" }));
+  });
+
+  it("marks the fact unverified when the adapter returns corroboration_mismatch", async () => {
+    vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue({
+      state: "corroboration_mismatch", carrierName: null, carrierCode: null, status: null,
+      recipientCountry: null, lastEvent: null, lastLocation: null, lastEventDate: null,
+      delivered: false, events: [],
+    } as unknown as Awaited<ReturnType<typeof adapter.fetchTrackingFrom17track>>);
+    const [t] = await getTrackingFacts(makeOrder());
+    expect(t.source).not.toBe("seventeen_track");
+    expect(t.inferred).toBe(true);
+  });
 });

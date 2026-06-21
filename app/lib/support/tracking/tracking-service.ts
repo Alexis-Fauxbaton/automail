@@ -27,6 +27,8 @@ async function resolveOneFulfillment(
   trackingNumber: string | null,
   trackingUrl: string | null,
   param: string | null,
+  orderCountry: string | null,
+  previousCarrierCode: number | null = null,
 ): Promise<FulfillmentTrackingFacts> {
   const lineItems = fulfillment.lineItems;
   const attemptAt = new Date().toISOString();
@@ -45,7 +47,7 @@ async function resolveOneFulfillment(
 
   // --- 1. Try 17track first ---
   try {
-    const result = await fetchTrackingFrom17track(trackingNumber, { param, trackingUrl });
+    const result = await fetchTrackingFrom17track(trackingNumber, { param, trackingUrl, orderCountry, previousCarrierCode });
     if (result && result.state === "ok") {
       return {
         source: "seventeen_track",
@@ -53,7 +55,7 @@ async function resolveOneFulfillment(
         trackingNumber,
         trackingUrl: trackingUrl ?? null,
         status: result.status,
-        inferred: false,
+        inferred: result.inferredCarrier ?? false,
         events: result.events,
         lastEvent: result.lastEvent,
         lastLocation: result.lastLocation,
@@ -97,6 +99,19 @@ async function resolveOneFulfillment(
         fulfillmentIndex,
         lineItems,
         last17trackAttempt: "skipped",
+        last17trackAttemptAt: attemptAt,
+      };
+    }
+    if (result && result.state === "corroboration_mismatch") {
+      // 17track's recipient country contradicts the order country — likely another
+      // customer's parcel. Fall back to Shopify data and mark it unverified.
+      const base = resolveTrackingForFulfillment(fulfillment, trackingNumber, trackingUrl);
+      return {
+        ...base,
+        inferred: true,
+        fulfillmentIndex,
+        lineItems,
+        last17trackAttempt: "ok",
         last17trackAttemptAt: attemptAt,
       };
     }
@@ -155,7 +170,7 @@ export async function getTrackingFacts(
       const trackingUrl = trackingNumber
         ? (fulfillment.trackingUrls[ti] ?? fulfillment.trackingUrls[0] ?? null)
         : null;
-      tasks.push(resolveOneFulfillment(fulfillment, index, trackingNumber, trackingUrl, param));
+      tasks.push(resolveOneFulfillment(fulfillment, index, trackingNumber, trackingUrl, param, order.destinationCountry ?? null, null));
     });
   });
   return Promise.all(tasks);
