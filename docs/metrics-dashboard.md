@@ -112,6 +112,36 @@ Cross-process, SQL-backed. Sorted by USD desc.
 - **Trend** is what matters more than absolute number. Compare week
   over week.
 
+### Tracking carrier resolution
+
+Three counters emitted by `resolveOneFulfillment` in `tracking-service.ts` on every 17track call. They accumulate since process start; use a Prometheus rate or a diff between two scrape snapshots for trend analysis.
+
+**`tracking_resolution_total`** — labelled by `outcome`:
+| outcome | meaning |
+|---|---|
+| `ok_auto` | 17track resolved the parcel; carrier confirmed without a hint |
+| `ok_hint_recovered` | 17track resolved but used an inferred/hinted carrier code |
+| `pending` | 17track reports tracking initialising (retry in 5 min) |
+| `notfound` | corroboration mismatch — likely a wrong-parcel rejection |
+| `error` | transient 17track failure (HTTP error or uncaught throw) |
+
+Healthy reading: `ok_auto` dominates. `pending` is small and decays as parcels register. `error` is near zero outside incidents.
+
+Degrading signal: a rising `notfound` with low `ok_hint_recovered` indicates hint coverage is too narrow for the carrier mix. A rising `error` sustained beyond a breaker window indicates a 17track API reliability issue.
+
+**`tracking_hint_total`** — labelled by `source` (how the hint was derived, e.g. `shopify_carrier`, `url_pattern`) and `result` (`used` | `ignored`). Incremented by the hint-derivation layer when it produces a candidate carrier code. Currently not incremented in the service layer (the hint plumbing does not yet surface a structured outcome to this counter — mark as "deferred" until the hint path is fully wired).
+
+**`tracking_corroboration_total`** — labelled by `result`:
+| result | meaning |
+|---|---|
+| `match` | 17track's `recipientCountry` matches the order's destination country |
+| `mismatch_rejected` | country mismatch — parcel rejected, tracking fell back to Shopify data |
+| `absent_unverified` | carrier was inferred; no country data available to corroborate |
+
+Healthy reading: `match` is the majority of verified parcels. `absent_unverified` covers parcels where the order lacks a destination country (expected for some merchants).
+
+Degrading signal: a rising `mismatch_rejected` means the corroboration guard is catching wrong parcels — investigate whether tracking numbers are being reused across merchants, or whether the order country data is incorrect. A sustained `mismatch_rejected` spike without a corresponding `ok_auto` rise is a data-quality alert.
+
 ## Toggling access for a shop
 
 ```sql

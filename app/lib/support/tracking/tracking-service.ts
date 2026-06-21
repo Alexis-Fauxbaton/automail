@@ -2,6 +2,10 @@ import type { FulfillmentTrackingFacts, OrderFacts } from "../types";
 import { resolveTrackingForFulfillment } from "./provider-resolver";
 import { fetchTrackingFrom17track } from "./adapters/seventeen-track";
 import { isOpen as is17trackBreakerOpen } from "./seventeen-track-breaker";
+import {
+  trackingResolutionTotal,
+  trackingCorroborationTotal,
+} from "../../metrics/definitions";
 
 /**
  * Resolve tracking facts for a single fulfillment.
@@ -49,6 +53,16 @@ async function resolveOneFulfillment(
   try {
     const result = await fetchTrackingFrom17track(trackingNumber, { param, trackingUrl, orderCountry, previousCarrierCode });
     if (result && result.state === "ok") {
+      // Corroboration: if recipientCountry came back from 17track, check it
+      // against the order country to determine the verification outcome.
+      // inferredCarrier = true means 17track couldn't confirm the carrier code
+      // from its database and used our hint instead.
+      if (result.inferredCarrier) {
+        trackingCorroborationTotal.inc({ result: "absent_unverified" });
+      } else if (result.recipientCountry) {
+        trackingCorroborationTotal.inc({ result: "match" });
+      }
+      trackingResolutionTotal.inc({ outcome: result.inferredCarrier ? "ok_hint_recovered" : "ok_auto" });
       return {
         source: "seventeen_track",
         carrier: result.carrierName ?? fulfillment.carrier ?? null,
@@ -68,6 +82,7 @@ async function resolveOneFulfillment(
       };
     }
     if (result && result.state === "pending") {
+      trackingResolutionTotal.inc({ outcome: "pending" });
       console.log(`[tracking] 17track pending after retries for ${trackingNumber} (fulfillment ${fulfillmentIndex})`);
       return {
         source: "seventeen_track",
@@ -105,6 +120,8 @@ async function resolveOneFulfillment(
     if (result && result.state === "corroboration_mismatch") {
       // 17track's recipient country contradicts the order country — likely another
       // customer's parcel. Fall back to Shopify data and mark it unverified.
+      trackingCorroborationTotal.inc({ result: "mismatch_rejected" });
+      trackingResolutionTotal.inc({ outcome: "notfound" });
       const base = resolveTrackingForFulfillment(fulfillment, trackingNumber, trackingUrl);
       return {
         ...base,
@@ -127,6 +144,7 @@ async function resolveOneFulfillment(
     if (!keyConfigured) attempt = "skipped";
     else if (is17trackBreakerOpen()) attempt = "skipped";
     else attempt = "error";
+    if (attempt === "error") trackingResolutionTotal.inc({ outcome: "error" });
     const base = resolveTrackingForFulfillment(fulfillment, trackingNumber, trackingUrl);
     return {
       ...base,
@@ -136,6 +154,7 @@ async function resolveOneFulfillment(
       last17trackAttemptAt: attemptAt,
     };
   } catch (err) {
+    trackingResolutionTotal.inc({ outcome: "error" });
     console.error(`[tracking] 17track failed for fulfillment ${fulfillmentIndex}, using Shopify:`, err);
     const base = resolveTrackingForFulfillment(fulfillment, trackingNumber, trackingUrl);
     return {
