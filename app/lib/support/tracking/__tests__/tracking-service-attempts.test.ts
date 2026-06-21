@@ -237,6 +237,34 @@ describe("getTrackingFacts — production metrics", () => {
     expect(findCounterValue(trackingCorroborationTotal.collect(), { result: "absent_unverified" })).toBe(before + 1);
   });
 
+  it("increments tracking_resolution_total{outcome=notfound} when state is ok but status is NotFound", async () => {
+    const beforeNotFound = findCounterValue(trackingResolutionTotal.collect(), { outcome: "notfound" });
+    const beforeOkAuto = findCounterValue(trackingResolutionTotal.collect(), { outcome: "ok_auto" });
+    vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue({
+      state: "ok", carrierName: null, carrierCode: null, status: "NotFound",
+      recipientCountry: null, lastEvent: null, lastLocation: null, lastEventDate: null,
+      delivered: false, events: [],
+    } as unknown as Awaited<ReturnType<typeof adapter.fetchTrackingFrom17track>>);
+    await getTrackingFacts(makeOrder());
+    expect(findCounterValue(trackingResolutionTotal.collect(), { outcome: "notfound" })).toBe(beforeNotFound + 1);
+    // Must NOT increment ok_auto
+    expect(findCounterValue(trackingResolutionTotal.collect(), { outcome: "ok_auto" })).toBe(beforeOkAuto);
+  });
+
+  it("increments tracking_resolution_total{outcome=ok_auto} (not notfound) when state is ok and status is Delivered", async () => {
+    const beforeOkAuto = findCounterValue(trackingResolutionTotal.collect(), { outcome: "ok_auto" });
+    const beforeNotFound = findCounterValue(trackingResolutionTotal.collect(), { outcome: "notfound" });
+    vi.spyOn(adapter, "fetchTrackingFrom17track").mockResolvedValue({
+      state: "ok", carrierName: "La Poste", carrierCode: 6051, status: "Delivered",
+      recipientCountry: "FR", lastEvent: null, lastLocation: null, lastEventDate: null,
+      delivered: true, events: [],
+    } as unknown as Awaited<ReturnType<typeof adapter.fetchTrackingFrom17track>>);
+    await getTrackingFacts(makeOrder());
+    expect(findCounterValue(trackingResolutionTotal.collect(), { outcome: "ok_auto" })).toBe(beforeOkAuto + 1);
+    // Must NOT increment notfound
+    expect(findCounterValue(trackingResolutionTotal.collect(), { outcome: "notfound" })).toBe(beforeNotFound);
+  });
+
   it("ok_auto + corroboration{match} when recipientCountry is set and recoveredViaHint is absent/false", async () => {
     const beforeRes = findCounterValue(trackingResolutionTotal.collect(), { outcome: "ok_auto" });
     const beforeCorr = findCounterValue(trackingCorroborationTotal.collect(), { result: "match" });

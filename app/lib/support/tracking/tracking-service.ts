@@ -101,11 +101,19 @@ async function resolveOneFulfillment(
       // (match) or it was absent (unverified). This covers both the inferred
       // and the plain-ok cases without a gap.
       trackingCorroborationTotal.inc({ result: result.recipientCountry ? "match" : "absent_unverified" });
-      // Resolution outcome: recoveredViaHint is the authoritative signal for
-      // whether the reactive hint branch ran and produced the result.
+      // Resolution outcome: check NotFound first — a genuine NotFound must count
+      // as "notfound", not as a success, even though the state is "ok".
+      // recoveredViaHint is the authoritative signal for whether the reactive
+      // hint branch ran and produced the result.
       // inferredCarrier only means the carrier was unverified (recipientCountry absent)
       // — it is NOT equivalent to a hint recovery.
-      trackingResolutionTotal.inc({ outcome: result.recoveredViaHint ? "ok_hint_recovered" : "ok_auto" });
+      const outcome =
+        result.status === "NotFound"
+          ? "notfound"
+          : result.recoveredViaHint
+            ? "ok_hint_recovered"
+            : "ok_auto";
+      trackingResolutionTotal.inc({ outcome });
       if (result.recoveredViaHint) {
         trackingHintTotal.inc({ source: "reactive", result: "recovered" });
       }
