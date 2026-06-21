@@ -408,9 +408,9 @@ export async function fetchTrackingFrom17track(
         breakerSuccess();
         return "pending";
       }
-      // Real account/quota errors only (-180100xx); NOT the -180199xx
-      // registration/status family.
-      if (typeof code === "number" && code <= -18010000 && code >= -18010999) {
+      // Real account/quota errors only: the -180100xx family. Must NOT include
+      // the -180199xx registration/status codes (e.g. -18019902 not-registered).
+      if (typeof code === "number" && code >= -18010999 && code <= -18010000) {
         breakerSuccess();
         return "quota";
       }
