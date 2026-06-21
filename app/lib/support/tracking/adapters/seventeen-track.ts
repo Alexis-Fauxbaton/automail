@@ -309,6 +309,20 @@ export function carrierCodeFromTrackingUrl(
   return null;
 }
 
+/**
+ * Best-effort 17track carrier code for a number: the Shopify tracking-URL host
+ * first (the merchant's de-facto declared carrier), then the number-format
+ * pattern. Neither alone is sufficient — "AP…" has only the URL signal,
+ * "CK…NL" has only the number-pattern signal (its URL is a misleading
+ * last-mile page). Returns null when neither recognises the carrier.
+ */
+export function deriveCarrierHint(
+  trackingNumber: string,
+  trackingUrl?: string | null,
+): number | null {
+  return carrierCodeFromTrackingUrl(trackingUrl) ?? guessCarrierCode(trackingNumber);
+}
+
 // ---------------------------------------------------------------------------
 // Main export
 // ---------------------------------------------------------------------------

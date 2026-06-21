@@ -21,6 +21,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   guessCarrierCode,
   carrierCodeFromTrackingUrl,
+  deriveCarrierHint,
   parseTrackInfoForTest as parseTrackInfo,
   fetchTrackingFrom17track,
 } from "../seventeen-track";
@@ -211,6 +212,25 @@ describe("carrierCodeFromTrackingUrl — host allowlist", () => {
     expect(carrierCodeFromTrackingUrl(null)).toBeNull();
     expect(carrierCodeFromTrackingUrl("")).toBeNull();
     expect(carrierCodeFromTrackingUrl("not a url")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// deriveCarrierHint — URL host first, then number pattern
+// ---------------------------------------------------------------------------
+
+describe("deriveCarrierHint — URL host first, then number pattern", () => {
+  it("uses the URL host when it is a known carrier (AP… + cainiao URL → Cainiao)", () => {
+    expect(deriveCarrierHint("AP00819233764158", "https://global.cainiao.com/x")).toBe(190271);
+  });
+  it("falls back to the number pattern when the URL is unknown (CK… + postnl URL → Cainiao)", () => {
+    expect(deriveCarrierHint("CK094884943NL", "https://jouw.postnl.nl/track-and-trace/")).toBe(190271);
+  });
+  it("uses the number pattern when there is no URL", () => {
+    expect(deriveCarrierHint("CNFR9010529191101HD", null)).toBe(190271);
+  });
+  it("returns null when neither signal recognises the carrier", () => {
+    expect(deriveCarrierHint("ZZ999", "https://shop.example.com/track")).toBeNull();
   });
 });
 
