@@ -8,6 +8,7 @@ import {
   escapeHtml,
   isAsciiHeader,
   encodeHeaderWord,
+  formatReferences,
 } from "../assemble-rfc822";
 
 describe("buildSubjectWithRePrefix", () => {
@@ -50,6 +51,20 @@ describe("quoteOriginalHtml", () => {
     const out = quoteOriginalHtml(`<script>alert("xss")</script>`);
     expect(out).toContain("&lt;script&gt;");
     expect(out).not.toContain("<script>");
+  });
+});
+
+describe("formatReferences", () => {
+  it("wraps bare ids in angle brackets", () => {
+    expect(formatReferences("a@x.com")).toBe("<a@x.com>");
+    expect(formatReferences("a@x.com b@y.com")).toBe("<a@x.com> <b@y.com>");
+  });
+  it("leaves already-bracketed ids untouched and normalizes a mixed chain", () => {
+    expect(formatReferences("<a@x.com> b@y.com")).toBe("<a@x.com> <b@y.com>");
+  });
+  it("returns empty string for empty input", () => {
+    expect(formatReferences("")).toBe("");
+    expect(formatReferences("   ")).toBe("");
   });
 });
 
@@ -165,6 +180,21 @@ describe("encodeHeaderWord / isAsciiHeader", () => {
 });
 
 describe("renderRfc822", () => {
+  it("emits a bracketed References header for a fresh-thread chain", () => {
+    const rendered = renderRfc822({
+      rfcMessageId: "new@x.com",
+      inReplyToRfcId: "orig@gmail.com",
+      references: "orig@gmail.com",
+      fromEmail: "s@b.com",
+      fromName: "Brand",
+      toEmails: ["c@g.com"],
+      subject: "Re: hi",
+      bodyText: "x",
+    });
+    expect(rendered).toContain("References: <orig@gmail.com>");
+    expect(rendered).toContain("In-Reply-To: <orig@gmail.com>");
+  });
+
   it("produces a valid RFC822 string with all expected headers and text/html content type", () => {
     const rendered = renderRfc822({
       rfcMessageId: "test-id@x.com",
@@ -181,7 +211,7 @@ describe("renderRfc822", () => {
     expect(rendered).toContain("Subject: Re: hi");
     expect(rendered).toContain("Message-ID: <test-id@x.com>");
     expect(rendered).toContain("In-Reply-To: <orig@g.com>");
-    expect(rendered).toContain("References: a@g.com b@g.com");
+    expect(rendered).toContain("References: <a@g.com> <b@g.com>");
     expect(rendered).toContain("Content-Type: text/html; charset=utf-8");
     expect(rendered.endsWith("<p>hello</p>")).toBe(true);
     // Headers separated by CRLF, blank line before body

@@ -48,6 +48,22 @@ export function generateMessageId(shop: string): string {
   return `${rand}@${shop}`;
 }
 
+/**
+ * Normalize a space-separated References chain so every Message-ID is wrapped
+ * in angle brackets, as RFC 5322 requires. Our stored ids are bracket-less
+ * (see gmail/pipeline.ts) while parsed References keep their brackets — this
+ * makes the emitted header valid in both cases. Malformed (unbracketed)
+ * References break Gmail threading.
+ */
+export function formatReferences(chain: string): string {
+  return chain
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((id) => (id.startsWith("<") ? id : `<${id}>`))
+    .join(" ");
+}
+
 export interface AssembleInput {
   shop: string;
   mailbox: { email: string; fromName?: string };
@@ -124,7 +140,10 @@ export function renderRfc822(payload: SendPayload): string {
   );
   lines.push(`Message-ID: <${payload.rfcMessageId}>`);
   if (payload.inReplyToRfcId) lines.push(`In-Reply-To: <${payload.inReplyToRfcId}>`);
-  if (payload.references) lines.push(`References: ${payload.references}`);
+  if (payload.references) {
+    const refs = formatReferences(payload.references);
+    if (refs) lines.push(`References: ${refs}`);
+  }
   lines.push(`Date: ${new Date().toUTCString()}`);
   lines.push(`Content-Type: text/html; charset=utf-8`);
   lines.push(`Content-Transfer-Encoding: 8bit`);
