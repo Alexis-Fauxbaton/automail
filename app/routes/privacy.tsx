@@ -46,7 +46,9 @@ function PrivacyEn() {
           <li>
             <strong>Email content</strong> — if you connect a Gmail, Zoho Mail or Microsoft 365 (Outlook)
             account, we read incoming emails to detect customer support inquiries. Email body, subject,
-            sender address, and thread context are processed to generate draft replies.
+            sender address, and thread context are processed to generate draft replies. We also read the
+            display name configured on your mailbox&rsquo;s sending identity (e.g. your Gmail
+            &ldquo;send mail as&rdquo; name), used only to set the sender name on replies you send.
           </li>
           <li>
             <strong>App settings</strong> — your signature name, brand name, tone preferences,
@@ -117,8 +119,10 @@ function PrivacyEn() {
           </li>
           <li>
             <strong>Google (Gmail API)</strong> — if you connect a Gmail account, we use
-            Google&rsquo;s OAuth 2.0 and Gmail API with read-only scopes. Tokens are encrypted
-            at rest. See{" "}
+            Google&rsquo;s OAuth 2.0 and Gmail API: read scopes to read incoming mail and send a
+            reply when you click Send, plus the Gmail settings scope which we use only to read the
+            display name on your &ldquo;send mail as&rdquo; identity. We never modify your Gmail
+            settings. Tokens are encrypted at rest. See{" "}
             <a style={styles.a} href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">
               Google&rsquo;s Privacy Policy
             </a>.
@@ -222,7 +226,10 @@ function PrivacyFr() {
             <strong>Contenu des emails</strong> — si vous connectez un compte Gmail, Zoho Mail ou
             Microsoft 365 (Outlook), nous lisons les emails entrants pour détecter les demandes de
             support client. Le corps de l'email, l'objet, l'adresse de l'expéditeur et le contexte
-            du fil de discussion sont traités pour générer des brouillons de réponse.
+            du fil de discussion sont traités pour générer des brouillons de réponse. Nous lisons
+            également le nom d'affichage configuré sur l'identité d'envoi de votre boîte (par exemple
+            votre nom « Envoyer en tant que » Gmail), utilisé uniquement pour définir le nom
+            d'expéditeur sur les réponses que vous envoyez.
           </li>
           <li>
             <strong>Paramètres de l'application</strong> — votre nom de signature, nom de marque,
@@ -284,7 +291,7 @@ function PrivacyFr() {
           <li><strong>Shopify</strong> — pour l'authentification et l'accès aux données de commande.</li>
           <li><strong>OpenAI</strong> — pour la génération des brouillons de réponse. Les données de commande et d'email pertinentes sont transmises à OpenAI uniquement pour cette fin.</li>
           <li><strong>17track</strong> — pour la récupération du statut de suivi des colis, si applicable.</li>
-          <li><strong>Gmail / Zoho Mail / Microsoft 365 (Outlook)</strong> — si vous connectez votre compte email, nous utilisons leur API (avec OAuth 2.0 et scopes en lecture seule) pour lire et surveiller les emails entrants. Les jetons OAuth sont chiffrés au repos.</li>
+          <li><strong>Gmail / Zoho Mail / Microsoft 365 (Outlook)</strong> — si vous connectez votre compte email, nous utilisons leur API (OAuth 2.0) pour lire et surveiller les emails entrants, et pour envoyer une réponse lorsque vous cliquez sur Envoyer. Pour Gmail, nous utilisons en outre le scope « paramètres » uniquement en lecture, afin de lire le nom d'affichage de votre identité « Envoyer en tant que » ; nous ne modifions jamais vos paramètres. Les jetons OAuth sont chiffrés au repos.</li>
         </ul>
       </Section>
 
