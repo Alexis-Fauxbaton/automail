@@ -9,6 +9,7 @@ import { getSettings, saveSettings } from "../lib/support/settings";
 import { getUiLanguage, saveUiLanguage } from "../lib/user-preferences";
 import { createLogger } from "../lib/log/logger";
 import { SettingsIcon } from "../components/ui";
+import prisma from "../db.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session, sessionToken } = await authenticate.admin(request);
@@ -16,13 +17,28 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const settings = await getSettings(session.shop);
   const userId = sessionToken?.sub ?? null;
   const uiLanguage = userId ? await getUiLanguage(userId, session.shop) : "en";
-  return { settings, uiLanguage };
+  const mailboxes = await prisma.mailConnection.findMany({
+    where: { shop: session.shop },
+    select: { id: true, email: true, provider: true, displayName: true },
+    orderBy: { createdAt: "asc" },
+  });
+  return { settings, uiLanguage, mailboxes };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session, sessionToken } = await authenticate.admin(request);
   const formData = await request.formData();
   const intent = formData.get("intent");
+
+  if (intent === "setFromName") {
+    const { handleSetFromName } = await import("../lib/support/inbox-actions");
+    const result = await handleSetFromName({
+      shop: session.shop,
+      mailConnectionId: String(formData.get("mailConnectionId") ?? ""),
+      fromName: String(formData.get("fromName") ?? ""),
+    });
+    return { fromName: result };
+  }
 
   if (intent === "saveUiLanguage") {
     const userId = sessionToken?.sub ?? null;
@@ -83,8 +99,41 @@ function CharacterCount({ children, max, initial, hasDetails = false }: { childr
   );
 }
 
+function MailboxFromNameRow({ mailbox }: { mailbox: { id: string; email: string; provider: string; displayName: string | null } }) {
+  const { t } = useTranslation();
+  const fetcher = useFetcher();
+  const isOutlook = mailbox.provider === "outlook";
+  const known = ["gmail", "outlook", "zoho"].includes(mailbox.provider);
+  return (
+    <fetcher.Form method="post">
+      <input type="hidden" name="intent" value="setFromName" />
+      <input type="hidden" name="mailConnectionId" value={mailbox.id} />
+      <s-stack direction="inline" gap="base" alignItems="center">
+        {known && <ProviderLogo provider={mailbox.provider as Provider} size={24} />}
+        <s-text-field
+          label={mailbox.email}
+          name="fromName"
+          defaultValue={mailbox.displayName ?? ""}
+          {...(isOutlook ? { disabled: true } : {})}
+          details={isOutlook ? t("settings.fromNameOutlookNote") : t("settings.fromNameEmptyHint")}
+        />
+        {!isOutlook && (
+          <s-button type="submit" {...(fetcher.state === "submitting" ? { loading: true } : {})}>
+            {t("settings.fromNameSave")}
+          </s-button>
+        )}
+      </s-stack>
+      {fetcher.data?.fromName?.ok && (
+        <s-banner tone="success">{t("settings.fromNameSaved")}</s-banner>
+      )}
+    </fetcher.Form>
+  );
+}
+
+import ProviderLogo, { type Provider } from "../components/connections/ProviderLogo";
+
 export default function SettingsPage() {
-  const { settings: initial, uiLanguage: savedUiLanguage } = useLoaderData<typeof loader>();
+  const { settings: initial, uiLanguage: savedUiLanguage, mailboxes } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const langFetcher = useFetcher();
@@ -125,6 +174,14 @@ export default function SettingsPage() {
             <s-option value="en">{t("settings.uiLanguageEn")}</s-option>
           </s-select>
         </div>
+      </s-section>
+      <s-section heading={t("settings.fromNameSection")}>
+        <s-paragraph>{t("settings.fromNameSectionDesc")}</s-paragraph>
+        <s-stack direction="block" gap="base">
+          {mailboxes.map((m) => (
+            <MailboxFromNameRow key={m.id} mailbox={m} />
+          ))}
+        </s-stack>
       </s-section>
       <Form method="post">
         <s-stack direction="block" gap="base">

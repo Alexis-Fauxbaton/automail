@@ -186,7 +186,14 @@
     "uiLanguageLabel": "Langue de l'interface",
     "uiLanguageDetails": "Change la langue de l'application immédiatement. Enregistré par utilisateur.",
     "uiLanguageFr": "Français",
-    "uiLanguageEn": "Anglais"
+    "uiLanguageEn": "Anglais",
+    "fromNameSection": "Nom d'expéditeur",
+    "fromNameSectionDesc": "Ce nom apparaît comme expéditeur des e-mails envoyés depuis chaque boîte.",
+    "fromNameLabel": "Nom d'expéditeur",
+    "fromNameSave": "Enregistrer",
+    "fromNameSaved": "Nom enregistré",
+    "fromNameOutlookNote": "Sans effet pour Outlook : Microsoft applique toujours le nom configuré sur votre compte. Modifiez-le dans les réglages de votre compte Microsoft.",
+    "fromNameEmptyHint": "Vide = l'adresse e-mail seule sera affichée."
   },
   "dashboard": {
     "pageHeading": "Dashboard",
