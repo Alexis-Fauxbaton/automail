@@ -1073,6 +1073,11 @@ export async function handleSendDraft(params: {
         inReplyTo: draft.email.rfcMessageId,
         rfcReferences: payload.references,
         fromAddress: conn.email,
+        // Mirror the display name we send in the From header (payload.fromName)
+        // so the inbox renders the sent message as "AMBIENT HOME", not the bare
+        // address. The thread UI shows `fromName || fromAddress`; without this
+        // the pre-emptive outgoing row falls back to the bare address.
+        fromName: conn.displayName ?? "",
         // IncomingEmail has no toAddresses column — recipient is implied by
         // the thread's canonicalThreadId (customer side).
         subject: payload.subject,
@@ -1203,6 +1208,8 @@ async function runFakeSendForInternalShop(params: {
         inReplyTo: draft.email.rfcMessageId,
         rfcReferences: payload.references,
         fromAddress: conn.email,
+        // Same as the real send path: surface the display name in the inbox.
+        fromName: conn.displayName ?? "",
         subject: payload.subject,
         bodyHtml: payload.bodyText,
         bodyText: htmlToPlainText(payload.bodyText),

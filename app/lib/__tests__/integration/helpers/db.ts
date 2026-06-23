@@ -92,6 +92,8 @@ export async function seedMailConnection(opts: {
   id?: string;
   /** CSV of OAuth scopes granted — used by canSend checks. */
   grantedScopes?: string;
+  /** Mailbox display name — used as the outgoing From name on send. */
+  displayName?: string;
 }): Promise<MailConnection> {
   return prisma.mailConnection.create({
     data: {
@@ -103,6 +105,7 @@ export async function seedMailConnection(opts: {
       refreshToken: 'test-refresh',
       tokenExpiry: new Date(Date.now() + 3600_000),
       grantedScopes: opts.grantedScopes ?? null,
+      displayName: opts.displayName ?? null,
     },
   });
 }
