@@ -50,10 +50,32 @@ export async function createGmailClient(connection: MailConnection): Promise<Mai
       // Build RFC822 raw message in base64url (Gmail requirement).
       const raw = renderRfc822(payload);
       const base64url = Buffer.from(raw, "utf-8").toString("base64url");
-      const res = await gmail.users.messages.send({
-        userId: "me",
-        requestBody: { raw: base64url },
-      });
+      // Pass the original conversation's threadId so the reply lands in the
+      // same Gmail thread — headers (In-Reply-To/References) alone do NOT
+      // guarantee this; without threadId Gmail starts a new conversation.
+      // If Gmail rejects the threadId (e.g. subject mismatch / stale thread),
+      // retry once without it so Send still succeeds. A failed send creates no
+      // message, so the retry cannot double-send.
+      let res;
+      if (payload.providerThreadId) {
+        try {
+          res = await gmail.users.messages.send({
+            userId: "me",
+            requestBody: { raw: base64url, threadId: payload.providerThreadId },
+          });
+        } catch (err) {
+          console.warn(`[gmail] send with threadId failed, retrying without threadId:`, err);
+          res = await gmail.users.messages.send({
+            userId: "me",
+            requestBody: { raw: base64url },
+          });
+        }
+      } else {
+        res = await gmail.users.messages.send({
+          userId: "me",
+          requestBody: { raw: base64url },
+        });
+      }
       // Gmail returns { id, threadId, labelIds }. Fetch the message back with
       // metadata so we can read the actual Message-ID header (Gmail may have
       // rewritten ours).

@@ -1015,6 +1015,21 @@ export async function handleSendDraft(params: {
   if (!draft.email.canonicalThreadId) return { error: "thread_unresolved" };
   const thread = draft.email.thread!;
 
+  // Gmail: co-thread the reply into the original conversation by passing its
+  // Gmail threadId to messages.send. Resolve it from the canonical thread's
+  // provider mapping. Other providers ignore providerThreadId.
+  let providerThreadId: string | undefined;
+  if (conn.provider === "gmail" && draft.email.canonicalThreadId) {
+    const mapping = await prisma.threadProviderId.findFirst({
+      where: { shop, provider: "gmail", canonicalThreadId: draft.email.canonicalThreadId },
+      // Oldest mapping = the original conversation's Gmail threadId (a thread
+      // can hold several mappings if it was ever split). Deterministic pick.
+      orderBy: { createdAt: "asc" },
+      select: { providerThreadId: true },
+    });
+    providerThreadId = mapping?.providerThreadId ?? undefined;
+  }
+
   // 3. Atomic CAS: reserve the draft for sending.
   //    Clears any stale sendError on success so we can re-read it below.
   const reserved = await prisma.replyDraft.updateMany({
@@ -1048,6 +1063,8 @@ export async function handleSendDraft(params: {
     },
     draftBody: draft.body ?? "",
   });
+
+  if (providerThreadId) payload.providerThreadId = providerThreadId;
 
   // 5. Call the provider.
   //    When the previous attempt timed out after the provider accepted the
