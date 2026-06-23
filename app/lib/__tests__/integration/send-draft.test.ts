@@ -20,6 +20,7 @@ describe("handleSendDraft — integration", () => {
       shop: TEST_SHOP,
       provider: "gmail",
       email: "support@brand.com",
+      displayName: "AMBIENT HOME",
       grantedScopes: "https://www.googleapis.com/auth/gmail.send,https://www.googleapis.com/auth/gmail.readonly",
     });
     const thread = await seedThread({ shop: TEST_SHOP, mailConnectionId: conn.id });
@@ -56,6 +57,10 @@ describe("handleSendDraft — integration", () => {
     expect(outgoing?.canonicalThreadId).toBe(thread.id);
     expect(outgoing?.inReplyTo).toBe("orig-1@gmail.com");
     expect(outgoing?.externalMessageId).toBe("gmail-internal-123");
+    // The inbox renders `fromName || fromAddress`; the outgoing row must carry
+    // the mailbox display name so the sent message shows "AMBIENT HOME", not
+    // the bare address.
+    expect(outgoing?.fromName).toBe("AMBIENT HOME");
 
     const updatedThread = await prisma.thread.findUnique({ where: { id: thread.id } });
     expect(updatedThread?.operationalState).toBe("waiting_customer");
