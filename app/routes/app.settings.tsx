@@ -9,6 +9,7 @@ import { getSettings, saveSettings } from "../lib/support/settings";
 import { getUiLanguage, saveUiLanguage } from "../lib/user-preferences";
 import { createLogger } from "../lib/log/logger";
 import { SettingsIcon } from "../components/ui";
+import ProviderLogo, { type Provider } from "../components/connections/ProviderLogo";
 import prisma from "../db.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -129,8 +130,6 @@ function MailboxFromNameRow({ mailbox }: { mailbox: { id: string; email: string;
     </fetcher.Form>
   );
 }
-
-import ProviderLogo, { type Provider } from "../components/connections/ProviderLogo";
 
 export default function SettingsPage() {
   const { settings: initial, uiLanguage: savedUiLanguage, mailboxes } = useLoaderData<typeof loader>();
