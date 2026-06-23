@@ -230,4 +230,37 @@ describe("handleSendDraft — integration", () => {
     const refreshed = await prisma.replyDraft.findUnique({ where: { id: draft.id } });
     expect(refreshed?.sentRfcMessageId).toBe("previously-sent@g.com");
   });
+
+  it("passes the Gmail thread id to the mail client so the reply co-threads", async () => {
+    const conn = await seedMailConnection({
+      shop: TEST_SHOP,
+      provider: "gmail",
+      email: "thread@brand.com",
+      grantedScopes: "https://www.googleapis.com/auth/gmail.send",
+    });
+    const thread = await seedThread({ shop: TEST_SHOP, mailConnectionId: conn.id });
+    await prisma.threadProviderId.create({
+      data: { shop: TEST_SHOP, provider: "gmail", providerThreadId: "GTHREAD123", canonicalThreadId: thread.id },
+    });
+    const incoming = await seedIncomingEmail({
+      shop: TEST_SHOP,
+      mailConnectionId: conn.id,
+      canonicalThreadId: thread.id,
+      rfcMessageId: "orig@gmail.com",
+    });
+    const draft = await prisma.replyDraft.create({ data: { shop: TEST_SHOP, emailId: incoming.id, body: "hi" } });
+
+    let captured: any;
+    (createMailClient as any).mockResolvedValue({
+      send: vi.fn().mockImplementation(async (p: any) => {
+        captured = p;
+        return { externalMessageId: "x", rfcMessageId: "y@gmail.com" };
+      }),
+      findSentByRfcMessageId: vi.fn().mockResolvedValue(null),
+    });
+
+    const res = await handleSendDraft({ shop: TEST_SHOP, mailConnectionId: conn.id, draftId: draft.id });
+    expect(res).toMatchObject({ sent: true });
+    expect(captured.providerThreadId).toBe("GTHREAD123");
+  });
 });
