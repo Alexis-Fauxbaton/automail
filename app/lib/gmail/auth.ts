@@ -2,6 +2,7 @@ import { google } from "googleapis";
 import prisma from "../../db.server";
 import { encrypt, decrypt } from "./crypto";
 import { signOAuthState } from "../mail/oauth-state";
+import { seedDisplayNameIfEmpty } from "../mail/display-name";
 import type { MailConnection } from "@prisma/client";
 
 function getOAuth2Client() {
@@ -152,7 +153,6 @@ export async function saveConnection(
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
       outgoingAliases,
-      ...(tokens.displayName ? { displayName: tokens.displayName } : {}),
       grantedScopes: tokens.grantedScopes ?? null,
       lastSyncError: null,
       lastSyncAt: null,
@@ -162,6 +162,9 @@ export async function saveConnection(
     },
     select: { id: true },
   });
+  // Reconnect: seed the name only if the row has none yet — preserve any
+  // manual edit made in Settings.
+  await seedDisplayNameIfEmpty(conn.id, tokens.displayName);
   return conn;
 }
 

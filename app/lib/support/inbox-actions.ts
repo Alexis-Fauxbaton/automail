@@ -4,6 +4,7 @@ import { canSend } from "../mail/scopes";
 import { createMailClient } from "../mail/client-factory";
 import { assembleRfc822 } from "../mail/assemble-rfc822";
 import { htmlToPlainText } from "../mail/sanitize-html";
+import { sanitizeFromName } from "../mail/display-name";
 import { deleteConnection } from "../gmail/auth";
 import {
   reanalyzeEmail,
@@ -294,6 +295,24 @@ export async function handleToggleAutoSync(params: {
     data: { autoSyncEnabled: params.enable },
   });
   return { report: null, disconnected: false, reanalyzed: null, refined: null, stopped: false };
+}
+
+/**
+ * Set the sender display name for one mailbox. Scoped by shop + connection id.
+ * Empty input clears the name (send then falls back to the bare address).
+ */
+export async function handleSetFromName(params: {
+  shop: string;
+  mailConnectionId: string;
+  fromName: string;
+}): Promise<{ ok: true; fromName: string } | { error: string }> {
+  const fromName = sanitizeFromName(params.fromName);
+  const res = await prisma.mailConnection.updateMany({
+    where: { id: params.mailConnectionId, shop: params.shop },
+    data: { displayName: fromName },
+  });
+  if (res.count === 0) return { error: "connection_not_found" };
+  return { ok: true, fromName };
 }
 
 export async function handleDiagnose(params: { shop: string }) {
