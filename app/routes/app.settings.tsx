@@ -127,6 +127,9 @@ function MailboxFromNameRow({ mailbox }: { mailbox: { id: string; email: string;
       {fetcher.data?.fromName?.ok && (
         <s-banner tone="success">{t("settings.fromNameSaved")}</s-banner>
       )}
+      {fetcher.data?.fromName && "error" in fetcher.data.fromName && (
+        <s-banner tone="critical">{t("settings.settingsError")}</s-banner>
+      )}
     </fetcher.Form>
   );
 }

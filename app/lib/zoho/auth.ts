@@ -174,7 +174,6 @@ export async function saveZohoConnection(
       tokenExpiry: tokens.expiry,
       outgoingAliases,
       zohoAccountId: tokens.accountId,
-      displayName: tokens.displayName ?? null,
       grantedScopes: tokens.grantedScopes ?? null,
     },
     // Reconnect: wipe sync-state fields so the new connection starts clean.

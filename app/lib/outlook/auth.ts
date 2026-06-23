@@ -257,7 +257,6 @@ export async function saveConnection(
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
       outgoingAliases,
-      displayName: tokens.displayName ?? null,
       grantedScopes: tokens.grantedScopes ?? null,
     },
     // Reconnect: wipe sync-state fields so the new connection starts clean.

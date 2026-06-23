@@ -21,7 +21,7 @@ export async function seedDisplayNameIfEmpty(
   id: string,
   name: string | null | undefined,
 ): Promise<void> {
-  const n = (name ?? "").trim();
+  const n = sanitizeFromName(name ?? "");
   if (!n) return;
   await prisma.mailConnection.updateMany({
     where: { id, OR: [{ displayName: null }, { displayName: "" }] },
