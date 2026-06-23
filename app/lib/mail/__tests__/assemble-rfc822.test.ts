@@ -6,6 +6,8 @@ import {
   generateMessageId,
   renderRfc822,
   escapeHtml,
+  isAsciiHeader,
+  encodeHeaderWord,
 } from "../assemble-rfc822";
 
 describe("buildSubjectWithRePrefix", () => {
@@ -147,6 +149,21 @@ describe("assembleRfc822", () => {
   });
 });
 
+describe("encodeHeaderWord / isAsciiHeader", () => {
+  it("detects ASCII vs non-ASCII", () => {
+    expect(isAsciiHeader("Re: hello")).toBe(true);
+    expect(isAsciiHeader("Où est ma commande ?")).toBe(false);
+  });
+
+  it("base64 encodes a non-ASCII value as an RFC 2047 encoded-word", () => {
+    const w = encodeHeaderWord("Où");
+    expect(w).toBe(`=?UTF-8?B?${Buffer.from("Où", "utf-8").toString("base64")}?=`);
+    // round-trips back to the original
+    const b64 = w.slice("=?UTF-8?B?".length, -"?=".length);
+    expect(Buffer.from(b64, "base64").toString("utf-8")).toBe("Où");
+  });
+});
+
 describe("renderRfc822", () => {
   it("produces a valid RFC822 string with all expected headers and text/html content type", () => {
     const rendered = renderRfc822({
@@ -185,5 +202,36 @@ describe("renderRfc822", () => {
     expect(rendered).not.toContain("Cc:");
     expect(rendered).not.toContain("In-Reply-To:");
     expect(rendered).not.toContain("References:");
+  });
+
+  it("RFC 2047-encodes a non-ASCII Subject", () => {
+    const rendered = renderRfc822({
+      rfcMessageId: "id@x.com",
+      references: "",
+      fromEmail: "s@b.com",
+      fromName: "Brand",
+      toEmails: ["c@g.com"],
+      subject: "Re: [TEST] Où est ma commande ?",
+      bodyText: "<p>hi</p>",
+    });
+    // whole subject is encoded as one word when it contains non-ASCII
+    expect(rendered).toContain(`Subject: ${encodeHeaderWord("Re: [TEST] Où est ma commande ?")}`);
+    expect(rendered).not.toContain("OÃ");
+  });
+
+  it("encodes a non-ASCII From display name as an encoded-word (no quotes)", () => {
+    const rendered = renderRfc822({
+      rfcMessageId: "id@x.com", references: "", fromEmail: "s@b.com",
+      fromName: "Crème Café", toEmails: ["c@g.com"], subject: "hi", bodyText: "x",
+    });
+    expect(rendered).toContain(`From: ${encodeHeaderWord("Crème Café")} <s@b.com>`);
+  });
+
+  it("leaves an ASCII From display name quoted (unchanged)", () => {
+    const rendered = renderRfc822({
+      rfcMessageId: "id@x.com", references: "", fromEmail: "s@b.com",
+      fromName: "AMBIENT HOME", toEmails: ["c@g.com"], subject: "hi", bodyText: "x",
+    });
+    expect(rendered).toContain('From: "AMBIENT HOME" <s@b.com>');
   });
 });

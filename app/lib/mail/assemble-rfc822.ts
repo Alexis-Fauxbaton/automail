@@ -1,5 +1,19 @@
 import type { SendPayload } from "./types";
 
+/** True when every character is in the ASCII range (safe to put raw in a header). */
+export function isAsciiHeader(s: string): boolean {
+  return /^[\x00-\x7F]*$/.test(s);
+}
+
+/**
+ * RFC 2047 "B" encoded-word for a header value containing non-ASCII text.
+ * Single encoded-word (no 75-char folding) — accepted by Gmail/Outlook/Zoho
+ * and all common clients for support-email-length subjects.
+ */
+export function encodeHeaderWord(s: string): string {
+  return `=?UTF-8?B?${Buffer.from(s, "utf-8").toString("base64")}?=`;
+}
+
 export function buildSubjectWithRePrefix(subject: string): string {
   if (/^re:\s/i.test(subject)) return subject;
   return `Re: ${subject}`;
@@ -96,13 +110,18 @@ export function assembleRfc822(input: AssembleInput): SendPayload {
 export function renderRfc822(payload: SendPayload): string {
   const lines: string[] = [];
   if (payload.fromName) {
-    lines.push(`From: "${payload.fromName}" <${payload.fromEmail}>`);
+    const name = isAsciiHeader(payload.fromName)
+      ? `"${payload.fromName}"`
+      : encodeHeaderWord(payload.fromName);
+    lines.push(`From: ${name} <${payload.fromEmail}>`);
   } else {
     lines.push(`From: <${payload.fromEmail}>`);
   }
   lines.push(`To: ${payload.toEmails.join(", ")}`);
   if (payload.ccEmails?.length) lines.push(`Cc: ${payload.ccEmails.join(", ")}`);
-  lines.push(`Subject: ${payload.subject}`);
+  lines.push(
+    `Subject: ${isAsciiHeader(payload.subject) ? payload.subject : encodeHeaderWord(payload.subject)}`,
+  );
   lines.push(`Message-ID: <${payload.rfcMessageId}>`);
   if (payload.inReplyToRfcId) lines.push(`In-Reply-To: <${payload.inReplyToRfcId}>`);
   if (payload.references) lines.push(`References: ${payload.references}`);
