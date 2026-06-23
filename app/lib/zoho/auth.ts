@@ -2,6 +2,7 @@ import prisma from "../../db.server";
 import { encrypt, decrypt } from "../gmail/crypto";
 import { MailboxRevokedError } from "../gmail/auth";
 import { signOAuthState } from "../mail/oauth-state";
+import { seedDisplayNameIfEmpty } from "../mail/display-name";
 import type { MailConnection } from "@prisma/client";
 
 function getZohoAccountsDomain(): string {
@@ -173,7 +174,6 @@ export async function saveZohoConnection(
       tokenExpiry: tokens.expiry,
       outgoingAliases,
       zohoAccountId: tokens.accountId,
-      displayName: tokens.displayName ?? null,
       grantedScopes: tokens.grantedScopes ?? null,
     },
     // Reconnect: wipe sync-state fields so the new connection starts clean.
@@ -188,8 +188,6 @@ export async function saveZohoConnection(
       tokenExpiry: tokens.expiry,
       outgoingAliases,
       zohoAccountId: tokens.accountId,
-      // Only overwrite when present, so a transient null doesn't wipe a name.
-      ...(tokens.displayName ? { displayName: tokens.displayName } : {}),
       grantedScopes: tokens.grantedScopes ?? null,
       lastSyncError: null,
       lastSyncAt: null,
@@ -199,6 +197,9 @@ export async function saveZohoConnection(
     },
     select: { id: true },
   });
+  // Reconnect: seed the name only if the row has none yet — preserve any
+  // manual edit made in Settings.
+  await seedDisplayNameIfEmpty(conn.id, tokens.displayName);
   return conn;
 }
 

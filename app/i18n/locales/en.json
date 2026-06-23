@@ -186,7 +186,14 @@
     "uiLanguageLabel": "Interface language",
     "uiLanguageDetails": "Changes the language of the app immediately. Saved per user.",
     "uiLanguageFr": "Français",
-    "uiLanguageEn": "English"
+    "uiLanguageEn": "English",
+    "fromNameSection": "Sender name",
+    "fromNameSectionDesc": "This name appears as the sender of emails sent from each mailbox.",
+    "fromNameLabel": "Sender name",
+    "fromNameSave": "Save",
+    "fromNameSaved": "Name saved",
+    "fromNameOutlookNote": "No effect for Outlook: Microsoft always uses the name configured on your account. Change it in your Microsoft account settings.",
+    "fromNameEmptyHint": "Empty = the bare email address is shown."
   },
   "dashboard": {
     "pageHeading": "Dashboard",

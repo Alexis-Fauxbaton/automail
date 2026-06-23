@@ -3,6 +3,7 @@ import { encrypt, decrypt } from "../gmail/crypto";
 import { MailboxRevokedError } from "../gmail/auth";
 import type { MailConnection } from "@prisma/client";
 import { signOAuthState } from "../mail/oauth-state";
+import { seedDisplayNameIfEmpty } from "../mail/display-name";
 
 const TOKEN_ENDPOINT = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
 const AUTH_ENDPOINT = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
@@ -256,7 +257,6 @@ export async function saveConnection(
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
       outgoingAliases,
-      displayName: tokens.displayName ?? null,
       grantedScopes: tokens.grantedScopes ?? null,
     },
     // Reconnect: wipe sync-state fields so the new connection starts clean.
@@ -272,8 +272,6 @@ export async function saveConnection(
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
       outgoingAliases,
-      // Only overwrite when present, so a transient null doesn't wipe a name.
-      ...(tokens.displayName ? { displayName: tokens.displayName } : {}),
       grantedScopes: tokens.grantedScopes ?? null,
       lastSyncError: null,
       lastSyncAt: null,
@@ -283,6 +281,9 @@ export async function saveConnection(
     },
     select: { id: true },
   });
+  // Reconnect: seed the name only if the row has none yet — preserve any
+  // manual edit made in Settings.
+  await seedDisplayNameIfEmpty(conn.id, tokens.displayName);
   return conn;
 }
 

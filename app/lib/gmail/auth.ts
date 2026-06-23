@@ -2,6 +2,7 @@ import { google } from "googleapis";
 import prisma from "../../db.server";
 import { encrypt, decrypt } from "./crypto";
 import { signOAuthState } from "../mail/oauth-state";
+import { seedDisplayNameIfEmpty } from "../mail/display-name";
 import type { MailConnection } from "@prisma/client";
 
 function getOAuth2Client() {
@@ -21,6 +22,10 @@ function getOAuth2Client() {
 const SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/gmail.send",
+  // Read the "send mail as" display name (e.g. "AMBIENT HOME") to seed the
+  // outgoing From name. Sensitive scope; the app already uses restricted Gmail
+  // scopes, so this adds no new Google review tier.
+  "https://www.googleapis.com/auth/gmail.settings.basic",
   "https://www.googleapis.com/auth/userinfo.email",
 ];
 
@@ -47,20 +52,43 @@ export async function exchangeCodeForTokens(code: string) {
   const oauth2 = google.oauth2({ version: "v2", auth: client });
   const { data } = await oauth2.userinfo.get();
   const email = data.email || "unknown";
-  const aliases = await fetchGmailSendAsAliases(client, email).catch((err) => {
+  const sendAs = await fetchGmailSendAsAliases(client, email).catch((err) => {
     console.warn("[gmail] sendAs alias fetch failed at OAuth:", err);
-    return [] as string[];
+    return { aliases: [] as string[], displayName: null as string | null };
   });
+  const userinfoName = (typeof data.name === "string" ? data.name.trim() : "") || null;
 
   return {
     accessToken: tokens.access_token,
     refreshToken: tokens.refresh_token,
     expiry: tokens.expiry_date ? new Date(tokens.expiry_date) : new Date(Date.now() + 3600_000),
     email,
-    aliases,
-    displayName: (typeof data.name === "string" ? data.name.trim() : "") || null,
+    aliases: sendAs.aliases,
+    // Prefer the Gmail "send mail as" display name; fall back to the Google
+    // account profile name (only present if userinfo.profile was granted).
+    displayName: sendAs.displayName ?? userinfoName,
     scope: tokens.scope ?? null,
   };
+}
+
+/**
+ * From a Gmail settings.sendAs list, return the display name configured on the
+ * primary send-as entry (the address the app sends from). null when none.
+ */
+export function pickPrimaryDisplayName(
+  items: Array<{ sendAsEmail?: string | null; displayName?: string | null; isPrimary?: boolean | null; verificationStatus?: string | null }>,
+  primaryEmail: string,
+): string | null {
+  const p = primaryEmail.trim().toLowerCase();
+  for (const entry of items) {
+    const addr = (entry.sendAsEmail ?? "").trim().toLowerCase();
+    if (!addr) continue;
+    if (entry.verificationStatus && entry.verificationStatus !== "accepted") continue;
+    if ((entry.isPrimary || addr === p) && (entry.displayName ?? "").trim()) {
+      return (entry.displayName as string).trim();
+    }
+  }
+  return null;
 }
 
 /**
@@ -72,7 +100,7 @@ export async function exchangeCodeForTokens(code: string) {
 async function fetchGmailSendAsAliases(
   oauthClient: ReturnType<typeof getOAuth2Client>,
   primaryEmail: string,
-): Promise<string[]> {
+): Promise<{ aliases: string[]; displayName: string | null }> {
   const gmail = google.gmail({ version: "v1", auth: oauthClient });
   const res = await gmail.users.settings.sendAs.list({ userId: "me" });
   const items = res.data.sendAs ?? [];
@@ -82,11 +110,10 @@ async function fetchGmailSendAsAliases(
   for (const entry of items) {
     const addr = (entry.sendAsEmail ?? "").trim().toLowerCase();
     if (!addr) continue;
-    // Only trust verified aliases — unverified ones can't actually send.
     if (entry.verificationStatus && entry.verificationStatus !== "accepted") continue;
     out.add(addr);
   }
-  return Array.from(out);
+  return { aliases: Array.from(out), displayName: pickPrimaryDisplayName(items, primaryEmail) };
 }
 
 export async function saveConnection(
@@ -112,7 +139,6 @@ export async function saveConnection(
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
       outgoingAliases,
-      displayName: tokens.displayName ?? null,
       grantedScopes: tokens.grantedScopes ?? null,
     },
     // Reconnect: wipe sync-state fields so the new connection starts clean.
@@ -126,7 +152,6 @@ export async function saveConnection(
       refreshToken: encrypt(tokens.refreshToken),
       tokenExpiry: tokens.expiry,
       outgoingAliases,
-      ...(tokens.displayName ? { displayName: tokens.displayName } : {}),
       grantedScopes: tokens.grantedScopes ?? null,
       lastSyncError: null,
       lastSyncAt: null,
@@ -136,6 +161,9 @@ export async function saveConnection(
     },
     select: { id: true },
   });
+  // Reconnect: seed the name only if the row has none yet — preserve any
+  // manual edit made in Settings.
+  await seedDisplayNameIfEmpty(conn.id, tokens.displayName);
   return conn;
 }
 
@@ -152,12 +180,12 @@ export async function backfillGmailAliasesIfMissing(connection: MailConnection):
       access_token: decrypt(connection.accessToken),
       refresh_token: decrypt(connection.refreshToken),
     });
-    const aliases = await fetchGmailSendAsAliases(client, connection.email);
+    const sendAs = await fetchGmailSendAsAliases(client, connection.email);
     await prisma.mailConnection.update({
       where: { id: connection.id },
-      data: { outgoingAliases: JSON.stringify(aliases) },
+      data: { outgoingAliases: JSON.stringify(sendAs.aliases) },
     });
-    console.log(`[gmail] backfilled ${aliases.length} outgoing aliases for connection=${connection.id}`);
+    console.log(`[gmail] backfilled ${sendAs.aliases.length} outgoing aliases for connection=${connection.id}`);
   } catch (err) {
     console.warn(`[gmail] alias backfill failed for connection=${connection.id}:`, err);
   }
