@@ -53,6 +53,12 @@ export interface SendPayload {
    * Optional: falls back to standalone create-draft when missing/invalid.
    */
   inReplyToExternalMessageId?: string;
+  /**
+   * Provider-native thread/conversation id to co-thread the reply into.
+   * Gmail passes this to messages.send so the reply lands in the same Gmail
+   * thread (headers alone don't guarantee this). Outlook/Zoho ignore it.
+   */
+  providerThreadId?: string;
   fromEmail: string;
   fromName?: string;
   toEmails: string[];
