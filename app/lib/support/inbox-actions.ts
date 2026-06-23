@@ -1003,6 +1003,9 @@ export async function handleSendDraft(params: {
   if (conn.provider === "gmail" && draft.email.canonicalThreadId) {
     const mapping = await prisma.threadProviderId.findFirst({
       where: { shop, provider: "gmail", canonicalThreadId: draft.email.canonicalThreadId },
+      // Oldest mapping = the original conversation's Gmail threadId (a thread
+      // can hold several mappings if it was ever split). Deterministic pick.
+      orderBy: { createdAt: "asc" },
       select: { providerThreadId: true },
     });
     providerThreadId = mapping?.providerThreadId ?? undefined;
